@@ -13,8 +13,10 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@mapbox/mapbox-gl-draw": "^1.5.1",
     "@stripe/stripe-js": "^8.4.0",
     "@supabase/supabase-js": "^2.81.1",
+    "@turf/area": "^7.2.0",
     "dotenv": "^17.2.3",
     "mapbox-gl": "^3.16.0",
     "next": "^16.0.1",

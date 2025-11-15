@@ -2,18 +2,43 @@
 
 import { useEffect, useRef, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
+import MapboxDraw from '@mapbox/mapbox-gl-draw';
+import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css';
 import 'mapbox-gl/dist/mapbox-gl.css';
+import area from '@turf/area';
 
 // Mapbox token from environment variable
 mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || '';
+
+// Calculate area of polygon in acres
+function calculateArea(coordinates) {
+  const polygon = {
+    type: 'Feature',
+    geometry: {
+      type: 'Polygon',
+      coordinates: coordinates
+    }
+  };
+  const areaInSquareMeters = area(polygon);
+  const areaInAcres = areaInSquareMeters * 0.000247105; // Convert to acres
+  return areaInAcres;
+}
 
 export default function LeadsMap({ leads = [] }) {
   const mapContainer = useRef(null);
   const map = useRef(null);
   const markers = useRef([]);
+  const draw = useRef(null);
   const [selectedLead, setSelectedLead] = useState(null);
   const [selectedParcel, setSelectedParcel] = useState(null);
   const [is3D, setIs3D] = useState(false);
+  const [isInfoCollapsed, setIsInfoCollapsed] = useState(false);
+  const [currentZoom, setCurrentZoom] = useState(11);
+  const [infoBoxPosition, setInfoBoxPosition] = useState({ x: 0, y: 0 });
+  const [drawnPolygons, setDrawnPolygons] = useState([]);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [drawMode, setDrawMode] = useState(null); // Track drawing mode
+  const [showTopography, setShowTopography] = useState(false); // Track topography visibility
   const parcelsLoaded = useRef(false);
 
   // Geocode address using Nominatim (free, no API key needed)
@@ -36,8 +61,33 @@ export default function LeadsMap({ leads = [] }) {
     return null;
   };
 
+  // Fetch parcel by exact ID (most precise)
+  const fetchParcelByID = async (parcelId, leadStatus) => {
+    try {
+      const token = process.env.NEXT_PUBLIC_REGRID_TOKEN;
+      if (!token) return null;
+
+      const url = `https://app.regrid.com/api/v2/parcels/apn?parcelnumb=${encodeURIComponent(parcelId)}&token=${token}&return_geometry=true`;
+      console.log('Fetching parcel by ID:', url.replace(token, 'TOKEN'));
+
+      const response = await fetch(url);
+      const data = await response.json();
+
+      if (data?.parcels?.features?.length > 0) {
+        const parcel = data.parcels.features[0];
+        if (!parcel.properties) parcel.properties = {};
+        parcel.properties.leadStatus = leadStatus;
+        parcel.properties.isLeadSubmission = true; // Always bright red
+        return parcel;
+      }
+    } catch (error) {
+      console.error('Error fetching parcel by ID:', error);
+    }
+    return null;
+  };
+
   // Fetch parcel data from Regrid API
-  const fetchParcelData = async (lat, lng, leadStatus) => {
+  const fetchParcelData = async (lat, lng, leadStatus, isLeadSubmission = false) => {
     try {
       const token = process.env.NEXT_PUBLIC_REGRID_TOKEN;
       if (!token) {
@@ -67,9 +117,10 @@ export default function LeadsMap({ leads = [] }) {
       // Response format: { parcels: { type: "FeatureCollection", features: [...] } }
       if (data && data.parcels && data.parcels.features && data.parcels.features.length > 0) {
         const parcel = data.parcels.features[0];
-        // Add status to parcel for color coding
+        // Add status and submission flag to parcel for color coding
         if (!parcel.properties) parcel.properties = {};
         parcel.properties.leadStatus = leadStatus;
+        parcel.properties.isLeadSubmission = isLeadSubmission; // Bright red for lead submissions
         console.log('Successfully fetched parcel:', parcel.properties.headline || 'no address');
         return parcel;
       } else {
@@ -99,6 +150,22 @@ export default function LeadsMap({ leads = [] }) {
     }
   };
 
+  // Toggle polygon drawing mode
+  const togglePolygonMode = () => {
+    if (!draw.current) return;
+
+    const currentMode = draw.current.getMode();
+    if (currentMode === 'draw_polygon') {
+      // Turn OFF drawing mode
+      draw.current.changeMode('simple_select');
+      console.log('🔴 Polygon drawing mode OFF');
+    } else {
+      // Turn ON drawing mode
+      draw.current.changeMode('draw_polygon');
+      console.log('🟢 Polygon drawing mode ON');
+    }
+  };
+
   useEffect(() => {
     if (map.current) return; // Initialize map only once
 
@@ -117,51 +184,182 @@ export default function LeadsMap({ leads = [] }) {
     // Add fullscreen control
     map.current.addControl(new mapboxgl.FullscreenControl(), 'top-right');
 
+    // Helper functions for polygon drawing
+    function updatePolygons(e) {
+      console.log('🎨 Polygon event triggered');
+      const data = draw.current.getAll();
+      console.log('📊 Draw data:', data);
+      const polygons = data.features.map(feature => {
+        if (feature.geometry.type === 'Polygon') {
+          const areaValue = calculateArea(feature.geometry.coordinates);
+          const center = getCentroid(feature.geometry.coordinates[0]);
+          console.log('📐 Calculated area:', areaValue, 'acres');
+          return {
+            id: feature.id,
+            area: areaValue,
+            center: center,
+            coordinates: feature.geometry.coordinates
+          };
+        }
+        return null;
+      }).filter(p => p !== null);
+
+      console.log('✅ Total polygons:', polygons.length);
+      setDrawnPolygons(polygons);
+    }
+
+    function getCentroid(coordinates) {
+      let x = 0, y = 0;
+      coordinates.forEach(coord => {
+        x += coord[0];
+        y += coord[1];
+      });
+      return [x / coordinates.length, y / coordinates.length];
+    }
+
+    // Track zoom level for marker fade
+    map.current.on('zoom', () => {
+      setCurrentZoom(map.current.getZoom());
+    });
+
     // Smooth transitions and click-to-highlight parcel
     map.current.on('load', () => {
       map.current.resize();
 
-      // Add Regrid vector tile layer for all parcels (if tiles API is available)
-      const token = process.env.NEXT_PUBLIC_REGRID_TOKEN;
-      if (token) {
-        try {
-          map.current.addSource('regrid-parcels', {
-            type: 'vector',
-            tiles: [`https://tiles.regrid.com/api/v1/parcels/{z}/{x}/{y}.mvt?token=${token}`],
-            minzoom: 10,
-            maxzoom: 22
-          });
+      // Initialize drawing control AFTER map is loaded (only trash button, we'll make custom polygon button)
+      try {
+        draw.current = new MapboxDraw({
+          displayControlsDefault: false,
+          controls: {
+            polygon: false, // Hide default polygon button
+            trash: true
+          }
+        });
+        console.log('✅ MapboxDraw instance created:', draw.current);
 
-          // Add parcel fill layer
-          map.current.addLayer({
-            id: 'regrid-parcel-fill',
-            type: 'fill',
-            source: 'regrid-parcels',
-            'source-layer': 'parcels',
-            paint: {
-              'fill-color': '#ffffff',
-              'fill-opacity': 0.05
+        map.current.addControl(draw.current, 'top-right');
+        console.log('✅ Drawing controls added to map');
+
+        // Listen for drawing events
+        map.current.on('draw.create', (e) => {
+          updatePolygons(e);
+          // Immediately re-enter drawing mode to allow continuous lot drawing
+          setTimeout(() => {
+            if (draw.current) {
+              draw.current.changeMode('draw_polygon');
+              console.log('🔄 Re-entering drawing mode for next lot');
             }
-          });
+          }, 100);
+        });
+        map.current.on('draw.delete', updatePolygons);
+        map.current.on('draw.update', updatePolygons);
 
-          // Add parcel borders
-          map.current.addLayer({
-            id: 'regrid-parcel-borders',
-            type: 'line',
-            source: 'regrid-parcels',
-            'source-layer': 'parcels',
-            paint: {
-              'line-color': '#88ccff',
-              'line-width': 1,
-              'line-opacity': 0.5
-            }
-          });
+        // Listen for mode changes to update cursor
+        map.current.on('draw.modechange', (e) => {
+          const mode = e.mode;
+          console.log('🎨 Draw mode changed to:', mode);
 
-          console.log('✅ Regrid vector tile layer added');
-        } catch (error) {
-          console.error('❌ Failed to add Regrid vector tiles (may require tiles API subscription):', error);
-        }
+          // Always keep crosshair when in draw_polygon mode
+          if (mode === 'draw_polygon') {
+            setDrawMode('draw_polygon');
+            map.current.getCanvas().style.cursor = 'crosshair';
+          } else {
+            setDrawMode(null);
+            map.current.getCanvas().style.cursor = '';
+          }
+        });
+      } catch (error) {
+        console.error('❌ Error creating drawing controls:', error);
       }
+
+      // Add 3D terrain source
+      map.current.addSource('mapbox-dem', {
+        type: 'raster-dem',
+        url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
+        tileSize: 512,
+        maxzoom: 14
+      });
+
+      // Set the terrain on the map with lower exaggeration for better performance
+      map.current.setTerrain({ source: 'mapbox-dem', exaggeration: 1.2 });
+
+      // Add hillshading for terrain depth (default intensity)
+      map.current.addLayer({
+        id: 'hillshading',
+        type: 'hillshade',
+        source: 'mapbox-dem',
+        layout: {
+          'visibility': 'visible'
+        },
+        paint: {
+          'hillshade-shadow-color': '#000000',
+          'hillshade-illumination-direction': 315,
+          'hillshade-exaggeration': 0.5
+        }
+      }, 'waterway-label'); // Add before labels
+
+      // Add enhanced hillshading for topography visualization
+      map.current.addLayer({
+        id: 'hillshading-enhanced',
+        type: 'hillshade',
+        source: 'mapbox-dem',
+        layout: {
+          'visibility': 'none' // Hidden by default, shown when topography is toggled
+        },
+        paint: {
+          'hillshade-shadow-color': '#473B24',
+          'hillshade-highlight-color': '#ffffff',
+          'hillshade-illumination-direction': 335,
+          'hillshade-exaggeration': 1,
+          'hillshade-accent-color': '#ff6b35'
+        }
+      }, 'waterway-label');
+
+      console.log('✅ 3D terrain and hillshading enabled');
+
+      // Delay loading heavy parcel tiles for better initial performance
+      setTimeout(() => {
+        const token = process.env.NEXT_PUBLIC_REGRID_TOKEN;
+        if (token) {
+          try {
+            map.current.addSource('regrid-parcels', {
+              type: 'vector',
+              tiles: [`https://tiles.regrid.com/api/v1/parcels/{z}/{x}/{y}.mvt?token=${token}`],
+              minzoom: 12, // Only show at closer zoom levels for performance
+              maxzoom: 22
+            });
+
+            // Add parcel fill layer
+            map.current.addLayer({
+              id: 'regrid-parcel-fill',
+              type: 'fill',
+              source: 'regrid-parcels',
+              'source-layer': 'parcels',
+              paint: {
+                'fill-color': '#ffffff',
+                'fill-opacity': 0.05
+              }
+            });
+
+            // Add parcel borders
+            map.current.addLayer({
+              id: 'regrid-parcel-borders',
+              type: 'line',
+              source: 'regrid-parcels',
+              'source-layer': 'parcels',
+              paint: {
+                'line-color': '#88ccff',
+                'line-width': 1,
+                'line-opacity': 0.5
+              }
+            });
+
+            console.log('✅ Regrid vector tile layer added');
+          } catch (error) {
+            console.error('❌ Failed to add Regrid vector tiles (may require tiles API subscription):', error);
+          }
+        }
+      }, 1000); // Load parcels after 1 second delay
 
       // Add empty source for clicked parcel
       map.current.addSource('clicked-parcel', {
@@ -195,16 +393,28 @@ export default function LeadsMap({ leads = [] }) {
         }
       });
 
-      // Add hover cursor for parcel layers
+      // Add hover cursor for parcel layers (unless in drawing mode)
       map.current.on('mouseenter', 'regrid-parcel-fill', () => {
+        if (draw.current && draw.current.getMode() === 'draw_polygon') {
+          return; // Keep crosshair cursor
+        }
         map.current.getCanvas().style.cursor = 'pointer';
       });
       map.current.on('mouseleave', 'regrid-parcel-fill', () => {
+        if (draw.current && draw.current.getMode() === 'draw_polygon') {
+          return; // Keep crosshair cursor
+        }
         map.current.getCanvas().style.cursor = '';
       });
 
       // Click handler for vector tile parcels
       map.current.on('click', 'regrid-parcel-fill', async (e) => {
+        // Don't handle parcel clicks when in drawing mode
+        if (draw.current && draw.current.getMode() === 'draw_polygon') {
+          console.log('⏸️ Parcel click ignored - drawing mode active');
+          return;
+        }
+
         if (e.features && e.features.length > 0) {
           const feature = e.features[0];
           const { lng, lat } = e.lngLat;
@@ -283,7 +493,8 @@ export default function LeadsMap({ leads = [] }) {
     setIs3D(newIs3D);
 
     map.current.easeTo({
-      pitch: newIs3D ? 60 : 0,
+      pitch: newIs3D ? 70 : 0,
+      bearing: newIs3D ? -20 : 0,
       duration: 1000
     });
   };
@@ -297,15 +508,19 @@ export default function LeadsMap({ leads = [] }) {
       markers.current.forEach(marker => marker.remove());
       markers.current = [];
 
-      // Remove existing parcel layers and sources
-      if (map.current.getLayer('parcels-fill')) {
-        map.current.removeLayer('parcels-fill');
-      }
-      if (map.current.getLayer('parcels-outline')) {
-        map.current.removeLayer('parcels-outline');
-      }
-      if (map.current.getSource('parcels')) {
-        map.current.removeSource('parcels');
+      // Remove existing parcel layers and sources (with error handling)
+      try {
+        if (map.current.getLayer('parcels-fill')) {
+          map.current.removeLayer('parcels-fill');
+        }
+        if (map.current.getLayer('parcels-outline')) {
+          map.current.removeLayer('parcels-outline');
+        }
+        if (map.current.getSource('parcels')) {
+          map.current.removeSource('parcels');
+        }
+      } catch (error) {
+        console.warn('Error removing existing layers/sources:', error);
       }
 
       // Process all leads and fetch parcels
@@ -323,9 +538,33 @@ export default function LeadsMap({ leads = [] }) {
           return { coords: null, parcel: null, lead };
         }
 
-        // Fetch parcel data
-        const parcel = await fetchParcelData(coords.lat, coords.lng, lead.status);
+        // Fetch parcel data - if we have exact parcel ID, use APN endpoint for precision
+        let parcel = null;
+        if (lead.regridParcelId) {
+          // Fetch by exact parcel ID to avoid getting adjacent parcels
+          parcel = await fetchParcelByID(lead.regridParcelId, lead.status);
+        } else {
+          // Fetch by coordinates (less precise, might get adjacent parcel)
+          parcel = await fetchParcelData(coords.lat, coords.lng, lead.status, true);
+        }
         console.log('Fetched parcel for', lead.name, ':', parcel ? 'success' : 'failed');
+
+        // If parcel found, use its centroid for accurate marker placement
+        if (parcel && parcel.geometry) {
+          // Calculate centroid based on geometry type
+          if (parcel.geometry.type === 'Point') {
+            coords = { lng: parcel.geometry.coordinates[0], lat: parcel.geometry.coordinates[1] };
+          } else if (parcel.geometry.type === 'Polygon') {
+            // Use first coordinate as approximation (centroid calculation could be more sophisticated)
+            const bounds = parcel.geometry.coordinates[0];
+            const lngs = bounds.map(c => c[0]);
+            const lats = bounds.map(c => c[1]);
+            coords = {
+              lng: (Math.min(...lngs) + Math.max(...lngs)) / 2,
+              lat: (Math.min(...lats) + Math.max(...lats)) / 2
+            };
+          }
+        }
 
         return { coords, parcel, lead };
       });
@@ -343,9 +582,10 @@ export default function LeadsMap({ leads = [] }) {
           parcelFeatures.push(parcel);
         }
 
-        // Create premium marker with label
+        // Create premium marker with bigger pulse
         const el = document.createElement('div');
         el.className = 'premium-marker';
+        el.style.transition = 'opacity 0.3s ease';
         el.innerHTML = `
           <div style="
             position: relative;
@@ -354,32 +594,19 @@ export default function LeadsMap({ leads = [] }) {
             align-items: center;
             cursor: pointer;
           ">
-            <div style="
+            <div class="lead-marker-circle" style="
               background: ${getMarkerColor(lead.status)};
-              width: 14px;
-              height: 14px;
+              width: 20px;
+              height: 20px;
               border-radius: 50%;
-              border: 3px solid rgba(255,255,255,0.95);
-              box-shadow: 0 4px 12px rgba(0,0,0,0.4), 0 0 0 4px rgba(${
+              border: 4px solid rgba(255,255,255,0.95);
+              box-shadow: 0 6px 16px rgba(0,0,0,0.5), 0 0 0 6px rgba(${
                 lead.status === 'new' ? '59, 130, 246' :
                 lead.status === 'scheduled' ? '16, 185, 129' :
                 lead.status === 'called' ? '245, 158, 11' : '107, 114, 128'
-              }, 0.2);
-              ${lead.status === 'new' ? 'animation: premiumPulse 2s infinite;' : ''}
+              }, 0.3);
+              ${lead.status === 'new' ? 'animation: strongPulse 1.5s infinite;' : ''}
             "></div>
-            <div style="
-              background: rgba(0, 0, 0, 0.85);
-              backdrop-filter: blur(10px);
-              color: white;
-              padding: 4px 10px;
-              border-radius: 6px;
-              font-size: 11px;
-              font-weight: 600;
-              margin-top: 6px;
-              white-space: nowrap;
-              box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-              border: 1px solid rgba(255,255,255,0.1);
-            ">${lead.name}</div>
           </div>
         `;
 
@@ -388,64 +615,111 @@ export default function LeadsMap({ leads = [] }) {
           .setLngLat([coords.lng, coords.lat])
           .addTo(map.current);
 
-        // Add click event
-        el.addEventListener('click', () => {
+        // Add click event - show compact info next to marker (on the left)
+        el.addEventListener('click', (e) => {
+          const rect = el.getBoundingClientRect();
+          const infoBoxWidth = 320; // w-80 = 20rem = 320px
+          setInfoBoxPosition({
+            x: rect.left - infoBoxWidth - 10, // 10px to the left of marker
+            y: rect.top
+          });
           setSelectedLead(lead);
+          setSelectedParcel({ parcel, lead });
+          setIsInfoCollapsed(false);
         });
 
+        // Store element reference for zoom-based fading
+        marker._element = el;
         markers.current.push(marker);
       });
 
       // Add parcel boundaries to map
-      if (parcelFeatures.length > 0 && map.current) {
+      if (parcelFeatures.length > 0 && map.current && map.current.isStyleLoaded()) {
         console.log('Adding', parcelFeatures.length, 'parcels to map');
 
-        map.current.addSource('parcels', {
-          type: 'geojson',
-          data: {
-            type: 'FeatureCollection',
-            features: parcelFeatures
+        try {
+          // Check if source exists, if so update it, otherwise add it
+          const existingSource = map.current.getSource('parcels');
+          if (existingSource) {
+            existingSource.setData({
+              type: 'FeatureCollection',
+              features: parcelFeatures
+            });
+          } else {
+            map.current.addSource('parcels', {
+              type: 'geojson',
+              data: {
+                type: 'FeatureCollection',
+                features: parcelFeatures
+              }
+            });
           }
-        });
 
-        // Add fill layer
-        map.current.addLayer({
-          id: 'parcels-fill',
-          type: 'fill',
-          source: 'parcels',
-          paint: {
-            'fill-color': [
-              'match',
-              ['get', 'leadStatus'],
-              'new', '#3B82F6',
-              'called', '#F59E0B',
-              'scheduled', '#10B981',
-              'completed', '#6B7280',
-              '#EF4444'
-            ],
-            'fill-opacity': 0.15
+          // Add layers only if they don't exist
+          if (!map.current.getLayer('parcels-fill')) {
+            map.current.addLayer({
+              id: 'parcels-fill',
+              type: 'fill',
+              source: 'parcels',
+              paint: {
+                'fill-color': [
+                  'case',
+                  ['get', 'isLeadSubmission'], // If lead submission, always bright red
+                  '#EF4444',
+                  [
+                    'match',
+                    ['get', 'leadStatus'],
+                    'new', '#3B82F6',
+                    'called', '#F59E0B',
+                    'scheduled', '#10B981',
+                    'completed', '#6B7280',
+                    '#888888'
+                  ]
+                ],
+                'fill-opacity': [
+                  'case',
+                  ['get', 'isLeadSubmission'],
+                  0.4, // More visible for lead submissions
+                  0.15
+                ]
+              }
+            });
           }
-        });
 
-        // Add outline layer
-        map.current.addLayer({
-          id: 'parcels-outline',
-          type: 'line',
-          source: 'parcels',
-          paint: {
-            'line-color': [
-              'match',
-              ['get', 'leadStatus'],
-              'new', '#3B82F6',
-              'called', '#F59E0B',
-              'scheduled', '#10B981',
-              'completed', '#6B7280',
-              '#EF4444'
-            ],
-            'line-width': 2.5,
-            'line-opacity': 0.8
+          // Add outline layer only if it doesn't exist
+          if (!map.current.getLayer('parcels-outline')) {
+            map.current.addLayer({
+              id: 'parcels-outline',
+              type: 'line',
+              source: 'parcels',
+              paint: {
+                'line-color': [
+                  'case',
+                  ['get', 'isLeadSubmission'], // If lead submission, always bright red
+                  '#EF4444',
+                  [
+                    'match',
+                    ['get', 'leadStatus'],
+                    'new', '#3B82F6',
+                    'called', '#F59E0B',
+                    'scheduled', '#10B981',
+                    'completed', '#6B7280',
+                    '#888888'
+                  ]
+                ],
+                'line-width': [
+                  'case',
+                  ['get', 'isLeadSubmission'],
+                  3.5, // Thicker line for lead submissions
+                  2.5
+                ],
+                'line-opacity': 1
+              }
+            });
           }
-        });
+        } catch (error) {
+          console.error('Error adding parcels to map:', error);
+        }
       } else {
         console.log('No parcels to display');
       }
@@ -453,6 +727,129 @@ export default function LeadsMap({ leads = [] }) {
 
     loadLeadsAndParcels();
   }, [leads]);
+
+  // Handle marker fade based on zoom
+  useEffect(() => {
+    if (!map.current) return;
+
+    markers.current.forEach(marker => {
+      if (marker._element) {
+        // Fade out when zoom > 16 (very close), fade back when zooming out
+        const opacity = currentZoom > 16 ? 0.3 : 1;
+        marker._element.style.opacity = opacity;
+      }
+    });
+  }, [currentZoom]);
+
+  // Add acreage labels to drawn polygons
+  useEffect(() => {
+    if (!map.current || !map.current.loaded()) return;
+
+    // Remove existing labels
+    drawnPolygons.forEach(polygon => {
+      if (map.current.getLayer(`polygon-label-${polygon.id}`)) {
+        map.current.removeLayer(`polygon-label-${polygon.id}`);
+      }
+      if (map.current.getSource(`polygon-label-${polygon.id}`)) {
+        map.current.removeSource(`polygon-label-${polygon.id}`);
+      }
+    });
+
+    // Add new labels
+    drawnPolygons.forEach(polygon => {
+      try {
+        // Format area display - show sq ft for small areas, acres for larger
+        const acres = polygon.area;
+        const sqft = acres * 43560; // 1 acre = 43,560 sq ft
+        let displayText;
+
+        if (acres < 0.1) {
+          // Show square feet for very small areas
+          displayText = `${Math.round(sqft).toLocaleString()} sq ft`;
+        } else {
+          // Show acres with appropriate precision
+          displayText = `${acres.toFixed(2)} acres`;
+        }
+
+        map.current.addSource(`polygon-label-${polygon.id}`, {
+          type: 'geojson',
+          data: {
+            type: 'Feature',
+            geometry: {
+              type: 'Point',
+              coordinates: polygon.center
+            },
+            properties: {
+              area: displayText
+            }
+          }
+        });
+
+        map.current.addLayer({
+          id: `polygon-label-${polygon.id}`,
+          type: 'symbol',
+          source: `polygon-label-${polygon.id}`,
+          layout: {
+            'text-field': ['get', 'area'],
+            'text-size': 18,
+            'text-anchor': 'center',
+            'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold']
+          },
+          paint: {
+            'text-color': '#ffffff',
+            'text-halo-color': '#000000',
+            'text-halo-width': 3,
+            'text-halo-blur': 1
+          }
+        });
+      } catch (error) {
+        console.log('Label already exists or error adding:', error);
+      }
+    });
+
+    return () => {
+      // Cleanup labels when component unmounts
+      drawnPolygons.forEach(polygon => {
+        if (map.current?.getLayer(`polygon-label-${polygon.id}`)) {
+          map.current.removeLayer(`polygon-label-${polygon.id}`);
+        }
+        if (map.current?.getSource(`polygon-label-${polygon.id}`)) {
+          map.current.removeSource(`polygon-label-${polygon.id}`);
+        }
+      });
+    };
+  }, [drawnPolygons]);
+
+  // Toggle topography/enhanced hillshading visibility and terrain exaggeration
+  useEffect(() => {
+    if (!map.current) return;
+
+    // Toggle enhanced hillshading layer
+    if (map.current.getLayer('hillshading-enhanced')) {
+      map.current.setLayoutProperty(
+        'hillshading-enhanced',
+        'visibility',
+        showTopography ? 'visible' : 'none'
+      );
+    }
+
+    // Increase terrain exaggeration when topography is on
+    if (map.current.getTerrain()) {
+      map.current.setTerrain({
+        source: 'mapbox-dem',
+        exaggeration: showTopography ? 3.0 : 1.2 // Much higher exaggeration for topography mode
+      });
+    }
+
+    // Adjust default hillshading intensity
+    if (map.current.getLayer('hillshading')) {
+      map.current.setPaintProperty(
+        'hillshading',
+        'hillshade-exaggeration',
+        showTopography ? 0.8 : 0.5
+      );
+    }
+  }, [showTopography]);
 
   return (
     <div className="relative w-full h-full">
@@ -475,77 +872,134 @@ export default function LeadsMap({ leads = [] }) {
         </div>
       </button>
 
+      {/* Polygon Drawing Toggle Button */}
+      <button
+        onClick={togglePolygonMode}
+        className={`absolute top-16 left-4 z-10 px-4 py-2 rounded-lg font-semibold shadow-lg transition-all ${
+          drawMode === 'draw_polygon'
+            ? 'bg-purple-500 text-white hover:bg-purple-600'
+            : 'bg-white/95 text-gray-700 hover:bg-white border border-gray-300'
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" />
+          </svg>
+          <span>{drawMode === 'draw_polygon' ? 'Exit Draw Mode' : 'Draw Lots'}</span>
+        </div>
+      </button>
+
+      {/* Topography Toggle Button - Shows when parcel is selected */}
+      {selectedParcel && (
+        <button
+          onClick={() => setShowTopography(!showTopography)}
+          className={`absolute top-28 left-4 z-10 px-4 py-2 rounded-lg font-semibold shadow-lg transition-all ${
+            showTopography
+              ? 'bg-orange-500 text-white hover:bg-orange-600'
+              : 'bg-white/95 text-gray-700 hover:bg-white border border-gray-300'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
+            </svg>
+            <span>{showTopography ? 'Hide Topography' : 'Show Topography'}</span>
+          </div>
+        </button>
+      )}
+
       {/* Premium animations CSS */}
       <style jsx global>{`
-        @keyframes premiumPulse {
+        @keyframes strongPulse {
           0% {
-            box-shadow: 0 4px 12px rgba(0,0,0,0.4), 0 0 0 4px rgba(59, 130, 246, 0.2), 0 0 0 0 rgba(59, 130, 246, 0.4);
+            box-shadow: 0 6px 16px rgba(0,0,0,0.5), 0 0 0 6px rgba(59, 130, 246, 0.4), 0 0 0 0 rgba(59, 130, 246, 0.6);
+            transform: scale(1);
           }
           50% {
-            box-shadow: 0 4px 12px rgba(0,0,0,0.4), 0 0 0 4px rgba(59, 130, 246, 0.2), 0 0 0 12px rgba(59, 130, 246, 0);
+            box-shadow: 0 6px 16px rgba(0,0,0,0.5), 0 0 0 6px rgba(59, 130, 246, 0.3), 0 0 0 20px rgba(59, 130, 246, 0);
+            transform: scale(1.1);
           }
           100% {
-            box-shadow: 0 4px 12px rgba(0,0,0,0.4), 0 0 0 4px rgba(59, 130, 246, 0.2), 0 0 0 0 rgba(59, 130, 246, 0);
+            box-shadow: 0 6px 16px rgba(0,0,0,0.5), 0 0 0 6px rgba(59, 130, 246, 0.4), 0 0 0 0 rgba(59, 130, 246, 0);
+            transform: scale(1);
           }
         }
       `}</style>
 
-      {/* Premium Lead details popup */}
-      {selectedLead && (
-        <div className="absolute top-6 right-6 bg-white/95 backdrop-blur-lg rounded-xl shadow-2xl p-5 max-w-sm z-10 border border-gray-200">
-          <button
-            onClick={() => setSelectedLead(null)}
-            className="absolute top-3 right-3 text-gray-400 hover:text-gray-700 transition-colors"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-
-          <div className="space-y-3">
-            <div className="flex items-center gap-3">
-              <div
-                className="w-3 h-3 rounded-full flex-shrink-0"
-                style={{ backgroundColor: getMarkerColor(selectedLead.status) }}
-              />
-              <span className="font-bold text-lg text-gray-900">{selectedLead.name}</span>
-            </div>
-
-            <div className="space-y-2 text-sm text-gray-700">
-              <div className="flex items-center gap-2">
-                <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+      {/* Premium Lead Info Card - positioned next to marker */}
+      {selectedLead && selectedParcel && (
+        <div
+          className={`fixed bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 backdrop-blur-xl rounded-xl shadow-2xl border border-slate-600/30 z-20 transition-all duration-300 ${isInfoCollapsed ? 'w-12' : 'w-80'}`}
+          style={{
+            left: `${infoBoxPosition.x}px`,
+            top: `${infoBoxPosition.y}px`,
+            transform: 'translateY(-50%)' // Center vertically on marker
+          }}
+        >
+          {/* Header with collapse button */}
+          <div className="flex items-center justify-between p-4 border-b border-slate-600/30">
+            <button
+              onClick={() => setIsInfoCollapsed(!isInfoCollapsed)}
+              className="text-slate-400 hover:text-white transition-colors"
+              title={isInfoCollapsed ? 'Expand' : 'Collapse'}
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {isInfoCollapsed ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                )}
+              </svg>
+            </button>
+            {!isInfoCollapsed && (
+              <button
+                onClick={() => {
+                  setSelectedLead(null);
+                  setSelectedParcel(null);
+                }}
+                className="text-slate-400 hover:text-white transition-colors"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
-                {selectedLead.phone}
-              </div>
-              <div className="flex items-center gap-2">
-                <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-                {selectedLead.address}, {selectedLead.city} {selectedLead.zip}
-              </div>
-            </div>
-
-            <div className="text-sm bg-gray-50 rounded-lg p-3">
-              <div className="font-semibold text-gray-900 mb-1">Issue Description</div>
-              <div className="text-gray-700">{selectedLead.issue_description}</div>
-            </div>
-
-            <div className="flex items-center justify-between pt-2 border-t">
-              <span className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
-                selectedLead.status === 'new' ? 'bg-blue-500 text-white' :
-                selectedLead.status === 'scheduled' ? 'bg-green-500 text-white' :
-                selectedLead.status === 'called' ? 'bg-yellow-500 text-white' :
-                'bg-gray-500 text-white'
-              }`}>
-                {selectedLead.status.toUpperCase()}
-              </span>
-              <span className="text-xs text-gray-500">
-                {new Date(selectedLead.created_at).toLocaleDateString()}
-              </span>
-            </div>
+              </button>
+            )}
           </div>
+
+          {/* Premium lead info with field boxes */}
+          {!isInfoCollapsed && (
+            <div className="p-4 space-y-3">
+              {/* Owner Field */}
+              <div>
+                <label className="text-xs text-slate-400 uppercase tracking-wider mb-1.5 block font-semibold">Owner</label>
+                <div className="bg-slate-800/60 border border-slate-600/40 rounded-lg px-3 py-2.5">
+                  <div className="text-white font-medium text-sm leading-tight">
+                    {selectedParcel.parcel?.properties?.fields?.owner || 'Unknown'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Acreage Field */}
+              <div>
+                <label className="text-xs text-slate-400 uppercase tracking-wider mb-1.5 block font-semibold">Acreage</label>
+                <div className="bg-slate-800/60 border border-slate-600/40 rounded-lg px-3 py-2.5">
+                  <div className="text-white font-bold text-sm">
+                    {selectedParcel.parcel?.properties?.fields?.ll_gisacre?.toFixed(2) || 'N/A'} Acres
+                  </div>
+                </div>
+              </div>
+
+              {/* Exit Strategy Field */}
+              <div>
+                <label className="text-xs text-slate-400 uppercase tracking-wider mb-1.5 block font-semibold">Exit Strategy</label>
+                <div className="bg-gradient-to-r from-blue-500/10 to-blue-600/10 border border-blue-500/30 rounded-lg px-3 py-2.5">
+                  <div className="text-blue-400 font-bold text-sm capitalize">
+                    {selectedLead.dealType || 'N/A'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -590,16 +1044,9 @@ export default function LeadsMap({ leads = [] }) {
                 </span>
               </div>
 
-              <div className="flex justify-between items-center py-2 border-b border-slate-700/30">
-                <span className="text-slate-400">Acres</span>
-                <span className="text-white font-medium">
-                  {selectedParcel.parcel.properties.fields?.acres?.toFixed(2) || 'N/A'}
-                </span>
-              </div>
-
               {selectedParcel.parcel.properties.fields?.ll_gisacre && (
                 <div className="flex justify-between items-center py-2 border-b border-slate-700/30">
-                  <span className="text-slate-400">GIS Acres</span>
+                  <span className="text-slate-400">Acreage</span>
                   <span className="text-white font-medium">
                     {selectedParcel.parcel.properties.fields.ll_gisacre.toFixed(2)}
                   </span>
