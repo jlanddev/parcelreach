@@ -155,13 +155,15 @@ export default function SignupPage() {
                 alt="ParcelReach"
                 width={180}
                 height={60}
+                className="w-auto h-auto max-w-[140px] sm:max-w-[180px]"
               />
             </a>
             <a
               href="/login"
-              className="text-gray-300 hover:text-white transition-colors"
+              className="text-gray-300 hover:text-white transition-colors text-sm sm:text-base"
             >
-              Already have an account? <span className="text-blue-400">Log in</span>
+              <span className="hidden sm:inline">Already have an account? </span>
+              <span className="text-blue-400">Log in</span>
             </a>
           </div>
         </div>
@@ -172,22 +174,22 @@ export default function SignupPage() {
         <div className="max-w-3xl mx-auto">
           {/* Header */}
           <div className="text-center mb-8">
-            <h1 className="text-4xl font-bold text-white mb-4">
+            <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-white mb-4">
               Start Getting Land Leads
             </h1>
-            <p className="text-xl text-gray-300">
+            <p className="text-lg sm:text-xl text-gray-300 px-2">
               Pay-Per-Lead - Only pay for the leads you want
             </p>
-            <div className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-              <svg className="w-5 h-5 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+            <div className="mt-4 inline-flex items-center gap-2 px-3 sm:px-4 py-2 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+              <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
               </svg>
-              <span className="text-blue-300 text-sm font-medium">No monthly fees • No commitment • Cancel anytime</span>
+              <span className="text-blue-300 text-xs sm:text-sm font-medium">No monthly fees • No commitment • Cancel anytime</span>
             </div>
           </div>
 
           {/* Form */}
-          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-2xl p-8">
+          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-2xl p-5 sm:p-8">
             {error && (
               <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
                 <p className="text-red-400 text-sm">{error}</p>
@@ -279,9 +281,9 @@ export default function SignupPage() {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-3">
-                    Target States * <span className="text-gray-500">(Select all that apply)</span>
+                    Target States * <span className="text-gray-500 text-xs sm:text-sm">(Select all that apply)</span>
                   </label>
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 max-h-64 overflow-y-auto p-4 bg-slate-900/30 border border-slate-700 rounded-lg">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 max-h-64 overflow-y-auto p-3 sm:p-4 bg-slate-900/30 border border-slate-700 rounded-lg">
                     {US_STATES.map(state => (
                       <label key={state} className="flex items-center gap-2 cursor-pointer hover:bg-slate-800/50 p-2 rounded">
                         <input

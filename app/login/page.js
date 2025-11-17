@@ -90,14 +90,14 @@ export default function LoginPage() {
             }}
           />
         </div>
-      <div className="bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl p-8 w-full max-w-md relative z-10">
+      <div className="bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl p-6 sm:p-8 w-full max-w-md relative z-10">
         <div className="text-center mb-6">
           <Image
             src="/parcelreach-logo.png"
             alt="ParcelReach"
-            width={400}
-            height={130}
-            className="mx-auto"
+            width={320}
+            height={107}
+            className="mx-auto w-auto h-auto max-w-[280px] sm:max-w-[320px]"
           />
         </div>
 

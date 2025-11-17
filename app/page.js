@@ -36,49 +36,50 @@ export default function ComingSoonPage() {
         {/* Content */}
         <div className="relative z-10 text-center px-4 max-w-4xl mx-auto">
           {/* Logo */}
-          <div className="mb-12 flex justify-center">
+          <div className="mb-8 sm:mb-12 flex justify-center">
             <Image
               src="/parcelreach-logo.png"
               alt="ParcelReach AI"
               width={480}
               height={160}
               priority
+              className="w-auto h-auto max-w-[300px] sm:max-w-[400px] lg:max-w-[480px]"
             />
           </div>
 
           {/* Coming Soon Message */}
-          <h1 className="text-6xl sm:text-7xl font-bold mb-6">
+          <h1 className="text-4xl sm:text-6xl lg:text-7xl font-bold mb-4 sm:mb-6">
             Coming Soon
           </h1>
-          <p className="text-2xl text-slate-400 mb-16">
+          <p className="text-lg sm:text-2xl text-slate-400 mb-12 sm:mb-16 px-4">
             AI-powered land development intelligence
           </p>
 
           {/* Quick Links */}
-          <div className="bg-slate-900/50 border border-slate-700/50 rounded-2xl p-8 backdrop-blur-sm">
-            <h2 className="text-xl font-semibold mb-6 text-slate-300">Quick Access</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="bg-slate-900/50 border border-slate-700/50 rounded-2xl p-5 sm:p-8 backdrop-blur-sm">
+            <h2 className="text-lg sm:text-xl font-semibold mb-6 text-slate-300">Quick Access</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
               <Link
                 href="/login"
-                className="px-6 py-4 bg-blue-600 hover:bg-blue-500 rounded-lg font-semibold transition-all transform hover:scale-105 text-lg"
+                className="px-6 py-3 sm:py-4 bg-blue-600 hover:bg-blue-500 rounded-lg font-semibold transition-all transform hover:scale-105 text-base sm:text-lg"
               >
                 Login
               </Link>
               <Link
                 href="/dashboard"
-                className="px-6 py-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg font-semibold transition-all text-lg"
+                className="px-6 py-3 sm:py-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg font-semibold transition-all text-base sm:text-lg"
               >
                 Dashboard
               </Link>
               <Link
                 href="/signup"
-                className="px-6 py-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg font-semibold transition-all text-lg"
+                className="px-6 py-3 sm:py-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg font-semibold transition-all text-base sm:text-lg"
               >
                 Sign Up
               </Link>
               <Link
                 href="/admin"
-                className="px-6 py-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg font-semibold transition-all text-lg"
+                className="px-6 py-3 sm:py-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg font-semibold transition-all text-base sm:text-lg"
               >
                 Admin
               </Link>
