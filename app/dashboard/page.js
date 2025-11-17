@@ -678,12 +678,6 @@ export default function DashboardPage() {
               </div>
               <div className="flex items-center gap-2">
                 <p className="text-slate-400 text-sm">{leads.length} Active Leads</p>
-                <button
-                  onClick={() => setLogoEditMode(!logoEditMode)}
-                  className="text-xs text-blue-400 hover:text-blue-300"
-                >
-                  {logoEditMode ? '✓ Done' : 'Edit Logo'}
-                </button>
               </div>
             </div>
 
