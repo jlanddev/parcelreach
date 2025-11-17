@@ -157,17 +157,25 @@ export default function LandLeadsAdminPage() {
           const location = leadData?.property_county || leadData?.county || 'Unknown';
           const acres = leadData?.acres || leadData?.acreage || 'N/A';
 
-          // Create notification for each team member
-          const notifications = teamMembers.map(member => ({
-            user_id: member.user_id,
-            title: 'New Lead Assigned',
-            message: `${leadName} - ${acres} acres in ${location}`,
-            lead_id: leadId,
-            read: false,
-            created_at: new Date().toISOString()
-          }));
-
-          await supabase.from('notifications').insert(notifications);
+          // Create notification for each team member via API (sends email too)
+          for (const member of teamMembers) {
+            try {
+              await fetch('/api/notifications/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  userId: member.user_id,
+                  type: 'lead_assigned',
+                  title: 'New Lead Assigned',
+                  message: `${leadName} - ${acres} acres in ${location}`,
+                  link: '/dashboard',
+                  sendEmail: true
+                })
+              });
+            } catch (err) {
+              console.error('Failed to send notification:', err);
+            }
+          }
         }
       }
 

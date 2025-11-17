@@ -68,9 +68,9 @@ export async function POST(request) {
       );
     }
 
-    // Send email if requested and type is 'mention'
+    // Send email if requested
     let emailResult = null;
-    if (sendEmail && type === 'mention') {
+    if (sendEmail && (type === 'mention' || type === 'lead_assigned')) {
       try {
         // Get user details
         const { data: toUser } = await supabase
@@ -79,20 +79,39 @@ export async function POST(request) {
           .eq('id', userId)
           .single();
 
-        const { data: fromUser } = await supabase
-          .from('users')
-          .select('full_name')
-          .eq('id', fromUserId)
-          .single();
-
         if (toUser && toUser.email) {
-          emailResult = await sendMentionNotification({
-            toEmail: toUser.email,
-            toName: toUser.full_name || 'there',
-            fromName: fromUser?.full_name || 'A team member',
-            notePreview: notePreview || message,
-            link: `${process.env.NEXT_PUBLIC_BASE_URL || 'https://parcelreach.ai'}${link}`
-          });
+          if (type === 'mention') {
+            const { data: fromUser } = await supabase
+              .from('users')
+              .select('full_name')
+              .eq('id', fromUserId)
+              .single();
+
+            emailResult = await sendMentionNotification({
+              toEmail: toUser.email,
+              toName: toUser.full_name || 'there',
+              fromName: fromUser?.full_name || 'A team member',
+              notePreview: notePreview || message,
+              link: `${process.env.NEXT_PUBLIC_BASE_URL || 'https://parcelreach.ai'}${link}`
+            });
+          } else if (type === 'lead_assigned') {
+            const { sendLeadAssignmentNotification } = await import('@/lib/email');
+            // Parse lead details from message (format: "Name - Acres in Location")
+            const parts = message.split(' - ');
+            const leadName = parts[0] || 'Property';
+            const acresAndLocation = parts[1] || '';
+            const [acres, ...locationParts] = acresAndLocation.split(' in ');
+            const location = locationParts.join(' in ') || 'Unknown';
+
+            emailResult = await sendLeadAssignmentNotification({
+              toEmail: toUser.email,
+              toName: toUser.full_name || 'there',
+              leadName,
+              location,
+              acres: acres || 'N/A',
+              link: `${process.env.NEXT_PUBLIC_BASE_URL || 'https://parcelreach.ai'}${link}`
+            });
+          }
         }
       } catch (emailError) {
         console.error('Error sending email:', emailError);
