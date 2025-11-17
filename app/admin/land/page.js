@@ -867,7 +867,10 @@ export default function LandLeadsAdminPage() {
                   </div>
                 ) : (
                   organizations.map((org) => {
-                    const orgLeads = allLeads.filter(l => l.purchased_by === org.id);
+                    // Count leads assigned to this org from junction table
+                    const orgLeadCount = Object.entries(leadAssignments).filter(([leadId, assignments]) =>
+                      assignments.some(a => a.team_id === org.id)
+                    ).length;
                     const monthlyLeads = organizations.filter(o => o.subscription_type === 'monthly').length;
 
                     return (
@@ -895,7 +898,7 @@ export default function LandLeadsAdminPage() {
                               </div>
                               <div>
                                 <span className="text-slate-400">Total Leads:</span>
-                                <span className="ml-2 font-semibold text-white">{orgLeads.length}</span>
+                                <span className="ml-2 font-semibold text-white">{orgLeadCount}</span>
                               </div>
                               <div>
                                 <span className="text-slate-400">Joined:</span>
