@@ -682,24 +682,17 @@ export default function DashboardPage() {
         flex flex-col
       `}>
         {/* Sidebar Header with User Info */}
-        <div className="px-5 pb-4 border-b border-slate-700/50" style={{ paddingTop: `${headerPaddingTop}px` }}>
+        <div className="px-5 pb-4 border-b border-slate-700/50" style={{ paddingTop: '8px' }}>
           <div className="flex items-center justify-between mb-3">
             <div className="flex flex-col gap-1 w-full">
               <div style={{ position: 'relative', display: 'inline-block' }}>
                 <img
                   src="/parcelreach-logo.png"
                   alt="ParcelReach AI"
-                  onMouseDown={logoEditMode ? handleLogoMouseDown : undefined}
                   style={{
-                    width: `${logoSize}px`,
+                    width: '200px',
                     height: 'auto',
-                    position: 'relative',
-                    left: `${logoPosition.x}px`,
-                    top: `${logoPosition.y}px`,
-                    userSelect: 'none',
-                    pointerEvents: logoEditMode ? 'auto' : 'none',
-                    cursor: logoEditMode ? 'move' : 'default',
-                    border: logoEditMode ? '2px dashed rgba(59, 130, 246, 0.5)' : 'none'
+                    userSelect: 'none'
                   }}
                 />
                 {logoEditMode && (
