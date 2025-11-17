@@ -45,8 +45,8 @@ export default function LandingPage() {
               <Image
                 src="/parcelreach-logo.png"
                 alt="ParcelReach"
-                width={240}
-                height={80}
+                width={320}
+                height={107}
               />
             </Link>
 
@@ -286,8 +286,8 @@ export default function LandingPage() {
             <Image
               src="/parcelreach-logo.png"
               alt="ParcelReach"
-              width={200}
-              height={65}
+              width={260}
+              height={87}
             />
             <div className="flex gap-8 text-sm text-slate-400">
               <a href="#" className="hover:text-white transition-colors">Privacy Policy</a>
