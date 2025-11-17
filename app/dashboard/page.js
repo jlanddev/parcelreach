@@ -111,21 +111,44 @@ export default function DashboardPage() {
         }]);
       }
 
-      // Get user's teams
-      const { data: teams } = await supabase
-        .from('team_members')
-        .select('team_id, teams(*)')
-        .eq('user_id', user.id);
+      // Check if admin is viewing a specific organization
+      const adminViewingOrg = typeof window !== 'undefined' ? sessionStorage.getItem('admin_viewing_org') : null;
+      console.log('🔍 Dashboard checking admin_viewing_org:', adminViewingOrg);
 
-      if (teams && teams.length > 0) {
-        setCurrentTeam(teams[0].teams);
-        loadTeamMembers(teams[0].team_id);
-        fetchLeads(teams[0].team_id);
+      if (adminViewingOrg) {
+        // Load the specific organization for admin
+        console.log('📊 Loading admin organization:', adminViewingOrg);
+        const { data: team } = await supabase
+          .from('teams')
+          .select('*')
+          .eq('id', adminViewingOrg)
+          .single();
+
+        console.log('📊 Admin team loaded:', team);
+        if (team) {
+          setCurrentTeam(team);
+          loadTeamMembers(team.id);
+          fetchLeads(team.id);
+        }
       } else {
+        // Get user's teams
+        const { data: teams } = await supabase
+          .from('team_members')
+          .select('team_id, teams(*)')
+          .eq('user_id', user.id);
+
+        if (teams && teams.length > 0) {
+          setCurrentTeam(teams[0].teams);
+          loadTeamMembers(teams[0].team_id);
+          fetchLeads(teams[0].team_id);
+        } else {
         // Create default team for user
         const { data: newTeam } = await supabase
           .from('teams')
-          .insert([{ name: `${user.email}'s Team` }])
+          .insert([{
+            name: `${user.email}'s Team`,
+            owner_id: user.id
+          }])
           .select()
           .single();
 
@@ -135,9 +158,10 @@ export default function DashboardPage() {
           role: 'owner'
         }]);
 
-        setCurrentTeam(newTeam);
-        loadTeamMembers(newTeam.id);
-        fetchLeads(newTeam.id);
+          setCurrentTeam(newTeam);
+          loadTeamMembers(newTeam.id);
+          fetchLeads(newTeam.id);
+        }
       }
     };
 
@@ -1686,6 +1710,10 @@ export default function DashboardPage() {
                   onClick={async () => {
                     if (inviteEmail && inviteEmail.trim()) {
                       try {
+                        if (!currentTeam?.id) {
+                          throw new Error('No team found. Please refresh the page and try again.');
+                        }
+
                         const response = await fetch('/api/team/invite', {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },

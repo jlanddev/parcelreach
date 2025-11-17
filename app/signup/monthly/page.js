@@ -69,6 +69,7 @@ export default function MonthlySignupPage() {
         email: formData.email,
         password: formData.password,
         options: {
+          emailRedirectTo: `${window.location.origin}/dashboard`,
           data: {
             full_name: formData.fullName,
             organization_name: formData.organizationName
@@ -77,6 +78,21 @@ export default function MonthlySignupPage() {
       });
 
       if (authError) throw authError;
+
+      // Create user profile in users table FIRST (required for foreign key)
+      // Use upsert to handle existing users from previous failed attempts
+      const { error: userError } = await supabase
+        .from('users')
+        .upsert([{
+          id: authData.user.id,
+          email: formData.email,
+          full_name: formData.fullName,
+          created_at: new Date().toISOString()
+        }], {
+          onConflict: 'id'
+        });
+
+      if (userError) throw userError;
 
       // Create team/organization with monthly subscription
       const { data: teamData, error: teamError } = await supabase
@@ -98,8 +114,7 @@ export default function MonthlySignupPage() {
         .insert([{
           team_id: teamData.id,
           user_id: authData.user.id,
-          role: 'owner',
-          created_at: new Date().toISOString()
+          role: 'owner'
         }]);
 
       if (memberError) throw memberError;

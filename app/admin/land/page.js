@@ -78,6 +78,7 @@ export default function LandLeadsAdminPage() {
 
   const handleViewDashboard = (orgId) => {
     // Store selected org in session and redirect to dashboard
+    console.log('🔍 Admin viewing org:', orgId);
     sessionStorage.setItem('admin_viewing_org', orgId);
     router.push('/dashboard');
   };
