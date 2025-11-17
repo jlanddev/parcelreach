@@ -615,7 +615,7 @@ export default function DashboardPage() {
 
           {/* Title */}
           <h1 className="text-4xl font-bold text-white mb-2">ParcelReach</h1>
-          <p className="text-lg text-slate-400 mb-8">Land Lead Marketplace</p>
+          <p className="text-lg text-slate-400 mb-8">Land Lead Intelligence</p>
 
           {/* Loading bar */}
           <div className="w-64 h-1.5 bg-slate-700 rounded-full mx-auto overflow-hidden">
