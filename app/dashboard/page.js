@@ -691,26 +691,8 @@ export default function DashboardPage() {
       `}>
         {/* Sidebar Header with User Info */}
         <div className="px-5 pb-4 border-b border-slate-700/50" style={{ paddingTop: '8px' }}>
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex flex-col gap-1 w-full">
-              <div>
-                <img
-                  src="/parcelreach-logo.png"
-                  alt="ParcelReach AI"
-                  style={{
-                    width: LOGO_CONFIG.width,
-                    height: 'auto',
-                    marginLeft: LOGO_CONFIG.marginLeft,
-                    marginTop: LOGO_CONFIG.marginTop,
-                    display: LOGO_CONFIG.display,
-                    userSelect: 'none'
-                  }}
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <p className="text-slate-400 text-sm">{leads.length} Active Leads</p>
-              </div>
-            </div>
+          <div className="flex items-center justify-between">
+            <p className="text-white text-lg font-semibold">{leads.length} Active Leads</p>
 
             {/* Action Buttons */}
             <div className="flex items-center gap-2">
