@@ -2,8 +2,8 @@ import './globals.css'
 import Script from 'next/script'
 
 export const metadata = {
-  title: 'GarageLeadly - Exclusive Garage Door Leads',
-  description: 'Get exclusive, high-quality garage door repair leads delivered directly to your phone',
+  title: 'ParcelReach - AI-Powered Land Development Intelligence',
+  description: 'Get high-quality land seller leads with AI parcel mapping technology. 93% contact rate. 10x ROAS.',
 }
 
 export default function RootLayout({ children }) {
