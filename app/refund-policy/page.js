@@ -39,7 +39,7 @@ export default function RefundPolicyPage() {
               To request a refund or credit for a lead:
             </p>
             <ol className="list-decimal pl-6 text-gray-700 space-y-2 mb-4">
-              <li>Contact us at <a href="mailto:support@garageleadly.com" className="text-blue-600 hover:underline">support@garageleadly.com</a> within 72 hours of receiving the lead</li>
+              <li>Contact us at <a href="mailto:support@parcelreach.ai" className="text-blue-600 hover:underline">support@parcelreach.ai</a> within 72 hours of receiving the lead</li>
               <li>Provide the lead ID, date received, and detailed reason for the refund request</li>
               <li>Include any supporting documentation (screenshots, call logs, etc.)</li>
             </ol>
@@ -93,7 +93,7 @@ export default function RefundPolicyPage() {
               United States
             </p>
             <p className="text-gray-700">
-              Email: <a href="mailto:support@garageleadly.com" className="text-blue-600 hover:underline">support@garageleadly.com</a>
+              Email: <a href="mailto:support@parcelreach.ai" className="text-blue-600 hover:underline">support@parcelreach.ai</a>
             </p>
           </section>
         </div>

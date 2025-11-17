@@ -77,8 +77,8 @@ export default function SuccessPage() {
         <div className="mt-8 pt-8 border-t border-gray-200">
           <p className="text-gray-600">
             Questions? Email us at{' '}
-            <a href="mailto:support@garageleadly.com" className="text-blue-600 hover:underline font-semibold">
-              support@garageleadly.com
+            <a href="mailto:support@parcelreach.ai" className="text-blue-600 hover:underline font-semibold">
+              support@parcelreach.ai
             </a>
           </p>
         </div>

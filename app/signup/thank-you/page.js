@@ -20,7 +20,7 @@ export default function ThankYouPage() {
     console.log('Conversion tracking fired - add your tracking codes');
 
     // Get signup data from localStorage
-    const signupData = localStorage.getItem('garageleadly_latest_signup');
+    const signupData = localStorage.getItem('parcelreach_latest_signup');
     if (signupData) {
       setBookingData(JSON.parse(signupData));
     }
