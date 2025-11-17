@@ -38,6 +38,14 @@ const ACREAGE_RANGES = [
   { label: '100+ acres', value: '100+' }
 ];
 
+// LOGO CONFIGURATION - Adjust these values to position logo for ALL users
+const LOGO_CONFIG = {
+  width: '200px',
+  marginLeft: '0px',    // Adjust to move left/right
+  marginTop: '0px',     // Adjust to move up/down
+  display: 'block',     // Can be 'block' or 'inline-block'
+};
+
 export default function DashboardPage() {
   const router = useRouter();
   const [leads, setLeads] = useState([]);
@@ -690,8 +698,11 @@ export default function DashboardPage() {
                   src="/parcelreach-logo.png"
                   alt="ParcelReach AI"
                   style={{
-                    width: '200px',
+                    width: LOGO_CONFIG.width,
                     height: 'auto',
+                    marginLeft: LOGO_CONFIG.marginLeft,
+                    marginTop: LOGO_CONFIG.marginTop,
+                    display: LOGO_CONFIG.display,
                     userSelect: 'none'
                   }}
                 />
