@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import dynamicImport from 'next/dynamic';
 import { createClient } from '@supabase/supabase-js';
 import NotificationsPanel from '@/components/NotificationsPanel';
+import NotificationBell from '@/components/NotificationBell';
 import LeadNotes from '@/components/LeadNotes';
 
 // Dynamically import map to avoid SSR issues
@@ -737,13 +738,7 @@ export default function DashboardPage() {
 
               {/* Notifications */}
               {currentUser && (
-                <NotificationsPanel
-                  userId={currentUser.id}
-                  onLeadClick={(leadId) => {
-                    const lead = leads.find(l => l.id === leadId);
-                    if (lead) openLeadDetail(lead);
-                  }}
-                />
+                <NotificationBell userId={currentUser.id} />
               )}
 
               {/* Account Button */}
