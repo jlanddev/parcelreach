@@ -40,7 +40,7 @@ const ACREAGE_RANGES = [
 
 // LOGO CONFIGURATION - Adjust these values to position logo for ALL users
 const LOGO_CONFIG = {
-  width: '200px',
+  width: '260px',
   marginLeft: '0px',    // Adjust to move left/right
   marginTop: '0px',     // Adjust to move up/down
   display: 'block',     // Can be 'block' or 'inline-block'
