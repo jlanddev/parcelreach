@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { createClient } from '@supabase/supabase-js';
@@ -12,7 +12,7 @@ const supabaseService = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
-export default function JoinTeamPage() {
+function JoinTeamContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const [token, setToken] = useState(null);
@@ -268,5 +268,20 @@ export default function JoinTeamPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function JoinTeamPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white flex items-center justify-center p-4">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+          <p className="text-slate-400">Loading invitation...</p>
+        </div>
+      </div>
+    }>
+      <JoinTeamContent />
+    </Suspense>
   );
 }
