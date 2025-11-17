@@ -18,6 +18,7 @@ export default function LandLeadsAdminPage() {
   const [selectedLead, setSelectedLead] = useState(null);
   const [selectedOrgsForAssignment, setSelectedOrgsForAssignment] = useState([]);
   const [isAssigning, setIsAssigning] = useState(false);
+  const [leadAssignments, setLeadAssignments] = useState({}); // leadId -> array of {teamId, assigned_at}
 
   // Create Lead states
   const mapContainer = useRef(null);
@@ -73,8 +74,24 @@ export default function LandLeadsAdminPage() {
       .select('*')
       .order('created_at', { ascending: false });
 
+    // Fetch all assignments
+    const { data: assignmentsData } = await supabase
+      .from('lead_assignments')
+      .select('lead_id, team_id, assigned_at')
+      .order('assigned_at', { ascending: false });
+
+    // Group assignments by lead_id
+    const assignmentsByLead = {};
+    assignmentsData?.forEach(assignment => {
+      if (!assignmentsByLead[assignment.lead_id]) {
+        assignmentsByLead[assignment.lead_id] = [];
+      }
+      assignmentsByLead[assignment.lead_id].push(assignment);
+    });
+
     setOrganizations(orgsData || []);
     setAllLeads(leadsData || []);
+    setLeadAssignments(assignmentsByLead);
     setLoading(false);
   };
 
@@ -945,7 +962,11 @@ export default function LandLeadsAdminPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-700/50">
                   {allLeads.map((lead) => {
-                    const assignedOrg = organizations.find(o => o.id === lead.purchased_by);
+                    const assignments = leadAssignments[lead.id] || [];
+                    const assignedOrgs = assignments.map(a => ({
+                      org: organizations.find(o => o.id === a.team_id),
+                      assignedAt: a.assigned_at
+                    })).filter(a => a.org);
 
                     return (
                       <tr key={lead.id} className="hover:bg-slate-700/30">
@@ -970,12 +991,16 @@ export default function LandLeadsAdminPage() {
                           </span>
                         </td>
                         <td className="px-6 py-4">
-                          {assignedOrg ? (
-                            <div>
-                              <div className="font-medium text-sm">{assignedOrg.name}</div>
-                              <div className="text-xs text-slate-400">
-                                {new Date(lead.purchased_at).toLocaleDateString()}
-                              </div>
+                          {assignedOrgs.length > 0 ? (
+                            <div className="space-y-1.5">
+                              {assignedOrgs.map((assignment, idx) => (
+                                <div key={idx} className="text-sm">
+                                  <div className="font-medium text-white">{assignment.org.name}</div>
+                                  <div className="text-xs text-slate-400">
+                                    {new Date(assignment.assignedAt).toLocaleDateString()}
+                                  </div>
+                                </div>
+                              ))}
                             </div>
                           ) : (
                             <span className="text-slate-500">Unassigned</span>
