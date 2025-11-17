@@ -16,6 +16,7 @@ export default function LandLeadsAdminPage() {
   const [activeTab, setActiveTab] = useState('organizations');
   const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [selectedLead, setSelectedLead] = useState(null);
+  const [selectedOrgsForAssignment, setSelectedOrgsForAssignment] = useState([]);
 
   // Create Lead states
   const mapContainer = useRef(null);
@@ -83,7 +84,7 @@ export default function LandLeadsAdminPage() {
     router.push('/dashboard');
   };
 
-  const handleAssignLead = async (leadId, teamId) => {
+  const handleAssignLead = async (leadId, teamIds) => {
     // Get lead details for notification
     const { data: leadData } = await supabase
       .from('leads')
@@ -91,54 +92,53 @@ export default function LandLeadsAdminPage() {
       .eq('id', leadId)
       .single();
 
+    // Insert into lead_assignments junction table (allows multiple assignments)
+    const assignments = teamIds.map(teamId => ({
+      lead_id: leadId,
+      team_id: teamId,
+      assigned_at: new Date().toISOString()
+    }));
+
     const { error } = await supabase
-      .from('leads')
-      .update({
-        team_id: teamId,
-        purchased_by: teamId,
-        purchased_at: new Date().toISOString(),
-        status: 'assigned'
-      })
-      .eq('id', leadId);
+      .from('lead_assignments')
+      .upsert(assignments, { onConflict: 'lead_id,team_id' });
 
     if (!error) {
-      // Create notifications for all team members
-      const { data: teamMembers } = await supabase
+      // Update lead status if not already assigned
+      await supabase
+        .from('leads')
+        .update({ status: 'assigned' })
+        .eq('id', leadId);
+
+      // Create notifications for all team members of assigned teams
+      for (const teamId of teamIds) {
+        const { data: teamMembers } = await supabase
         .from('team_members')
         .select('user_id')
         .eq('team_id', teamId);
 
-      if (teamMembers && teamMembers.length > 0) {
-        const leadName = leadData?.full_name || leadData?.name || 'Property';
-        const location = leadData?.property_county || leadData?.county || 'Unknown';
-        const acres = leadData?.acres || leadData?.acreage || 'N/A';
-        const address = leadData?.address || leadData?.street_address || '';
+        if (teamMembers && teamMembers.length > 0) {
+          const leadName = leadData?.full_name || leadData?.name || 'Property';
+          const location = leadData?.property_county || leadData?.county || 'Unknown';
+          const acres = leadData?.acres || leadData?.acreage || 'N/A';
 
-        // Create notification for each team member
-        const notifications = teamMembers.map(member => ({
-          user_id: member.user_id,
-          title: 'New Lead',
-          message: `${leadName} - ${acres} acres in ${location}`,
-          lead_id: leadId,
-          read: false,
-          created_at: new Date().toISOString()
-        }));
+          // Create notification for each team member
+          const notifications = teamMembers.map(member => ({
+            user_id: member.user_id,
+            title: 'New Lead Assigned',
+            message: `${leadName} - ${acres} acres in ${location}`,
+            lead_id: leadId,
+            read: false,
+            created_at: new Date().toISOString()
+          }));
 
-        await supabase.from('notifications').insert(notifications);
+          await supabase.from('notifications').insert(notifications);
+        }
       }
-
-      // Record assignment
-      await supabase
-        .from('lead_assignments')
-        .insert({
-          lead_id: leadId,
-          team_id: teamId,
-          assignment_type: 'manual',
-          notes: 'Manually assigned by admin'
-        });
 
       setAssignModalOpen(false);
       setSelectedLead(null);
+      setSelectedOrgsForAssignment([]);
       fetchAllData();
     }
   };
@@ -1401,38 +1401,66 @@ export default function LandLeadsAdminPage() {
             className="bg-slate-800 rounded-xl border border-slate-700 max-w-2xl w-full p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-xl font-bold mb-4">Assign Lead to Organization</h3>
+            <h3 className="text-xl font-bold mb-4">Assign Lead to Organizations</h3>
             <div className="mb-6 p-4 bg-slate-900/50 rounded-lg">
               <p className="font-semibold text-white">{selectedLead.full_name || selectedLead.name}</p>
               <p className="text-sm text-slate-400 mt-1">
                 {selectedLead.property_county || selectedLead.county}, {selectedLead.property_state || selectedLead.state}
               </p>
             </div>
+            <p className="text-sm text-slate-300 mb-3">Select one or more organizations:</p>
             <div className="space-y-2 max-h-96 overflow-y-auto mb-6">
               {organizations.map((org) => (
-                <button
+                <label
                   key={org.id}
-                  onClick={() => handleAssignLead(selectedLead.id, org.id)}
-                  className="w-full text-left p-4 bg-slate-700/50 hover:bg-slate-700 rounded-lg transition-colors border border-slate-600"
+                  className="flex items-center p-4 bg-slate-700/50 hover:bg-slate-700 rounded-lg transition-colors border border-slate-600 cursor-pointer"
                 >
-                  <div className="font-semibold">{org.name}</div>
-                  <div className="text-sm text-slate-400 mt-1">
-                    {org.subscription_type || 'pay-per-lead'} • {
-                      allLeads.filter(l => l.purchased_by === org.id).length
-                    } leads
+                  <input
+                    type="checkbox"
+                    checked={selectedOrgsForAssignment.includes(org.id)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedOrgsForAssignment([...selectedOrgsForAssignment, org.id]);
+                      } else {
+                        setSelectedOrgsForAssignment(selectedOrgsForAssignment.filter(id => id !== org.id));
+                      }
+                    }}
+                    className="w-5 h-5 mr-3 rounded border-slate-500 text-blue-500 focus:ring-2 focus:ring-blue-500"
+                  />
+                  <div className="flex-1">
+                    <div className="font-semibold">{org.name}</div>
+                    <div className="text-sm text-slate-400 mt-1">
+                      {org.subscription_type || 'pay-per-lead'} • {
+                        allLeads.filter(l => l.purchased_by === org.id).length
+                      } leads
+                    </div>
                   </div>
-                </button>
+                </label>
               ))}
             </div>
-            <button
-              onClick={() => {
-                setAssignModalOpen(false);
-                setSelectedLead(null);
-              }}
-              className="w-full px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-600 transition-colors"
-            >
-              Cancel
-            </button>
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setAssignModalOpen(false);
+                  setSelectedLead(null);
+                  setSelectedOrgsForAssignment([]);
+                }}
+                className="flex-1 px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-600 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (selectedOrgsForAssignment.length > 0) {
+                    handleAssignLead(selectedLead.id, selectedOrgsForAssignment);
+                  }
+                }}
+                disabled={selectedOrgsForAssignment.length === 0}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-semibold"
+              >
+                Assign to {selectedOrgsForAssignment.length} Org{selectedOrgsForAssignment.length !== 1 ? 's' : ''}
+              </button>
+            </div>
           </div>
         </div>
       )}
