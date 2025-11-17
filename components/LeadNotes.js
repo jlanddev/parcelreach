@@ -22,7 +22,10 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
   const fetchNotes = async () => {
     const { data, error } = await supabase
       .from('lead_notes')
-      .select('*, user:users(full_name, email)')
+      .select(`
+        *,
+        user:users(full_name, email)
+      `)
       .eq('lead_id', leadId)
       .order('created_at', { ascending: false });
 

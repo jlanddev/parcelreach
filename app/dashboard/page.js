@@ -1692,7 +1692,7 @@ export default function DashboardPage() {
                           body: JSON.stringify({
                             email: inviteEmail.trim().toLowerCase(),
                             teamId: currentTeam.id,
-                            inviterName: user?.user_metadata?.full_name || user?.email || 'Team member'
+                            inviterName: currentUser?.user_metadata?.full_name || currentUser?.email || 'Team member'
                           })
                         });
 
