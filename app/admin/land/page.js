@@ -915,6 +915,7 @@ export default function LandLeadsAdminPage() {
                     <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Acres</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Status</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Assigned To</th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-slate-400 uppercase">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-700/50">
@@ -954,6 +955,17 @@ export default function LandLeadsAdminPage() {
                           ) : (
                             <span className="text-slate-500">Unassigned</span>
                           )}
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <button
+                            onClick={() => {
+                              setSelectedLead(lead);
+                              setAssignModalOpen(true);
+                            }}
+                            className="px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors text-sm font-medium"
+                          >
+                            Assign
+                          </button>
                         </td>
                       </tr>
                     );
