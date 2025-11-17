@@ -25,7 +25,7 @@ export default function NotificationBell({ userId }) {
       {/* Bell Icon */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="relative p-2 text-gray-600 hover:text-gray-900 focus:outline-none"
+        className="relative p-2 text-slate-400 hover:text-white focus:outline-none rounded-lg hover:bg-slate-700/50 transition-colors"
       >
         <svg
           className="w-6 h-6"
@@ -59,10 +59,10 @@ export default function NotificationBell({ userId }) {
           />
 
           {/* Dropdown Panel */}
-          <div className="absolute right-0 z-20 w-80 mt-2 bg-white rounded-lg shadow-lg border border-gray-200 max-h-96 overflow-hidden">
+          <div className="absolute right-0 z-20 w-80 mt-2 bg-slate-800 rounded-lg shadow-lg border border-slate-700 max-h-96 overflow-hidden">
             {/* Header */}
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-              <h3 className="text-sm font-semibold text-gray-900">Notifications</h3>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
+              <h3 className="text-sm font-semibold text-white">Notifications</h3>
               {unreadCount > 0 && (
                 <button
                   onClick={markAllAsRead}
@@ -76,7 +76,7 @@ export default function NotificationBell({ userId }) {
             {/* Notifications List */}
             <div className="overflow-y-auto max-h-80">
               {recentNotifications.length === 0 ? (
-                <div className="px-4 py-8 text-center text-gray-500 text-sm">
+                <div className="px-4 py-8 text-center text-slate-400 text-sm">
                   No notifications yet
                 </div>
               ) : (
@@ -85,19 +85,19 @@ export default function NotificationBell({ userId }) {
                     key={notification.id}
                     href={notification.link || '/dashboard'}
                     onClick={() => handleNotificationClick(notification)}
-                    className={`block px-4 py-3 hover:bg-gray-50 border-b border-gray-100 transition-colors ${
-                      !notification.read ? 'bg-blue-50' : ''
+                    className={`block px-4 py-3 hover:bg-slate-700 border-b border-slate-700 transition-colors ${
+                      !notification.read ? 'bg-slate-700/50' : ''
                     }`}
                   >
                     <div className="flex items-start">
                       <div className="flex-1 min-w-0">
-                        <p className={`text-sm ${!notification.read ? 'font-semibold text-gray-900' : 'text-gray-900'}`}>
+                        <p className={`text-sm ${!notification.read ? 'font-semibold text-white' : 'text-slate-300'}`}>
                           {notification.title}
                         </p>
-                        <p className="text-sm text-gray-600 mt-1 line-clamp-2">
+                        <p className="text-sm text-slate-400 mt-1 line-clamp-2">
                           {notification.message}
                         </p>
-                        <p className="text-xs text-gray-400 mt-1">
+                        <p className="text-xs text-slate-500 mt-1">
                           {new Date(notification.created_at).toLocaleDateString('en-US', {
                             month: 'short',
                             day: 'numeric',
@@ -121,7 +121,7 @@ export default function NotificationBell({ userId }) {
             {notifications.length > 5 && (
               <Link
                 href="/notifications"
-                className="block px-4 py-3 text-center text-sm text-blue-600 hover:text-blue-700 font-medium border-t border-gray-200"
+                className="block px-4 py-3 text-center text-sm text-blue-400 hover:text-blue-300 font-medium border-t border-slate-700"
                 onClick={() => setIsOpen(false)}
               >
                 View all notifications
