@@ -104,14 +104,18 @@ export default function LandLeadsAdminPage() {
 
       console.log('📝 Creating assignments:', assignments);
 
-      const { error } = await supabase
-        .from('lead_assignments')
-        .upsert(assignments, { onConflict: 'lead_id,team_id' });
+      // Insert each assignment individually, ignoring duplicates
+      for (const assignment of assignments) {
+        const { error } = await supabase
+          .from('lead_assignments')
+          .insert([assignment]);
 
-      if (error) {
-        console.error('❌ Assignment error:', error);
-        alert(`Failed to assign lead: ${error.message}`);
-        return;
+        // Ignore duplicate errors (23505 is PostgreSQL unique violation code)
+        if (error && !error.message.includes('duplicate') && error.code !== '23505') {
+          console.error('❌ Assignment error:', error);
+          alert(`Failed to assign lead: ${error.message}`);
+          return;
+        }
       }
 
       console.log('✅ Assignments created successfully');
