@@ -1686,46 +1686,23 @@ export default function DashboardPage() {
                   onClick={async () => {
                     if (inviteEmail && inviteEmail.trim()) {
                       try {
-                        // Check if user exists
-                        const { data: existingUser } = await supabase
-                          .from('users')
-                          .select('id')
-                          .eq('email', inviteEmail.trim().toLowerCase())
-                          .single();
-
-                        let userId;
-                        if (existingUser) {
-                          userId = existingUser.id;
-                        } else {
-                          // Send invitation email via Supabase auth
-                          const { data, error } = await supabase.auth.admin.inviteUserByEmail(inviteEmail.trim().toLowerCase(), {
-                            redirectTo: `${window.location.origin}/dashboard`
-                          });
-
-                          if (error) throw error;
-                          userId = data.user.id;
-
-                          // Create user record
-                          await supabase.from('users').insert([{
-                            id: userId,
+                        const response = await fetch('/api/team/invite', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
                             email: inviteEmail.trim().toLowerCase(),
-                            full_name: inviteEmail.split('@')[0]
-                          }]);
+                            teamId: currentTeam.id,
+                            inviterName: user?.user_metadata?.full_name || user?.email || 'Team member'
+                          })
+                        });
+
+                        const result = await response.json();
+
+                        if (!response.ok) {
+                          throw new Error(result.error || 'Failed to send invitation');
                         }
 
-                        // Add to team
-                        const { error: teamError } = await supabase
-                          .from('team_members')
-                          .insert([{
-                            team_id: currentTeam.id,
-                            user_id: userId,
-                            role: 'member'
-                          }]);
-
-                        if (teamError) throw teamError;
-
-                        alert(`Successfully invited ${inviteEmail} to your team!`);
-                        loadTeamMembers(currentTeam.id);
+                        alert(`Successfully sent invitation to ${inviteEmail}! They will receive an email with a link to join your team.`);
                         setInviteModalOpen(false);
                         setInviteEmail('');
                       } catch (error) {
