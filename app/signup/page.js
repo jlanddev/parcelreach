@@ -1,362 +1,365 @@
 'use client';
 
 import { useState } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-
-// Contractor signup form
+import Image from 'next/image';
 
 export default function SignupPage() {
   const router = useRouter();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
   const [formData, setFormData] = useState({
     companyName: '',
-    contactName: '',
     email: '',
+    password: '',
+    confirmPassword: '',
     phone: '',
-    county: '',
-    currentLeads: '',
-    smsConsent: false,
+    targetStates: [],
+    minAcres: '',
+    maxAcres: ''
   });
-  const [step, setStep] = useState(1);
-  const [submitting, setSubmitting] = useState(false);
 
-  const handleChange = (e) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value,
-    });
+  const US_STATES = [
+    'Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado',
+    'Connecticut', 'Delaware', 'Florida', 'Georgia', 'Hawaii', 'Idaho',
+    'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky', 'Louisiana',
+    'Maine', 'Maryland', 'Massachusetts', 'Michigan', 'Minnesota',
+    'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada',
+    'New Hampshire', 'New Jersey', 'New Mexico', 'New York',
+    'North Carolina', 'North Dakota', 'Ohio', 'Oklahoma', 'Oregon',
+    'Pennsylvania', 'Rhode Island', 'South Carolina', 'South Dakota',
+    'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'Washington',
+    'West Virginia', 'Wisconsin', 'Wyoming'
+  ];
+
+  const handleStateToggle = (state) => {
+    setFormData(prev => ({
+      ...prev,
+      targetStates: prev.targetStates.includes(state)
+        ? prev.targetStates.filter(s => s !== state)
+        : [...prev.targetStates, state]
+    }));
   };
 
-  const handleNext = async () => {
-    if (step === 2) {
-      // Save to database when moving to step 3
-      setSubmitting(true);
-      try {
-        const { error } = await supabase
-          .from('contractor_signups')
-          .insert([{
-            company_name: formData.companyName,
-            contact_name: formData.contactName,
-            email: formData.email,
-            phone: formData.phone,
-            county: formData.county,
-            current_leads: formData.currentLeads,
-          }]);
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
 
-        if (error) {
-          console.error('Error saving signup:', error);
-          alert('Error: ' + (error.message || error.details || 'Please try again'));
-          setSubmitting(false);
-          return;
-        }
-
-        // Save to localStorage for thank you page
-        localStorage.setItem('garageleadly_latest_signup', JSON.stringify(formData));
-
-        // Success - redirect to thank you page
-        router.push('/signup/thank-you');
-        return;
-      } catch (err) {
-        console.error('Error:', err);
-        alert('Error: ' + (err.message || 'Please try again'));
-        setSubmitting(false);
-        return;
+    try {
+      // Validation
+      if (formData.password !== formData.confirmPassword) {
+        throw new Error('Passwords do not match');
       }
+
+      if (formData.password.length < 8) {
+        throw new Error('Password must be at least 8 characters');
+      }
+
+      if (formData.targetStates.length === 0) {
+        throw new Error('Please select at least one target state');
+      }
+
+      // Create Supabase auth user
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: formData.email,
+        password: formData.password,
+        options: {
+          data: {
+            company_name: formData.companyName,
+            phone: formData.phone
+          }
+        }
+      });
+
+      if (authError) throw authError;
+
+      // Create team/organization
+      const { data: teamData, error: teamError } = await supabase
+        .from('teams')
+        .insert([{
+          name: formData.companyName,
+          subscription_type: 'pay-per-lead',
+          target_states: formData.targetStates,
+          min_acres: formData.minAcres ? parseFloat(formData.minAcres) : null,
+          max_acres: formData.maxAcres ? parseFloat(formData.maxAcres) : null,
+          owner_id: authData.user.id,
+          created_at: new Date().toISOString()
+        }])
+        .select()
+        .single();
+
+      if (teamError) throw teamError;
+
+      // Create team member record
+      const { error: memberError } = await supabase
+        .from('team_members')
+        .insert([{
+          team_id: teamData.id,
+          user_id: authData.user.id,
+          role: 'owner',
+          created_at: new Date().toISOString()
+        }]);
+
+      if (memberError) throw memberError;
+
+      // Redirect to dashboard
+      router.push('/dashboard');
+
+    } catch (err) {
+      console.error('Signup error:', err);
+      setError(err.message || 'An error occurred during signup');
+    } finally {
+      setLoading(false);
     }
-    setStep(step + 1);
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-blue-50 to-white py-12 px-4">
-      <div className="max-w-2xl mx-auto">
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <Link href="/" className="inline-block">
-            <img src="/logo.png" alt="GarageLeadly" className="h-16 mx-auto" />
-          </Link>
-          <p className="text-gray-600 mt-2 text-lg">Get Exclusive Garage Door Leads in Your Territory</p>
+    <>
+      <style dangerouslySetInnerHTML={{
+        __html: `
+          @keyframes topoFloat {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-15px); }
+          }
+        `
+      }} />
+
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 relative overflow-hidden">
+        {/* Animated Topographic Lines Background */}
+        <div className="absolute inset-x-0 bottom-0 pointer-events-none" style={{ height: '50%' }}>
+          <div
+            className="absolute inset-0"
+            style={{
+              backgroundImage: 'url(/topo-lines.png)',
+              backgroundSize: 'cover',
+              backgroundPosition: 'bottom center',
+              backgroundRepeat: 'no-repeat',
+              opacity: 0.15,
+              animation: 'topoFloat 20s ease-in-out infinite',
+              maskImage: 'linear-gradient(to top, rgba(0,0,0,1) 0%, rgba(0,0,0,0.5) 50%, rgba(0,0,0,0) 100%)',
+              WebkitMaskImage: 'linear-gradient(to top, rgba(0,0,0,1) 0%, rgba(0,0,0,0.5) 50%, rgba(0,0,0,0) 100%)'
+            }}
+          />
         </div>
 
-        {/* Value Props */}
-        <div className="bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg p-6 mb-8">
-          <div className="text-center mb-4">
-            <h2 className="text-2xl font-bold mb-2">Tired of Fighting for the Same Leads?</h2>
-            <p className="text-blue-100">Get hot garage door repair leads sent directly to your phone</p>
-          </div>
-          <div className="grid md:grid-cols-3 gap-4 text-sm">
-            <div className="bg-white/10 rounded p-3">
-              <div className="font-semibold mb-1">✓ Exclusive Territory</div>
-              <div className="text-blue-100">Limited contractors per county</div>
-            </div>
-            <div className="bg-white/10 rounded p-3">
-              <div className="font-semibold mb-1">✓ Instant Notifications</div>
-              <div className="text-blue-100">SMS alerts within seconds</div>
-            </div>
-            <div className="bg-white/10 rounded p-3">
-              <div className="font-semibold mb-1">✓ Qualified Leads</div>
-              <div className="text-blue-100">Real customers ready to hire</div>
-            </div>
+        {/* Navigation */}
+        <nav className="fixed top-0 left-0 right-0 z-50 bg-slate-900/80 backdrop-blur-md border-b border-slate-800">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <a href="/" className="hover:opacity-80 transition-opacity">
+              <Image
+                src="/parcelreach-logo.png"
+                alt="ParcelReach"
+                width={180}
+                height={60}
+              />
+            </a>
+            <a
+              href="/login"
+              className="text-gray-300 hover:text-white transition-colors"
+            >
+              Already have an account? <span className="text-blue-400">Log in</span>
+            </a>
           </div>
         </div>
+      </nav>
 
-        {/* Signup Form */}
-        <div className="bg-white rounded-lg shadow-lg p-8">
-          {/* Progress Steps */}
-          <div className="flex items-center justify-center mb-8">
-            <div className="flex items-center">
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold ${step >= 1 ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>
-                1
-              </div>
-              <div className={`w-20 h-1 ${step >= 2 ? 'bg-blue-600' : 'bg-gray-200'}`}></div>
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold ${step >= 2 ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>
-                2
-              </div>
-              <div className={`w-20 h-1 ${step >= 3 ? 'bg-blue-600' : 'bg-gray-200'}`}></div>
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold ${step >= 3 ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>
-                3
-              </div>
+      {/* Main Content */}
+      <div className="pt-24 pb-12 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-3xl mx-auto">
+          {/* Header */}
+          <div className="text-center mb-8">
+            <h1 className="text-4xl font-bold text-white mb-4">
+              Start Getting Land Leads
+            </h1>
+            <p className="text-xl text-gray-300">
+              Pay-Per-Lead - Only pay for the leads you want
+            </p>
+            <div className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+              <svg className="w-5 h-5 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+              </svg>
+              <span className="text-blue-300 text-sm font-medium">No monthly fees • No commitment • Cancel anytime</span>
             </div>
           </div>
 
-          {/* Step 1: Company Info */}
-          {step === 1 && (
-            <div className="space-y-6">
-              <div>
-                <h3 className="text-2xl font-bold mb-2">Tell us about your business</h3>
-                <p className="text-gray-600">We'll check if your territory is still available</p>
+          {/* Form */}
+          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-2xl p-8">
+            {error && (
+              <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+                <p className="text-red-400 text-sm">{error}</p>
               </div>
+            )}
 
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Company Name *
-                </label>
-                <input
-                  type="text"
-                  name="companyName"
-                  required
-                  value={formData.companyName}
-                  onChange={handleChange}
-                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg"
-                  placeholder="Your Garage Door Co."
-                />
-              </div>
+            <form onSubmit={handleSubmit} className="space-y-6">
+              {/* Company Info */}
+              <div className="space-y-4">
+                <h2 className="text-lg font-semibold text-white">Company Information</h2>
 
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Your Name *
-                </label>
-                <input
-                  type="text"
-                  name="contactName"
-                  required
-                  value={formData.contactName}
-                  onChange={handleChange}
-                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg"
-                  placeholder="John Smith"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Phone Number *
-                </label>
-                <input
-                  type="tel"
-                  name="phone"
-                  required
-                  value={formData.phone}
-                  onChange={handleChange}
-                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg"
-                  placeholder="(555) 123-4567"
-                />
-                <p className="text-sm text-gray-500 mt-1">
-                  This is where we'll send your leads
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Email *
-                </label>
-                <input
-                  type="email"
-                  name="email"
-                  required
-                  value={formData.email}
-                  onChange={handleChange}
-                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg"
-                  placeholder="john@yourgaragedoor.com"
-                />
-              </div>
-
-              <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
-                <label className="flex items-start gap-3 cursor-pointer">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Company Name *
+                  </label>
                   <input
-                    type="checkbox"
-                    name="smsConsent"
+                    type="text"
                     required
-                    checked={formData.smsConsent}
-                    onChange={(e) => setFormData({ ...formData, smsConsent: e.target.checked })}
-                    className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-2 focus:ring-blue-500 mt-0.5 flex-shrink-0"
+                    value={formData.companyName}
+                    onChange={(e) => setFormData(prev => ({ ...prev, companyName: e.target.value }))}
+                    className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="ABC Land Investments"
                   />
-                  <span className="text-sm text-gray-700">
-                    I consent to receive text messages (SMS) with lead notifications at the phone number provided. Message frequency varies. Message and data rates may apply. Reply STOP to opt out.
-                  </span>
-                </label>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                      Email *
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      value={formData.email}
+                      onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                      className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="you@company.com"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                      Phone
+                    </label>
+                    <input
+                      type="tel"
+                      value={formData.phone}
+                      onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
+                      className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="(555) 123-4567"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                      Password *
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      value={formData.password}
+                      onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
+                      className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Minimum 8 characters"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                      Confirm Password *
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      value={formData.confirmPassword}
+                      onChange={(e) => setFormData(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                      className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Re-enter password"
+                    />
+                  </div>
+                </div>
               </div>
 
-              <button
-                type="button"
-                onClick={handleNext}
-                disabled={!formData.companyName || !formData.contactName || !formData.phone || !formData.email || !formData.smsConsent}
-                className="w-full bg-blue-600 text-white py-4 rounded-lg font-bold text-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Continue →
-              </button>
-            </div>
-          )}
+              {/* Lead Preferences */}
+              <div className="space-y-4 pt-6 border-t border-slate-700">
+                <h2 className="text-lg font-semibold text-white">Lead Preferences</h2>
 
-          {/* Step 2: Territory */}
-          {step === 2 && (
-            <div className="space-y-6">
-              <div>
-                <h3 className="text-2xl font-bold mb-2">What's your service area?</h3>
-                <p className="text-gray-600">We limit each county to ensure quality leads</p>
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-3">
+                    Target States * <span className="text-gray-500">(Select all that apply)</span>
+                  </label>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 max-h-64 overflow-y-auto p-4 bg-slate-900/30 border border-slate-700 rounded-lg">
+                    {US_STATES.map(state => (
+                      <label key={state} className="flex items-center gap-2 cursor-pointer hover:bg-slate-800/50 p-2 rounded">
+                        <input
+                          type="checkbox"
+                          checked={formData.targetStates.includes(state)}
+                          onChange={() => handleStateToggle(state)}
+                          className="w-4 h-4 text-blue-500 bg-slate-800 border-slate-600 rounded focus:ring-blue-500"
+                        />
+                        <span className="text-sm text-gray-300">{state}</span>
+                      </label>
+                    ))}
+                  </div>
+                  {formData.targetStates.length > 0 && (
+                    <p className="text-sm text-blue-400 mt-2">
+                      {formData.targetStates.length} state{formData.targetStates.length !== 1 ? 's' : ''} selected
+                    </p>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                      Minimum Acres
+                    </label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={formData.minAcres}
+                      onChange={(e) => setFormData(prev => ({ ...prev, minAcres: e.target.value }))}
+                      className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="e.g., 1"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                      Maximum Acres
+                    </label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={formData.maxAcres}
+                      onChange={(e) => setFormData(prev => ({ ...prev, maxAcres: e.target.value }))}
+                      className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="e.g., 100"
+                    />
+                  </div>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Select Your County *
-                </label>
-                <select
-                  name="county"
-                  required
-                  value={formData.county}
-                  onChange={handleChange}
-                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg"
-                >
-                  <option value="">Choose your county...</option>
-                  <option value="Harris">Harris</option>
-                  <option value="Montgomery">Montgomery</option>
-                  <option value="Fort Bend">Fort Bend</option>
-                  <option value="Waller">Waller</option>
-                  <option value="Brazoria">Brazoria</option>
-                  <option value="Liberty">Liberty</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  How many leads do you get per month currently? *
-                </label>
-                <select
-                  name="currentLeads"
-                  required
-                  value={formData.currentLeads}
-                  onChange={handleChange}
-                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg"
-                >
-                  <option value="">Select range...</option>
-                  <option value="0-10">0-10 leads</option>
-                  <option value="10-25">10-25 leads</option>
-                  <option value="25-50">25-50 leads</option>
-                  <option value="50-100">50-100 leads</option>
-                  <option value="100+">100+ leads</option>
-                </select>
-              </div>
-
-              <div className="flex gap-4">
+              {/* Submit */}
+              <div className="pt-6">
                 <button
-                  type="button"
-                  onClick={() => setStep(1)}
-                  disabled={submitting}
-                  className="flex-1 bg-gray-200 text-gray-700 py-4 rounded-lg font-bold text-lg hover:bg-gray-300 transition disabled:opacity-50"
+                  type="submit"
+                  disabled={loading}
+                  className="w-full px-8 py-4 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-semibold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  ← Back
+                  {loading ? 'Creating Account...' : 'Create Free Account'}
                 </button>
-                <button
-                  type="button"
-                  onClick={handleNext}
-                  disabled={!formData.county || !formData.currentLeads || submitting}
-                  className="flex-1 bg-blue-600 text-white py-4 rounded-lg font-bold text-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {submitting ? 'Saving...' : 'Continue →'}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Step 3: Success */}
-          {step === 3 && (
-            <div className="space-y-6 text-center py-8">
-              <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <svg className="w-10 h-10 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-
-              <div>
-                <h3 className="text-3xl font-bold mb-3">You're All Set!</h3>
-                <p className="text-xl text-gray-600 mb-6">
-                  We'll reach out within 24 hours to discuss your territory
+                <p className="text-center text-sm text-gray-400 mt-4">
+                  By signing up, you agree to our Terms of Service and Privacy Policy
                 </p>
               </div>
+            </form>
+          </div>
 
-              <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-6 max-w-md mx-auto text-left">
-                <h4 className="font-bold text-lg mb-3 text-center">What Happens Next?</h4>
-                <ul className="space-y-3 text-gray-700">
-                  <li className="flex items-start">
-                    <span className="text-blue-600 mr-3 text-xl">1.</span>
-                    <span>We'll review your territory availability</span>
-                  </li>
-                  <li className="flex items-start">
-                    <span className="text-blue-600 mr-3 text-xl">2.</span>
-                    <span>We'll call you to discuss the program details</span>
-                  </li>
-                  <li className="flex items-start">
-                    <span className="text-blue-600 mr-3 text-xl">3.</span>
-                    <span>If it's a fit, we'll get you set up and sending leads!</span>
-                  </li>
-                </ul>
-              </div>
-
-              <div className="pt-6">
-                <Link
-                  href="/"
-                  className="inline-block bg-blue-600 text-white px-8 py-4 rounded-lg font-bold text-lg hover:bg-blue-700 transition"
-                >
-                  Return to Home
-                </Link>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="text-center mt-6">
-          <Link href="/" className="text-gray-600 hover:text-gray-800">
-            ← Back to home
-          </Link>
+          {/* Pricing Info */}
+          <div className="mt-8 text-center">
+            <p className="text-gray-400 mb-4">
+              Need unlimited leads?{' '}
+              <a href="/signup/monthly" className="text-blue-400 hover:text-blue-300 font-medium">
+                Check out our Monthly Unlimited plan
+              </a>
+            </p>
+          </div>
         </div>
       </div>
-
-      {/* Footer */}
-      <footer className="bg-gray-800 text-gray-400 py-4 mt-12">
-        <div className="container mx-auto px-4 text-center">
-          <div className="flex justify-center gap-4 mb-2 flex-wrap text-xs">
-            <Link href="/privacy-policy" className="hover:text-white">Privacy Policy</Link>
-            <span>·</span>
-            <Link href="/terms-of-use" className="hover:text-white">Terms of Use</Link>
-            <span>·</span>
-            <Link href="/refund-policy" className="hover:text-white">Refund Policy</Link>
-            <span>·</span>
-            <a href="mailto:support@garageleadly.com" className="hover:text-white">support@garageleadly.com</a>
-          </div>
-          <div className="text-xs">
-            © 2025 GarageLeadly. All rights reserved.
-          </div>
-        </div>
-      </footer>
     </div>
+    </>
   );
 }

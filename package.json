@@ -15,6 +15,9 @@
   "dependencies": {
     "@mapbox/mapbox-gl-draw": "^1.5.1",
     "@stripe/stripe-js": "^8.4.0",
+    "@supabase/auth-helpers-nextjs": "^0.10.0",
+    "@supabase/auth-ui-react": "^0.4.7",
+    "@supabase/auth-ui-shared": "^0.1.8",
     "@supabase/supabase-js": "^2.81.1",
     "@turf/area": "^7.2.0",
     "dotenv": "^17.2.3",
