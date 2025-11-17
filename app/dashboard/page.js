@@ -284,10 +284,27 @@ export default function DashboardPage() {
   const fetchLeads = async (teamId) => {
     try {
       console.log('🔍 DEBUG: Fetching leads for teamId:', teamId);
+
+      // Get lead IDs assigned to this team from junction table
+      const { data: assignments, error: assignError } = await supabase
+        .from('lead_assignments')
+        .select('lead_id')
+        .eq('team_id', teamId);
+
+      if (assignError) {
+        console.error('Error fetching assignments:', assignError);
+        setLeads([]);
+        return;
+      }
+
+      const assignedLeadIds = assignments?.map(a => a.lead_id) || [];
+      console.log('📋 DEBUG: Assigned lead IDs:', assignedLeadIds);
+
+      // Fetch the actual leads
       const { data, error } = await supabase
         .from('leads')
         .select('*')
-        .or(`team_id.eq.${teamId},team_id.is.null`)
+        .in('id', assignedLeadIds.length > 0 ? assignedLeadIds : ['00000000-0000-0000-0000-000000000000']) // Use dummy UUID if no assignments
         .order('created_at', { ascending: false});
 
       if (error) {
