@@ -85,25 +85,37 @@ export default function LandLeadsAdminPage() {
   };
 
   const handleAssignLead = async (leadId, teamIds) => {
-    // Get lead details for notification
-    const { data: leadData } = await supabase
-      .from('leads')
-      .select('full_name, name, address, street_address, property_county, county, acres, acreage')
-      .eq('id', leadId)
-      .single();
+    try {
+      console.log('🔍 Assigning lead:', leadId, 'to teams:', teamIds);
 
-    // Insert into lead_assignments junction table (allows multiple assignments)
-    const assignments = teamIds.map(teamId => ({
-      lead_id: leadId,
-      team_id: teamId,
-      assigned_at: new Date().toISOString()
-    }));
+      // Get lead details for notification
+      const { data: leadData } = await supabase
+        .from('leads')
+        .select('full_name, name, address, street_address, property_county, county, acres, acreage')
+        .eq('id', leadId)
+        .single();
 
-    const { error } = await supabase
-      .from('lead_assignments')
-      .upsert(assignments, { onConflict: 'lead_id,team_id' });
+      // Insert into lead_assignments junction table (allows multiple assignments)
+      const assignments = teamIds.map(teamId => ({
+        lead_id: leadId,
+        team_id: teamId,
+        assigned_at: new Date().toISOString()
+      }));
 
-    if (!error) {
+      console.log('📝 Creating assignments:', assignments);
+
+      const { error } = await supabase
+        .from('lead_assignments')
+        .upsert(assignments, { onConflict: 'lead_id,team_id' });
+
+      if (error) {
+        console.error('❌ Assignment error:', error);
+        alert(`Failed to assign lead: ${error.message}`);
+        return;
+      }
+
+      console.log('✅ Assignments created successfully');
+
       // Update lead status if not already assigned
       await supabase
         .from('leads')
@@ -113,9 +125,9 @@ export default function LandLeadsAdminPage() {
       // Create notifications for all team members of assigned teams
       for (const teamId of teamIds) {
         const { data: teamMembers } = await supabase
-        .from('team_members')
-        .select('user_id')
-        .eq('team_id', teamId);
+          .from('team_members')
+          .select('user_id')
+          .eq('team_id', teamId);
 
         if (teamMembers && teamMembers.length > 0) {
           const leadName = leadData?.full_name || leadData?.name || 'Property';
@@ -136,10 +148,15 @@ export default function LandLeadsAdminPage() {
         }
       }
 
+      alert(`✅ Successfully assigned lead to ${teamIds.length} organization(s)!`);
+
       setAssignModalOpen(false);
       setSelectedLead(null);
       setSelectedOrgsForAssignment([]);
       fetchAllData();
+    } catch (err) {
+      console.error('❌ Error assigning lead:', err);
+      alert(`Error: ${err.message}`);
     }
   };
 
