@@ -693,40 +693,19 @@ export default function DashboardPage() {
         <div className="px-5 pb-4 border-b border-slate-700/50" style={{ paddingTop: '8px' }}>
           <div className="flex items-center justify-between mb-3">
             <div className="flex flex-col gap-1 w-full">
-              <div style={{ position: 'relative', display: 'inline-block' }}>
+              <div>
                 <img
                   src="/parcelreach-logo.png"
                   alt="ParcelReach AI"
-                  onMouseDown={logoEditMode ? handleLogoMouseDown : undefined}
                   style={{
-                    width: logoEditMode ? `${logoSize}px` : LOGO_CONFIG.width,
+                    width: LOGO_CONFIG.width,
                     height: 'auto',
-                    marginLeft: logoEditMode ? `${logoPosition.x}px` : LOGO_CONFIG.marginLeft,
-                    marginTop: logoEditMode ? `${logoPosition.y}px` : LOGO_CONFIG.marginTop,
+                    marginLeft: LOGO_CONFIG.marginLeft,
+                    marginTop: LOGO_CONFIG.marginTop,
                     display: LOGO_CONFIG.display,
-                    userSelect: 'none',
-                    cursor: logoEditMode ? 'move' : 'default',
-                    border: logoEditMode ? '2px dashed #3b82f6' : 'none',
-                    padding: logoEditMode ? '4px' : '0',
-                    transition: logoEditMode ? 'none' : 'all 0.2s'
+                    userSelect: 'none'
                   }}
                 />
-                {logoEditMode && (
-                  <div
-                    onMouseDown={handleResizeMouseDown}
-                    style={{
-                      position: 'absolute',
-                      right: '-5px',
-                      bottom: '-5px',
-                      width: '15px',
-                      height: '15px',
-                      background: '#3b82f6',
-                      cursor: 'nwse-resize',
-                      border: '2px solid white',
-                      borderRadius: '2px'
-                    }}
-                  />
-                )}
               </div>
               <div className="flex items-center gap-2">
                 <p className="text-slate-400 text-sm">{leads.length} Active Leads</p>
@@ -750,28 +729,6 @@ export default function DashboardPage() {
               {currentUser && (
                 <NotificationBell userId={currentUser.id} />
               )}
-
-              {/* Edit Logo Button */}
-              <button
-                onClick={() => {
-                  if (logoEditMode) {
-                    const config = `width: '${logoSize}px',\nmarginLeft: '${logoPosition.x}px',\nmarginTop: '${logoPosition.y}px',`;
-                    console.log('📋 Copy to LOGO_CONFIG:', config);
-                    alert(`Logo saved! Update LOGO_CONFIG with:\n\n${config}`);
-                  }
-                  setLogoEditMode(!logoEditMode);
-                }}
-                className={`p-2 rounded-lg transition-colors ${logoEditMode ? 'bg-blue-600 text-white' : 'hover:bg-slate-700/50 text-slate-400'}`}
-                title={logoEditMode ? 'Save Logo Position' : 'Edit Logo'}
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  {logoEditMode ? (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  ) : (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                  )}
-                </svg>
-              </button>
 
               {/* Account Button */}
               <button
