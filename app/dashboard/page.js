@@ -697,6 +697,7 @@ export default function DashboardPage() {
                 <img
                   src="/parcelreach-logo.png"
                   alt="ParcelReach AI"
+                  onMouseDown={logoEditMode ? handleLogoMouseDown : undefined}
                   style={{
                     width: logoEditMode ? `${logoSize}px` : LOGO_CONFIG.width,
                     height: 'auto',
@@ -704,40 +705,27 @@ export default function DashboardPage() {
                     marginTop: logoEditMode ? `${logoPosition.y}px` : LOGO_CONFIG.marginTop,
                     display: LOGO_CONFIG.display,
                     userSelect: 'none',
+                    cursor: logoEditMode ? 'move' : 'default',
+                    border: logoEditMode ? '2px dashed #3b82f6' : 'none',
+                    padding: logoEditMode ? '4px' : '0',
                     transition: logoEditMode ? 'none' : 'all 0.2s'
                   }}
                 />
                 {logoEditMode && (
                   <div
-                    onMouseDown={handleLogoMouseDown}
-                    onWheel={(e) => {
-                      e.preventDefault();
-                      const delta = e.deltaY > 0 ? -10 : 10;
-                      setLogoSize(prev => Math.max(100, Math.min(400, prev + delta)));
-                    }}
+                    onMouseDown={handleResizeMouseDown}
                     style={{
                       position: 'absolute',
-                      right: '-12px',
-                      top: '-12px',
-                      width: '24px',
-                      height: '24px',
+                      right: '-5px',
+                      bottom: '-5px',
+                      width: '15px',
+                      height: '15px',
                       background: '#3b82f6',
-                      cursor: 'move',
-                      borderRadius: '50%',
+                      cursor: 'nwse-resize',
                       border: '2px solid white',
-                      boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '12px',
-                      color: 'white',
-                      fontWeight: 'bold',
-                      zIndex: 10
+                      borderRadius: '2px'
                     }}
-                    title="Drag to move, scroll to resize"
-                  >
-                    ⚙
-                  </div>
+                  />
                 )}
               </div>
               <div className="flex items-center gap-2">
