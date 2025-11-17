@@ -1593,6 +1593,10 @@ export default function DashboardPage() {
                 </div>
                 <button
                   onClick={() => {
+                    if (!currentTeam?.id) {
+                      alert('Please wait for your team to load before inviting members.');
+                      return;
+                    }
                     setInviteEmail('');
                     setInviteModalOpen(true);
                   }}
