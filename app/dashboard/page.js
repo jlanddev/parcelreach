@@ -698,28 +698,46 @@ export default function DashboardPage() {
                   src="/parcelreach-logo.png"
                   alt="ParcelReach AI"
                   style={{
-                    width: LOGO_CONFIG.width,
+                    width: logoEditMode ? `${logoSize}px` : LOGO_CONFIG.width,
                     height: 'auto',
-                    marginLeft: LOGO_CONFIG.marginLeft,
-                    marginTop: LOGO_CONFIG.marginTop,
+                    marginLeft: logoEditMode ? `${logoPosition.x}px` : LOGO_CONFIG.marginLeft,
+                    marginTop: logoEditMode ? `${logoPosition.y}px` : LOGO_CONFIG.marginTop,
                     display: LOGO_CONFIG.display,
-                    userSelect: 'none'
+                    userSelect: 'none',
+                    transition: logoEditMode ? 'none' : 'all 0.2s'
                   }}
                 />
                 {logoEditMode && (
                   <div
-                    onMouseDown={handleResizeMouseDown}
+                    onMouseDown={handleLogoMouseDown}
+                    onWheel={(e) => {
+                      e.preventDefault();
+                      const delta = e.deltaY > 0 ? -10 : 10;
+                      setLogoSize(prev => Math.max(100, Math.min(400, prev + delta)));
+                    }}
                     style={{
                       position: 'absolute',
-                      right: '0',
-                      bottom: '0',
-                      width: '20px',
-                      height: '20px',
-                      background: 'rgba(59, 130, 246, 0.8)',
-                      cursor: 'nwse-resize',
-                      borderRadius: '0 0 4px 0'
+                      right: '-12px',
+                      top: '-12px',
+                      width: '24px',
+                      height: '24px',
+                      background: '#3b82f6',
+                      cursor: 'move',
+                      borderRadius: '50%',
+                      border: '2px solid white',
+                      boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '12px',
+                      color: 'white',
+                      fontWeight: 'bold',
+                      zIndex: 10
                     }}
-                  />
+                    title="Drag to move, scroll to resize"
+                  >
+                    ⚙
+                  </div>
                 )}
               </div>
               <div className="flex items-center gap-2">
@@ -744,6 +762,28 @@ export default function DashboardPage() {
               {currentUser && (
                 <NotificationBell userId={currentUser.id} />
               )}
+
+              {/* Edit Logo Button */}
+              <button
+                onClick={() => {
+                  if (logoEditMode) {
+                    const config = `width: '${logoSize}px',\nmarginLeft: '${logoPosition.x}px',\nmarginTop: '${logoPosition.y}px',`;
+                    console.log('📋 Copy to LOGO_CONFIG:', config);
+                    alert(`Logo saved! Update LOGO_CONFIG with:\n\n${config}`);
+                  }
+                  setLogoEditMode(!logoEditMode);
+                }}
+                className={`p-2 rounded-lg transition-colors ${logoEditMode ? 'bg-blue-600 text-white' : 'hover:bg-slate-700/50 text-slate-400'}`}
+                title={logoEditMode ? 'Save Logo Position' : 'Edit Logo'}
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  {logoEditMode ? (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  ) : (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                  )}
+                </svg>
+              </button>
 
               {/* Account Button */}
               <button
