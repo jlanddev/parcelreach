@@ -423,8 +423,6 @@ export default function DashboardPage() {
 
   const filteredLeads = dealTypeFilter === 'all'
     ? leads
-    : dealTypeFilter === 'ppc-inflow'
-    ? leads.filter(lead => lead.source?.includes('Haven Ground'))
     : leads.filter(lead => lead.dealtype === dealTypeFilter);
 
   // DEBUG: Log filtering results
@@ -813,7 +811,6 @@ export default function DashboardPage() {
           <div className="flex border-b border-slate-700/50 bg-slate-900/50 overflow-x-auto">
             {[
               { value: 'all', label: 'All Deals' },
-              { value: 'ppc-inflow', label: 'PPC Inflow', icon: '📊' },
               { value: 'flips', label: 'Flips' },
               { value: 'subdivisions', label: 'Subdivisions' },
               { value: 'entitlements', label: 'Entitlements' }
