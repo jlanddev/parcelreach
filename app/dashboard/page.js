@@ -982,14 +982,16 @@ export default function DashboardPage() {
                                 className="absolute inset-0 w-full h-full object-cover"
                               />
                               {/* GeoJSON overlay now handled by Mapbox Static API */}
-                              {false && (lead.parcelgeometry || lead.parcelGeometry) && (
+                              {(lead.parcel_geometry || lead.parcelgeometry || lead.parcelGeometry) && (
                                 <svg
                                   viewBox="0 0 100 100"
                                   className="absolute inset-0 w-full h-full"
                                   preserveAspectRatio="xMidYMid meet"
                                 >
                                   {(() => {
-                                    const geometry = lead.parcelgeometry
+                                    const geometry = lead.parcel_geometry
+                                      ? (typeof lead.parcel_geometry === 'string' ? JSON.parse(lead.parcel_geometry) : lead.parcel_geometry)
+                                      : lead.parcelgeometry
                                       ? (typeof lead.parcelgeometry === 'string' ? JSON.parse(lead.parcelgeometry) : lead.parcelgeometry)
                                       : lead.parcelGeometry;
 
