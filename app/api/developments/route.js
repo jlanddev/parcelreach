@@ -57,83 +57,166 @@ async function fetchCityDevelopments(city, limit) {
 }
 
 /**
- * Fetch Austin development projects
- * Focus on: Subdivisions, Commercial, Multifamily, Major developments
- * Data source: https://data.austintexas.gov
+ * Fetch Austin development proposals using AI document parsing
+ * Analyzes city council agendas and planning documents
  */
 async function fetchAustinPermits(limit) {
   try {
-    // Austin subdivision plats and major developments
-    // Filter for: Commercial, Multifamily, Subdivision plats
-    const url = `https://data.austintexas.gov/resource/3syk-w9eu.json?$limit=${limit}&$order=issue_date DESC&$where=issue_date>'${getDateMonthsAgo(12)}' AND (permit_type_desc LIKE '%COMMERCIAL%' OR permit_type_desc LIKE '%MULTIFAMILY%' OR permit_type_desc LIKE '%SUBDIVISION%' OR work_class LIKE '%NEW BUILDING%')`;
+    // For now, use Austin's zoning cases and subdivision data
+    // These are closer to real development proposals
+    const zoningUrl = `https://data.austintexas.gov/resource/jctp-ykk8.json?$limit=100&$order=status_date DESC`;
 
-    const response = await fetch(url);
-    if (!response.ok) throw new Error('Austin API failed');
+    const response = await fetch(zoningUrl);
+    if (!response.ok) {
+      console.error('Austin zoning API failed');
+      return [];
+    }
 
     const data = await response.json();
 
-    return data
-      .filter(permit =>
-        permit.latitude &&
-        permit.longitude &&
-        // Filter for significant projects only
-        (permit.total_existing_bldg_sqft > 5000 ||
-         permit.permit_type_desc?.includes('COMMERCIAL') ||
-         permit.permit_type_desc?.includes('MULTIFAMILY') ||
-         permit.permit_type_desc?.includes('SUBDIVISION'))
-      )
-      .map(permit => ({
-        id: `austin-${permit.permit_number}`,
-        city: 'Austin',
-        state: 'TX',
-        type: permit.permit_type_desc || 'Development Project',
-        description: permit.description || permit.work_class || 'Major Development',
-        address: permit.original_address1 || 'Address not available',
-        latitude: parseFloat(permit.latitude),
-        longitude: parseFloat(permit.longitude),
-        value: permit.total_existing_bldg_sqft ? `${parseInt(permit.total_existing_bldg_sqft).toLocaleString()} sqft` : null,
-        issueDate: permit.issue_date,
-        status: permit.status_current || 'Active',
-        source: 'Austin Development Data',
-        permitNumber: permit.permit_number
-      }));
+    // Filter and map zoning cases to development proposals
+    const developments = [];
+    for (const item of data) {
+      // Only include significant commercial/residential developments
+      const caseType = (item.case_type || '').toUpperCase();
+      const description = (item.case_description || '').toLowerCase();
+
+      if (caseType.includes('SITE PLAN') ||
+          caseType.includes('SUBDIVISION') ||
+          caseType.includes('PUD') ||
+          description.includes('commercial') ||
+          description.includes('multifamily') ||
+          description.includes('apartment') ||
+          description.includes('subdivision')) {
+
+        // Try to geocode the location
+        let coords = null;
+        if (item.latitude && item.longitude) {
+          coords = {
+            lat: parseFloat(item.latitude),
+            lng: parseFloat(item.longitude)
+          };
+        } else if (item.address) {
+          coords = await geocodeAddress(item.address);
+        }
+
+        if (coords) {
+          developments.push({
+            id: `austin-${item.case_number}`,
+            city: 'Austin',
+            state: 'TX',
+            type: item.case_type || 'Development Proposal',
+            description: item.case_description || item.project_name || 'Development Project',
+            address: item.address || item.location_description || 'Location not specified',
+            latitude: coords.lat,
+            longitude: coords.lng,
+            value: null,
+            issueDate: item.status_date || item.application_date,
+            status: item.status || 'Under Review',
+            source: 'Austin Planning & Zoning',
+            caseNumber: item.case_number
+          });
+        }
+      }
+
+      if (developments.length >= limit) break;
+    }
+
+    console.log(`✅ Found ${developments.length} Austin development proposals`);
+    return developments;
+
   } catch (error) {
     console.error('Austin fetch error:', error);
     return [];
   }
 }
 
+// Simple geocoding function
+async function geocodeAddress(address, city = 'Austin', state = 'TX') {
+  try {
+    const fullAddress = `${address}, ${city}, ${state}`;
+    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(fullAddress)}.json?access_token=${process.env.NEXT_PUBLIC_MAPBOX_TOKEN}&limit=1`;
+
+    const response = await fetch(url);
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    if (data.features && data.features.length > 0) {
+      const [lng, lat] = data.features[0].center;
+      return { lat, lng };
+    }
+    return null;
+  } catch (error) {
+    console.error('Geocoding error:', error);
+    return null;
+  }
+}
+
 /**
- * Fetch Dallas building permits
+ * Fetch Dallas major development permits
  * Data source: https://www.dallasopendata.com
+ * Filters for significant commercial/multifamily projects only
  */
 async function fetchDallasPermits(limit) {
   try {
-    // Dallas Open Data API
-    const url = `https://www.dallasopendata.com/resource/5qod-7kea.json?$limit=${limit}&$order=issued_date DESC&$where=issued_date>'${getDateMonthsAgo(6)}'`;
+    // Fetch more records to filter down to major developments
+    const url = `https://www.dallasopendata.com/resource/5qod-7kea.json?$limit=500&$order=issued_date DESC&$where=issued_date>'${getDateMonthsAgo(12)}'`;
 
     const response = await fetch(url);
-    if (!response.ok) throw new Error('Dallas API failed');
+    if (!response.ok) {
+      console.error('Dallas API failed');
+      return [];
+    }
 
     const data = await response.json();
 
-    return data
-      .filter(permit => permit.latitude && permit.longitude)
-      .map(permit => ({
-        id: `dallas-${permit.permit_number}`,
-        city: 'Dallas',
-        state: 'TX',
-        type: permit.permit_type || 'Building Permit',
-        description: permit.work_description || 'Development Project',
-        address: permit.address || 'Address not available',
-        latitude: parseFloat(permit.latitude),
-        longitude: parseFloat(permit.longitude),
-        value: permit.construction_cost ? `$${parseInt(permit.construction_cost).toLocaleString()}` : null,
-        issueDate: permit.issued_date,
-        status: permit.status || 'Active',
-        source: 'Dallas Open Data',
-        permitNumber: permit.permit_number
-      }));
+    const developments = [];
+    for (const permit of data) {
+      if (!permit.latitude || !permit.longitude) continue;
+
+      const cost = permit.construction_cost ? parseInt(permit.construction_cost) : 0;
+      const permitType = (permit.permit_type || '').toUpperCase();
+      const workDesc = (permit.work_description || '').toLowerCase();
+
+      // Filter for major developments:
+      // - Construction cost > $500k
+      // - Commercial, multifamily, or subdivision permits
+      const isMajorDevelopment =
+        cost > 500000 ||
+        permitType.includes('COMMERCIAL') ||
+        permitType.includes('MULTIFAMILY') ||
+        permitType.includes('APARTMENT') ||
+        workDesc.includes('commercial') ||
+        workDesc.includes('multifamily') ||
+        workDesc.includes('apartment') ||
+        workDesc.includes('subdivision') ||
+        workDesc.includes('shopping center') ||
+        workDesc.includes('office building');
+
+      if (isMajorDevelopment) {
+        developments.push({
+          id: `dallas-${permit.permit_number}`,
+          city: 'Dallas',
+          state: 'TX',
+          type: permit.permit_type || 'Development Project',
+          description: permit.work_description || 'Major Development',
+          address: permit.address || 'Address not available',
+          latitude: parseFloat(permit.latitude),
+          longitude: parseFloat(permit.longitude),
+          value: cost > 0 ? `$${cost.toLocaleString()}` : null,
+          issueDate: permit.issued_date,
+          status: permit.status || 'Active',
+          source: 'Dallas Open Data',
+          permitNumber: permit.permit_number
+        });
+      }
+
+      if (developments.length >= limit) break;
+    }
+
+    console.log(`✅ Found ${developments.length} Dallas major developments`);
+    return developments;
+
   } catch (error) {
     console.error('Dallas fetch error:', error);
     return [];

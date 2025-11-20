@@ -1178,7 +1178,7 @@ export default function DashboardPage() {
                       {selectedLead.source && (
                         <div className="flex justify-between items-center">
                           <span className="text-slate-400">Source:</span>
-                          <span className="text-white text-xs">{selectedLead.source}</span>
+                          <span className="text-white text-xs">{selectedLead.source.replace('Haven Ground - ', '')}</span>
                         </div>
                       )}
                     </div>

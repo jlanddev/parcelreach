@@ -966,7 +966,7 @@ export default function LandLeadsAdminPage() {
             <div className="grid grid-cols-4 gap-4">
               <div className="bg-gradient-to-br from-orange-500/20 to-orange-600/20 border border-orange-500/30 rounded-xl p-6">
                 <div className="text-3xl font-bold text-orange-400">{allLeads.filter(l => l.source?.includes('Haven Ground')).length}</div>
-                <div className="text-slate-300 text-sm mt-1">Haven Ground Leads</div>
+                <div className="text-slate-300 text-sm mt-1">PPC Inflow Leads</div>
               </div>
               <div className="bg-gradient-to-br from-green-500/20 to-green-600/20 border border-green-500/30 rounded-xl p-6">
                 <div className="text-3xl font-bold text-green-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && l.form_data?.homeOnProperty === 'no').length}</div>
@@ -1138,7 +1138,7 @@ export default function LandLeadsAdminPage() {
         {activeTab === 'all-leads' && (
           <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
             <div className="p-4 border-b border-slate-700/50">
-              <h3 className="text-xl font-bold">All Leads (Haven Ground)</h3>
+              <h3 className="text-xl font-bold">All Leads</h3>
               <p className="text-sm text-slate-400 mt-1">{allLeads.length} total leads</p>
             </div>
             <div className="overflow-x-auto">
@@ -1745,7 +1745,7 @@ export default function LandLeadsAdminPage() {
           }}
         >
           <div
-            className="bg-slate-800 rounded-xl border border-slate-700 max-w-2xl w-full p-6"
+            className="bg-slate-800 rounded-xl border border-slate-700 max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6"
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-xl font-bold mb-4">Attach Map to Lead</h3>
@@ -1900,6 +1900,21 @@ export default function LandLeadsAdminPage() {
                       .eq('id', leadForMapSearch.id);
 
                     if (error) throw error;
+
+                    // If notes were provided, also add to lead_notes table
+                    if (newLead.notes && newLead.notes.trim()) {
+                      const { data: { user } } = await supabase.auth.getUser();
+                      if (user) {
+                        await supabase
+                          .from('lead_notes')
+                          .insert([{
+                            lead_id: leadForMapSearch.id,
+                            user_id: user.id,
+                            content: newLead.notes,
+                            mentioned_users: []
+                          }]);
+                      }
+                    }
 
                     alert('Map attached successfully!');
 
