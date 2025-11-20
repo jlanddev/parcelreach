@@ -57,14 +57,15 @@ async function fetchCityDevelopments(city, limit) {
 }
 
 /**
- * Fetch Austin building permits
+ * Fetch Austin development projects
+ * Focus on: Subdivisions, Commercial, Multifamily, Major developments
  * Data source: https://data.austintexas.gov
  */
 async function fetchAustinPermits(limit) {
   try {
-    // Austin Open Data API for building permits
-    // Using Socrata API format
-    const url = `https://data.austintexas.gov/resource/3syk-w9eu.json?$limit=${limit}&$order=issue_date DESC&$where=issue_date>'${getDateMonthsAgo(6)}'`;
+    // Austin subdivision plats and major developments
+    // Filter for: Commercial, Multifamily, Subdivision plats
+    const url = `https://data.austintexas.gov/resource/3syk-w9eu.json?$limit=${limit}&$order=issue_date DESC&$where=issue_date>'${getDateMonthsAgo(12)}' AND (permit_type_desc LIKE '%COMMERCIAL%' OR permit_type_desc LIKE '%MULTIFAMILY%' OR permit_type_desc LIKE '%SUBDIVISION%' OR work_class LIKE '%NEW BUILDING%')`;
 
     const response = await fetch(url);
     if (!response.ok) throw new Error('Austin API failed');
@@ -72,20 +73,28 @@ async function fetchAustinPermits(limit) {
     const data = await response.json();
 
     return data
-      .filter(permit => permit.latitude && permit.longitude)
+      .filter(permit =>
+        permit.latitude &&
+        permit.longitude &&
+        // Filter for significant projects only
+        (permit.total_existing_bldg_sqft > 5000 ||
+         permit.permit_type_desc?.includes('COMMERCIAL') ||
+         permit.permit_type_desc?.includes('MULTIFAMILY') ||
+         permit.permit_type_desc?.includes('SUBDIVISION'))
+      )
       .map(permit => ({
         id: `austin-${permit.permit_number}`,
         city: 'Austin',
         state: 'TX',
-        type: permit.permit_type_desc || 'Building Permit',
-        description: permit.description || permit.work_class || 'Development Project',
+        type: permit.permit_type_desc || 'Development Project',
+        description: permit.description || permit.work_class || 'Major Development',
         address: permit.original_address1 || 'Address not available',
         latitude: parseFloat(permit.latitude),
         longitude: parseFloat(permit.longitude),
-        value: permit.total_existing_bldg_sqft ? `${permit.total_existing_bldg_sqft} sqft` : null,
+        value: permit.total_existing_bldg_sqft ? `${parseInt(permit.total_existing_bldg_sqft).toLocaleString()} sqft` : null,
         issueDate: permit.issue_date,
         status: permit.status_current || 'Active',
-        source: 'Austin Open Data Portal',
+        source: 'Austin Development Data',
         permitNumber: permit.permit_number
       }));
   } catch (error) {

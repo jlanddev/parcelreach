@@ -645,7 +645,7 @@ export default function LeadsMap({ leads = [], zoomToLead = null, developments =
     developments.forEach(dev => {
       if (!dev.latitude || !dev.longitude) return;
 
-      // Create development marker element (green/construction themed)
+      // Create development marker element (construction/development themed)
       const el = document.createElement('div');
       el.className = 'development-marker';
       el.innerHTML = `
@@ -657,14 +657,17 @@ export default function LeadsMap({ leads = [], zoomToLead = null, developments =
           cursor: pointer;
         ">
           <div style="
-            background: #10B981;
-            width: 18px;
-            height: 18px;
-            border-radius: 50%;
-            border: 3px solid rgba(255,255,255,0.95);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.4), 0 0 0 4px rgba(16, 185, 129, 0.25);
-            animation: sonarPulse 3s ease-out infinite;
-          "></div>
+            background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%);
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            border: 2px solid rgba(255,255,255,0.95);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+          ">🏗️</div>
         </div>
       `;
 
