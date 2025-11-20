@@ -986,20 +986,82 @@ export default function LandLeadsAdminPage() {
                     onClick={() => setSelectedLead(lead)}
                     className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6 hover:border-blue-500/50 hover:shadow-xl hover:shadow-blue-500/10 transition-all cursor-pointer"
                   >
+                    {/* Header */}
                     <div className="flex items-start justify-between mb-4">
                       <div className="flex-1">
                         <h3 className="text-white font-semibold text-lg mb-1">{lead.name}</h3>
-                        <p className="text-slate-400 text-sm truncate">{lead.address}</p>
+                        {lead.form_data?.position && (
+                          <span className="inline-block px-2 py-0.5 bg-blue-500/20 text-blue-400 text-xs font-medium rounded capitalize">
+                            {lead.form_data.position}
+                          </span>
+                        )}
                       </div>
                       <span className="px-2 py-1 bg-green-500/20 text-green-400 text-xs font-semibold rounded whitespace-nowrap ml-2">
                         NEW
                       </span>
                     </div>
 
-                    <div className="space-y-2 text-sm mb-4">
+                    {/* Property Location */}
+                    <div className="space-y-1 mb-3 pb-3 border-b border-slate-700/50">
+                      <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Property Location</div>
+                      {lead.form_data?.streetAddress && (
+                        <div className="text-sm text-slate-300">{lead.form_data.streetAddress}</div>
+                      )}
+                      <div className="flex gap-2 text-sm text-slate-300">
+                        {lead.form_data?.propertyCounty && (
+                          <span>{lead.form_data.propertyCounty} County</span>
+                        )}
+                        {lead.form_data?.propertyState && (
+                          <span className="text-slate-400">• {lead.form_data.propertyState}</span>
+                        )}
+                      </div>
+                      {lead.form_data?.acres && (
+                        <div className="text-sm font-semibold text-orange-400">{lead.form_data.acres}</div>
+                      )}
+                    </div>
+
+                    {/* Property Details */}
+                    <div className="space-y-2 mb-3 pb-3 border-b border-slate-700/50">
+                      <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Property Details</div>
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        {lead.form_data?.homeOnProperty && (
+                          <div>
+                            <span className="text-slate-500">Home:</span>{' '}
+                            <span className={lead.form_data.homeOnProperty === 'no' ? 'text-green-400 font-semibold' : 'text-yellow-400'}>
+                              {lead.form_data.homeOnProperty.toUpperCase()}
+                            </span>
+                          </div>
+                        )}
+                        {lead.form_data?.propertyListed && (
+                          <div>
+                            <span className="text-slate-500">Listed:</span>{' '}
+                            <span className={lead.form_data.propertyListed === 'no' ? 'text-green-400 font-semibold' : 'text-yellow-400'}>
+                              {lead.form_data.propertyListed.toUpperCase()}
+                            </span>
+                          </div>
+                        )}
+                        {lead.form_data?.ownedFourYears && (
+                          <div>
+                            <span className="text-slate-500">4+ Years:</span>{' '}
+                            <span className={lead.form_data.ownedFourYears === 'yes' ? 'text-green-400 font-semibold' : 'text-yellow-400'}>
+                              {lead.form_data.ownedFourYears.toUpperCase()}
+                            </span>
+                          </div>
+                        )}
+                        {lead.form_data?.namesOnDeed && (
+                          <div className="col-span-2">
+                            <span className="text-slate-500">On Deed:</span>{' '}
+                            <span className="text-slate-300">{lead.form_data.namesOnDeed}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Contact Info */}
+                    <div className="space-y-2 text-sm mb-3">
                       {lead.email && (
                         <div className="flex items-center gap-2 text-slate-300 truncate">
-                          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg className="w-4 h-4 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                           </svg>
                           <span className="truncate">{lead.email}</span>
@@ -1007,18 +1069,10 @@ export default function LandLeadsAdminPage() {
                       )}
                       {lead.phone && (
                         <div className="flex items-center gap-2 text-slate-300">
-                          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg className="w-4 h-4 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
                           </svg>
                           {lead.phone}
-                        </div>
-                      )}
-                      {lead.form_data?.acres && (
-                        <div className="flex items-center gap-2 text-slate-300">
-                          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1h-4a1 1 0 01-1-1V5z" />
-                          </svg>
-                          {lead.form_data.acres}
                         </div>
                       )}
                       {lead.ip_address && (
@@ -1026,32 +1080,12 @@ export default function LandLeadsAdminPage() {
                           <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
                           </svg>
-                          {lead.ip_address}
+                          IP: {lead.ip_address}
                         </div>
                       )}
                     </div>
 
-                    {/* Qualification Indicators */}
-                    {lead.form_data && (
-                      <div className="flex gap-2 flex-wrap">
-                        {lead.form_data.homeOnProperty === 'no' && (
-                          <span className="px-2 py-1 bg-green-500/20 text-green-400 text-xs font-semibold rounded">
-                            ✓ No Home
-                          </span>
-                        )}
-                        {lead.form_data.propertyListed === 'no' && (
-                          <span className="px-2 py-1 bg-green-500/20 text-green-400 text-xs font-semibold rounded">
-                            ✓ Not Listed
-                          </span>
-                        )}
-                        {lead.form_data.ownedFourYears === 'yes' && (
-                          <span className="px-2 py-1 bg-green-500/20 text-green-400 text-xs font-semibold rounded">
-                            ✓ 4+ Years
-                          </span>
-                        )}
-                      </div>
-                    )}
-
+                    {/* Footer */}
                     <div className="mt-4 pt-4 border-t border-slate-700/50 text-xs text-slate-500">
                       {new Date(lead.created_at).toLocaleString()}
                     </div>
