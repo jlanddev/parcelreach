@@ -78,6 +78,11 @@ export default function DashboardPage() {
   const [zoomToLead, setZoomToLead] = useState(null);
   const [clickTimeout, setClickTimeout] = useState(null);
 
+  // Developments layer state
+  const [developments, setDevelopments] = useState([]);
+  const [showDevelopments, setShowDevelopments] = useState(false);
+  const [developmentsLoading, setDevelopmentsLoading] = useState(false);
+
   // Campaign settings state
   const [campaignName, setCampaignName] = useState('');
   const [dailyLeadLimit, setDailyLeadLimit] = useState('');
@@ -187,6 +192,24 @@ export default function DashboardPage() {
       .eq('team_id', teamId);
 
     setTeamMembers(data || []);
+  };
+
+  // Fetch recent developments from open data portals
+  const fetchDevelopments = async () => {
+    setDevelopmentsLoading(true);
+    try {
+      const response = await fetch('/api/developments?cities=austin,dallas,houston&limit=100');
+      const data = await response.json();
+
+      if (data.success) {
+        setDevelopments(data.developments);
+        console.log(`📍 Loaded ${data.developments.length} recent developments`);
+      }
+    } catch (error) {
+      console.error('Error fetching developments:', error);
+    } finally {
+      setDevelopmentsLoading(false);
+    }
   };
 
   // Load organization name when modal opens or team changes
@@ -696,6 +719,26 @@ export default function DashboardPage() {
 
             {/* Action Buttons */}
             <div className="flex items-center gap-2">
+              {/* Developments Layer Toggle */}
+              <button
+                onClick={() => {
+                  if (!showDevelopments && developments.length === 0) {
+                    fetchDevelopments();
+                  }
+                  setShowDevelopments(!showDevelopments);
+                }}
+                className={`p-2 rounded-lg transition-colors ${showDevelopments ? 'bg-green-600 text-white' : 'hover:bg-slate-700/50 text-slate-400'}`}
+                title={showDevelopments ? 'Hide Developments' : 'Show Recent Developments'}
+              >
+                {developmentsLoading ? (
+                  <div className="w-5 h-5 border-2 border-slate-400 border-t-transparent rounded-full animate-spin"></div>
+                ) : (
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                  </svg>
+                )}
+              </button>
+
               {/* Campaigns Button */}
               <button
                 onClick={() => setCampaignsOpen(true)}
@@ -1022,7 +1065,11 @@ export default function DashboardPage() {
             </svg>
           </button>
 
-          <LeadsMap leads={leads} zoomToLead={zoomToLead} />
+          <LeadsMap
+            leads={leads}
+            zoomToLead={zoomToLead}
+            developments={showDevelopments ? developments : []}
+          />
         </div>
 
         {/* Mobile overlay when sidebar is open */}

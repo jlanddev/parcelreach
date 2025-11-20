@@ -25,10 +25,11 @@ function calculateArea(coordinates) {
   return areaInAcres;
 }
 
-export default function LeadsMap({ leads = [], zoomToLead = null }) {
+export default function LeadsMap({ leads = [], zoomToLead = null, developments = [] }) {
   const mapContainer = useRef(null);
   const map = useRef(null);
   const markers = useRef([]);
+  const developmentMarkers = useRef([]);
   const draw = useRef(null);
   const [selectedLead, setSelectedLead] = useState(null);
   const [selectedParcel, setSelectedParcel] = useState(null);
@@ -631,6 +632,80 @@ export default function LeadsMap({ leads = [], zoomToLead = null }) {
 
     loadLeadsAndParcels();
   }, [leads]);
+
+  // Handle development markers
+  useEffect(() => {
+    if (!map.current) return;
+
+    // Clear existing development markers
+    developmentMarkers.current.forEach(marker => marker.remove());
+    developmentMarkers.current = [];
+
+    // Add development markers
+    developments.forEach(dev => {
+      if (!dev.latitude || !dev.longitude) return;
+
+      // Create development marker element (green/construction themed)
+      const el = document.createElement('div');
+      el.className = 'development-marker';
+      el.innerHTML = `
+        <div style="
+          position: relative;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          cursor: pointer;
+        ">
+          <div style="
+            background: #10B981;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            border: 3px solid rgba(255,255,255,0.95);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4), 0 0 0 4px rgba(16, 185, 129, 0.25);
+            animation: sonarPulse 3s ease-out infinite;
+          "></div>
+        </div>
+      `;
+
+      // Create marker
+      const marker = new mapboxgl.Marker(el)
+        .setLngLat([dev.longitude, dev.latitude])
+        .addTo(map.current);
+
+      // Add click event for popup
+      el.addEventListener('click', () => {
+        const popupHTML = `
+          <div class="development-popup" style="min-width: 250px;">
+            <div style="background: linear-gradient(135deg, #10B981 0%, #059669 100%); color: white; padding: 12px; margin: -10px -10px 10px -10px; border-radius: 3px 3px 0 0;">
+              <h3 style="margin: 0; font-size: 14px; font-weight: 600;">🏗️ ${dev.city} Development</h3>
+            </div>
+            <div style="padding: 4px 0;">
+              <p style="margin: 6px 0; font-size: 13px; font-weight: 600; color: #1f2937;">${dev.type}</p>
+              <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">${dev.description}</p>
+              <p style="margin: 6px 0; font-size: 11px; color: #9ca3af;">${dev.address}</p>
+              ${dev.value ? `<p style="margin: 4px 0; font-size: 12px; color: #059669; font-weight: 500;">Value: ${dev.value}</p>` : ''}
+              <p style="margin: 6px 0 0 0; font-size: 11px; color: #9ca3af;">
+                Issued: ${new Date(dev.issueDate).toLocaleDateString()}
+              </p>
+              <p style="margin: 4px 0 0 0; font-size: 10px; color: #d1d5db;">
+                Source: ${dev.source}
+              </p>
+            </div>
+          </div>
+        `;
+
+        new mapboxgl.Popup({ offset: 25, closeButton: true, closeOnClick: false })
+          .setLngLat([dev.longitude, dev.latitude])
+          .setHTML(popupHTML)
+          .addTo(map.current);
+      });
+
+      developmentMarkers.current.push(marker);
+    });
+
+    console.log(`📍 Added ${developments.length} development markers`);
+  }, [developments]);
 
   // Handle zoom to specific lead when zoomToLead prop changes
   useEffect(() => {
