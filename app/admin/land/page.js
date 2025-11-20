@@ -17,6 +17,8 @@ export default function LandLeadsAdminPage() {
   const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [selectedLead, setSelectedLead] = useState(null);
   const [selectedOrgsForAssignment, setSelectedOrgsForAssignment] = useState([]);
+  const [findMapModalOpen, setFindMapModalOpen] = useState(false);
+  const [leadForMapSearch, setLeadForMapSearch] = useState(null);
   const [isAssigning, setIsAssigning] = useState(false);
   const [leadAssignments, setLeadAssignments] = useState({}); // leadId -> array of {teamId, assigned_at}
 
@@ -822,7 +824,7 @@ export default function LandLeadsAdminPage() {
       {/* Tabs */}
       <div className="bg-slate-800/30 border-b border-slate-700/50 px-6">
         <div className="flex gap-4">
-          {['organizations', 'ppc-inflow', 'all-leads', 'unassigned', 'create-lead'].map((tab) => (
+          {['organizations', 'ppc-inflow', 'all-leads', 'unassigned', 'create-lead', 'attach-map'].map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -833,6 +835,7 @@ export default function LandLeadsAdminPage() {
               }`}
             >
               {tab === 'ppc-inflow' && '📊 '}
+              {tab === 'attach-map' && '🗺️ '}
               {tab.replace('-', ' ')}
               {tab === 'unassigned' && ` (${unassignedLeads.length})`}
               {tab === 'ppc-inflow' && ` (${allLeads.filter(l => l.source?.includes('Haven Ground')).length})`}
@@ -983,8 +986,7 @@ export default function LandLeadsAdminPage() {
                 .map((lead) => (
                   <div
                     key={lead.id}
-                    onClick={() => setSelectedLead(lead)}
-                    className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6 hover:border-blue-500/50 hover:shadow-xl hover:shadow-blue-500/10 transition-all cursor-pointer"
+                    className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6 hover:border-blue-500/50 hover:shadow-xl hover:shadow-blue-500/10 transition-all"
                   >
                     {/* Header */}
                     <div className="flex items-start justify-between mb-4">
@@ -1085,8 +1087,34 @@ export default function LandLeadsAdminPage() {
                       )}
                     </div>
 
+                    {/* Actions */}
+                    <div className="mt-4 pt-4 border-t border-slate-700/50 flex gap-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setLeadForMapSearch(lead);
+                          setFindMapModalOpen(true);
+                        }}
+                        className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                        </svg>
+                        Find on Map
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedLead(lead);
+                        }}
+                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold rounded-lg transition-colors"
+                      >
+                        View Details
+                      </button>
+                    </div>
+
                     {/* Footer */}
-                    <div className="mt-4 pt-4 border-t border-slate-700/50 text-xs text-slate-500">
+                    <div className="mt-2 text-xs text-slate-500 text-center">
                       {new Date(lead.created_at).toLocaleString()}
                     </div>
                   </div>
@@ -1606,6 +1634,170 @@ export default function LandLeadsAdminPage() {
                   </button>
                 )}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ATTACH MAP TAB */}
+        {activeTab === 'attach-map' && (
+          <div className="space-y-6">
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-6">
+              <h3 className="text-xl font-bold mb-4">Attach Map to PPC Lead</h3>
+              <p className="text-slate-400 text-sm mb-6">Select a PPC lead and upload a KML file to attach property boundaries</p>
+
+              {/* Select PPC Lead */}
+              <div className="mb-6">
+                <label className="block text-sm font-semibold text-slate-300 mb-2">Select PPC Lead</label>
+                <select
+                  value={leadForMapSearch?.id || ''}
+                  onChange={(e) => {
+                    const lead = allLeads.find(l => l.id === e.target.value);
+                    setLeadForMapSearch(lead);
+                    setKmlFile(null);
+                    setUploadedGeometry(null);
+                  }}
+                  className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                >
+                  <option value="">Choose a PPC lead...</option>
+                  {allLeads
+                    .filter(l => l.source?.includes('Haven Ground'))
+                    .map(lead => (
+                      <option key={lead.id} value={lead.id}>
+                        {lead.name} - {lead.form_data?.propertyCounty}, {lead.form_data?.propertyState} - {lead.form_data?.acres}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              {leadForMapSearch && (
+                <>
+                  {/* Lead Details */}
+                  <div className="mb-6 p-4 bg-slate-900/50 rounded-lg border border-slate-700">
+                    <h4 className="font-semibold text-white mb-3">Selected Lead</h4>
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <span className="text-slate-500">Name:</span>
+                        <span className="ml-2 text-slate-300">{leadForMapSearch.name}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">Email:</span>
+                        <span className="ml-2 text-slate-300">{leadForMapSearch.email}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">Address:</span>
+                        <span className="ml-2 text-slate-300">{leadForMapSearch.form_data?.streetAddress}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">County:</span>
+                        <span className="ml-2 text-slate-300">{leadForMapSearch.form_data?.propertyCounty}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">State:</span>
+                        <span className="ml-2 text-slate-300">{leadForMapSearch.form_data?.propertyState}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">Acres:</span>
+                        <span className="ml-2 text-orange-400 font-semibold">{leadForMapSearch.form_data?.acres}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* KML Upload */}
+                  <div className="mb-6">
+                    <label className="block text-sm font-semibold text-slate-300 mb-2">Upload KML File</label>
+                    <input
+                      type="file"
+                      accept=".kml"
+                      onChange={async (e) => {
+                        const file = e.target.files[0];
+                        if (file) {
+                          setKmlFile(file);
+                          const text = await file.text();
+                          const parser = new DOMParser();
+                          const xml = parser.parseFromString(text, 'text/xml');
+                          const coordinates = xml.querySelector('coordinates')?.textContent.trim();
+                          if (coordinates) {
+                            const coords = coordinates.split(/\s+/).map(coord => {
+                              const [lng, lat] = coord.split(',').map(Number);
+                              return [lng, lat];
+                            });
+                            setUploadedGeometry({
+                              type: 'Polygon',
+                              coordinates: [coords]
+                            });
+                          }
+                        }
+                      }}
+                      className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:cursor-pointer hover:file:bg-blue-700"
+                    />
+                  </div>
+
+                  {uploadedGeometry && (
+                    <div className="mb-6 p-4 bg-green-500/10 border border-green-500/30 rounded-lg">
+                      <div className="flex items-center gap-2 text-green-400">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        <span className="font-semibold">KML file loaded successfully!</span>
+                      </div>
+                      <p className="text-sm text-slate-400 mt-1">Geometry contains {uploadedGeometry.coordinates[0].length} points</p>
+                    </div>
+                  )}
+
+                  {/* Attach Button */}
+                  <button
+                    onClick={async () => {
+                      if (!uploadedGeometry) return;
+
+                      setIsAssigning(true);
+                      try {
+                        const { error } = await supabase
+                          .from('leads')
+                          .update({
+                            parcel_geometry: uploadedGeometry
+                          })
+                          .eq('id', leadForMapSearch.id);
+
+                        if (error) throw error;
+
+                        alert('Map attached successfully!');
+                        // Refresh leads
+                        const { data } = await supabase.from('leads').select('*').order('created_at', { ascending: false });
+                        if (data) setAllLeads(data);
+
+                        // Reset
+                        setLeadForMapSearch(null);
+                        setKmlFile(null);
+                        setUploadedGeometry(null);
+                      } catch (err) {
+                        console.error('Error attaching map:', err);
+                        alert('Failed to attach map');
+                      } finally {
+                        setIsAssigning(false);
+                      }
+                    }}
+                    disabled={!uploadedGeometry || isAssigning}
+                    className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {isAssigning ? (
+                      <>
+                        <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Attaching Map...
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        Attach Map to Lead
+                      </>
+                    )}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         )}
