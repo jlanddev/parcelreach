@@ -822,7 +822,7 @@ export default function LandLeadsAdminPage() {
       {/* Tabs */}
       <div className="bg-slate-800/30 border-b border-slate-700/50 px-6">
         <div className="flex gap-4">
-          {['organizations', 'all-leads', 'unassigned', 'create-lead'].map((tab) => (
+          {['organizations', 'ppc-inflow', 'all-leads', 'unassigned', 'create-lead'].map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -832,8 +832,10 @@ export default function LandLeadsAdminPage() {
                   : 'border-transparent text-slate-400 hover:text-white'
               }`}
             >
+              {tab === 'ppc-inflow' && '📊 '}
               {tab.replace('-', ' ')}
               {tab === 'unassigned' && ` (${unassignedLeads.length})`}
+              {tab === 'ppc-inflow' && ` (${allLeads.filter(l => l.source?.includes('Haven Ground')).length})`}
             </button>
           ))}
         </div>
@@ -948,6 +950,120 @@ export default function LandLeadsAdminPage() {
                 )}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* PPC INFLOW TAB */}
+        {activeTab === 'ppc-inflow' && (
+          <div className="space-y-6">
+            {/* PPC Stats */}
+            <div className="grid grid-cols-4 gap-4">
+              <div className="bg-gradient-to-br from-orange-500/20 to-orange-600/20 border border-orange-500/30 rounded-xl p-6">
+                <div className="text-3xl font-bold text-orange-400">{allLeads.filter(l => l.source?.includes('Haven Ground')).length}</div>
+                <div className="text-slate-300 text-sm mt-1">📊 Haven Ground Leads</div>
+              </div>
+              <div className="bg-gradient-to-br from-green-500/20 to-green-600/20 border border-green-500/30 rounded-xl p-6">
+                <div className="text-3xl font-bold text-green-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && l.form_data?.homeOnProperty === 'no').length}</div>
+                <div className="text-slate-300 text-sm mt-1">✅ No Home (Qualified)</div>
+              </div>
+              <div className="bg-gradient-to-br from-blue-500/20 to-blue-600/20 border border-blue-500/30 rounded-xl p-6">
+                <div className="text-3xl font-bold text-blue-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && l.form_data?.acres?.includes('50') || l.form_data?.acres?.includes('100')).length}</div>
+                <div className="text-slate-300 text-sm mt-1">📐 50+ Acres</div>
+              </div>
+              <div className="bg-gradient-to-br from-purple-500/20 to-purple-600/20 border border-purple-500/30 rounded-xl p-6">
+                <div className="text-3xl font-bold text-purple-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && new Date(l.created_at) > new Date(Date.now() - 24*60*60*1000)).length}</div>
+                <div className="text-slate-300 text-sm mt-1">🕐 Last 24 Hours</div>
+              </div>
+            </div>
+
+            {/* PPC Leads Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+              {allLeads
+                .filter(l => l.source?.includes('Haven Ground'))
+                .map((lead) => (
+                  <div
+                    key={lead.id}
+                    onClick={() => setSelectedLead(lead)}
+                    className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6 hover:border-blue-500/50 hover:shadow-xl hover:shadow-blue-500/10 transition-all cursor-pointer"
+                  >
+                    <div className="flex items-start justify-between mb-4">
+                      <div className="flex-1">
+                        <h3 className="text-white font-semibold text-lg mb-1">{lead.name}</h3>
+                        <p className="text-slate-400 text-sm truncate">{lead.address}</p>
+                      </div>
+                      <span className="px-2 py-1 bg-green-500/20 text-green-400 text-xs font-semibold rounded whitespace-nowrap ml-2">
+                        NEW
+                      </span>
+                    </div>
+
+                    <div className="space-y-2 text-sm mb-4">
+                      {lead.email && (
+                        <div className="flex items-center gap-2 text-slate-300 truncate">
+                          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                          </svg>
+                          <span className="truncate">{lead.email}</span>
+                        </div>
+                      )}
+                      {lead.phone && (
+                        <div className="flex items-center gap-2 text-slate-300">
+                          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                          </svg>
+                          {lead.phone}
+                        </div>
+                      )}
+                      {lead.form_data?.acres && (
+                        <div className="flex items-center gap-2 text-slate-300">
+                          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1h-4a1 1 0 01-1-1V5z" />
+                          </svg>
+                          {lead.form_data.acres}
+                        </div>
+                      )}
+                      {lead.ip_address && (
+                        <div className="flex items-center gap-2 text-slate-400 text-xs">
+                          <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+                          </svg>
+                          {lead.ip_address}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Qualification Indicators */}
+                    {lead.form_data && (
+                      <div className="flex gap-2 flex-wrap">
+                        {lead.form_data.homeOnProperty === 'no' && (
+                          <span className="px-2 py-1 bg-green-500/20 text-green-400 text-xs font-semibold rounded">
+                            ✓ No Home
+                          </span>
+                        )}
+                        {lead.form_data.propertyListed === 'no' && (
+                          <span className="px-2 py-1 bg-green-500/20 text-green-400 text-xs font-semibold rounded">
+                            ✓ Not Listed
+                          </span>
+                        )}
+                        {lead.form_data.ownedFourYears === 'yes' && (
+                          <span className="px-2 py-1 bg-green-500/20 text-green-400 text-xs font-semibold rounded">
+                            ✓ 4+ Years
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="mt-4 pt-4 border-t border-slate-700/50 text-xs text-slate-500">
+                      {new Date(lead.created_at).toLocaleString()}
+                    </div>
+                  </div>
+                ))}
+            </div>
+
+            {allLeads.filter(l => l.source?.includes('Haven Ground')).length === 0 && (
+              <div className="text-center py-12 text-slate-400">
+                No PPC leads yet. Leads from Haven Ground form will appear here.
+              </div>
+            )}
           </div>
         )}
 
