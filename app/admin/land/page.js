@@ -1741,6 +1741,7 @@ export default function LandLeadsAdminPage() {
             setLeadForMapSearch(null);
             setKmlFile(null);
             setUploadedGeometry(null);
+            setNewLead({...newLead, parcel_id: '', notes: '', acres: ''});
           }}
         >
           <div
@@ -1774,6 +1775,46 @@ export default function LandLeadsAdminPage() {
                   <span className="ml-2 text-orange-400 font-semibold">{leadForMapSearch.form_data?.acres}</span>
                 </div>
               </div>
+            </div>
+
+            {/* Exact Acreage */}
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-slate-300 mb-2">
+                Exact Acreage <span className="text-orange-400">(Replaces range from form)</span>
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                placeholder="Enter exact acreage (e.g. 10.25)"
+                value={newLead.acres || ''}
+                onChange={(e) => setNewLead({...newLead, acres: e.target.value})}
+                className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+              />
+              <p className="text-xs text-slate-500 mt-1">Form shows: {leadForMapSearch.form_data?.acres || 'N/A'}</p>
+            </div>
+
+            {/* Parcel ID */}
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-slate-300 mb-2">Parcel ID (Optional)</label>
+              <input
+                type="text"
+                placeholder="Enter parcel ID"
+                value={newLead.parcel_id || ''}
+                onChange={(e) => setNewLead({...newLead, parcel_id: e.target.value})}
+                className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+
+            {/* Notes */}
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-slate-300 mb-2">Notes (Optional)</label>
+              <textarea
+                placeholder="Add notes about this property..."
+                value={newLead.notes || ''}
+                onChange={(e) => setNewLead({...newLead, notes: e.target.value})}
+                rows={3}
+                className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 resize-none"
+              />
             </div>
 
             {/* KML Upload */}
@@ -1826,6 +1867,7 @@ export default function LandLeadsAdminPage() {
                   setLeadForMapSearch(null);
                   setKmlFile(null);
                   setUploadedGeometry(null);
+                  setNewLead({...newLead, parcel_id: '', notes: '', acres: ''});
                 }}
                 className="flex-1 px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-600 transition-colors"
               >
@@ -1849,7 +1891,11 @@ export default function LandLeadsAdminPage() {
                       .update({
                         parcel_geometry: uploadedGeometry,
                         latitude: centerLat,
-                        longitude: centerLng
+                        longitude: centerLng,
+                        parcel_id: newLead.parcel_id || null,
+                        notes: newLead.notes || null,
+                        acres: newLead.acres ? parseFloat(newLead.acres) : null,
+                        acreage: newLead.acres ? parseFloat(newLead.acres) : null
                       })
                       .eq('id', leadForMapSearch.id);
 
