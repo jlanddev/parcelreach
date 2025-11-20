@@ -982,69 +982,59 @@ export default function DashboardPage() {
                                 className="absolute inset-0 w-full h-full object-cover"
                               />
                               {/* GeoJSON overlay now handled by Mapbox Static API */}
-                              {(lead.parcel_geometry || lead.parcelgeometry || lead.parcelGeometry) && (
+                              {false && (lead.parcelgeometry || lead.parcelGeometry) && (
                                 <svg
                                   viewBox="0 0 100 100"
                                   className="absolute inset-0 w-full h-full"
                                   preserveAspectRatio="xMidYMid meet"
                                 >
-                                  <rect width="100" height="100" fill="rgba(59, 130, 246, 0.1)" />
                                   {(() => {
-                                    try {
-                                      const geometry = lead.parcel_geometry
-                                        ? (typeof lead.parcel_geometry === 'string' ? JSON.parse(lead.parcel_geometry) : lead.parcel_geometry)
-                                        : lead.parcelgeometry
-                                        ? (typeof lead.parcelgeometry === 'string' ? JSON.parse(lead.parcelgeometry) : lead.parcelgeometry)
-                                        : lead.parcelGeometry;
+                                    const geometry = lead.parcelgeometry
+                                      ? (typeof lead.parcelgeometry === 'string' ? JSON.parse(lead.parcelgeometry) : lead.parcelgeometry)
+                                      : lead.parcelGeometry;
 
-                                      if (!geometry || !geometry.coordinates) return null;
+                                    const coords = geometry.type === 'Polygon'
+                                      ? geometry.coordinates[0]
+                                      : geometry.coordinates[0][0];
 
-                                      const coords = geometry.type === 'Polygon'
-                                        ? geometry.coordinates[0]
-                                        : geometry.coordinates[0][0];
+                                    const lngs = coords.map(c => c[0]);
+                                    const lats = coords.map(c => c[1]);
+                                    const minLng = Math.min(...lngs);
+                                    const maxLng = Math.max(...lngs);
+                                    const minLat = Math.min(...lats);
+                                    const maxLat = Math.max(...lats);
 
-                                      const lngs = coords.map(c => c[0]);
-                                      const lats = coords.map(c => c[1]);
-                                      const minLng = Math.min(...lngs);
-                                      const maxLng = Math.max(...lngs);
-                                      const minLat = Math.min(...lats);
-                                      const maxLat = Math.max(...lats);
+                                    const lngRange = maxLng - minLng || 0.001;
+                                    const latRange = maxLat - minLat || 0.001;
 
-                                      const lngRange = maxLng - minLng || 0.001;
-                                      const latRange = maxLat - minLat || 0.001;
+                                    // Calculate aspect ratio and scale to fit within box
+                                    const padding = 10;
+                                    const boxSize = 100 - 2 * padding;
 
-                                      // Calculate aspect ratio and scale to fit within box
-                                      const padding = 10;
-                                      const boxSize = 100 - 2 * padding;
+                                    // Use the larger range to determine scale, maintaining aspect ratio
+                                    const scale = Math.max(lngRange, latRange);
+                                    const xScale = (boxSize / scale);
+                                    const yScale = (boxSize / scale);
 
-                                      // Use the larger range to determine scale, maintaining aspect ratio
-                                      const scale = Math.max(lngRange, latRange);
-                                      const xScale = (boxSize / scale);
-                                      const yScale = (boxSize / scale);
+                                    // Center the parcel in the box
+                                    const xOffset = padding + (boxSize - lngRange * xScale) / 2;
+                                    const yOffset = padding + (boxSize - latRange * yScale) / 2;
 
-                                      // Center the parcel in the box
-                                      const xOffset = padding + (boxSize - lngRange * xScale) / 2;
-                                      const yOffset = padding + (boxSize - latRange * yScale) / 2;
+                                    // Convert coordinates to SVG space with proper scaling
+                                    const points = coords.map(coord => {
+                                      const x = ((coord[0] - minLng) * xScale) + xOffset;
+                                      const y = boxSize + padding - ((coord[1] - minLat) * yScale) - yOffset + padding;
+                                      return `${x},${y}`;
+                                    }).join(' ');
 
-                                      // Convert coordinates to SVG space with proper scaling
-                                      const points = coords.map(coord => {
-                                        const x = ((coord[0] - minLng) * xScale) + xOffset;
-                                        const y = boxSize + padding - ((coord[1] - minLat) * yScale) - yOffset + padding;
-                                        return `${x},${y}`;
-                                      }).join(' ');
-
-                                      return (
-                                        <polygon
-                                          points={points}
-                                          fill="rgba(239, 68, 68, 0.3)"
-                                          stroke="#EF4444"
-                                          strokeWidth="2"
-                                        />
-                                      );
-                                    } catch (err) {
-                                      console.error('Error rendering parcel:', err);
-                                      return null;
-                                    }
+                                    return (
+                                      <polygon
+                                        points={points}
+                                        fill="none"
+                                        stroke="#EF4444"
+                                        strokeWidth="2"
+                                      />
+                                    );
                                   })()}
                                 </svg>
                               )}
