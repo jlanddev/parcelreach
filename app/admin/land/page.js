@@ -1837,10 +1837,19 @@ export default function LandLeadsAdminPage() {
 
                   setIsAssigning(true);
                   try {
+                    // Calculate center coordinates for latitude/longitude
+                    const coords = uploadedGeometry.coordinates[0];
+                    const lngs = coords.map(c => c[0]);
+                    const lats = coords.map(c => c[1]);
+                    const centerLng = (Math.min(...lngs) + Math.max(...lngs)) / 2;
+                    const centerLat = (Math.min(...lats) + Math.max(...lats)) / 2;
+
                     const { error } = await supabase
                       .from('leads')
                       .update({
-                        parcel_geometry: uploadedGeometry
+                        parcel_geometry: uploadedGeometry,
+                        latitude: centerLat,
+                        longitude: centerLng
                       })
                       .eq('id', leadForMapSearch.id);
 
