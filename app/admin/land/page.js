@@ -834,7 +834,11 @@ export default function LandLeadsAdminPage() {
                   : 'border-transparent text-slate-400 hover:text-white'
               }`}
             >
-              {tab === 'ppc-inflow' && '📊 '}
+              {tab === 'ppc-inflow' && (
+                <svg className="w-4 h-4 inline-block mr-1 -mt-0.5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M3 13h2v8H3v-8zm4-6h2v14H7V7zm4-4h2v18h-2V3zm4 9h2v9h-2v-9zm4-3h2v12h-2V9z"/>
+                </svg>
+              )}
               {tab.replace('-', ' ')}
               {tab === 'unassigned' && ` (${unassignedLeads.length})`}
               {tab === 'ppc-inflow' && ` (${allLeads.filter(l => l.source?.includes('Haven Ground')).length})`}
@@ -962,19 +966,19 @@ export default function LandLeadsAdminPage() {
             <div className="grid grid-cols-4 gap-4">
               <div className="bg-gradient-to-br from-orange-500/20 to-orange-600/20 border border-orange-500/30 rounded-xl p-6">
                 <div className="text-3xl font-bold text-orange-400">{allLeads.filter(l => l.source?.includes('Haven Ground')).length}</div>
-                <div className="text-slate-300 text-sm mt-1">📊 Haven Ground Leads</div>
+                <div className="text-slate-300 text-sm mt-1">Haven Ground Leads</div>
               </div>
               <div className="bg-gradient-to-br from-green-500/20 to-green-600/20 border border-green-500/30 rounded-xl p-6">
                 <div className="text-3xl font-bold text-green-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && l.form_data?.homeOnProperty === 'no').length}</div>
-                <div className="text-slate-300 text-sm mt-1">✅ No Home (Qualified)</div>
+                <div className="text-slate-300 text-sm mt-1">No Home (Qualified)</div>
               </div>
               <div className="bg-gradient-to-br from-blue-500/20 to-blue-600/20 border border-blue-500/30 rounded-xl p-6">
                 <div className="text-3xl font-bold text-blue-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && l.form_data?.acres?.includes('50') || l.form_data?.acres?.includes('100')).length}</div>
-                <div className="text-slate-300 text-sm mt-1">📐 50+ Acres</div>
+                <div className="text-slate-300 text-sm mt-1">50+ Acres</div>
               </div>
               <div className="bg-gradient-to-br from-purple-500/20 to-purple-600/20 border border-purple-500/30 rounded-xl p-6">
                 <div className="text-3xl font-bold text-purple-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && new Date(l.created_at) > new Date(Date.now() - 24*60*60*1000)).length}</div>
-                <div className="text-slate-300 text-sm mt-1">🕐 Last 24 Hours</div>
+                <div className="text-slate-300 text-sm mt-1">Last 24 Hours</div>
               </div>
             </div>
 
@@ -1098,8 +1102,8 @@ export default function LandLeadsAdminPage() {
                         }}
                         className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
                       >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
                         </svg>
                         Attach Map
                       </button>
@@ -1375,7 +1379,7 @@ export default function LandLeadsAdminPage() {
                         : 'text-slate-400 hover:text-white'
                     }`}
                   >
-                    🔍 Search
+                    Search
                   </button>
                   <button
                     onClick={() => {
@@ -1388,7 +1392,7 @@ export default function LandLeadsAdminPage() {
                         : 'text-slate-400 hover:text-white'
                     }`}
                   >
-                    🖱️ Click Map
+                    Click Map
                   </button>
                   <button
                     onClick={() => setInputMode('upload')}
@@ -1398,7 +1402,7 @@ export default function LandLeadsAdminPage() {
                         : 'text-slate-400 hover:text-white'
                     }`}
                   >
-                    📤 Upload
+                    Upload
                   </button>
                 </div>
 
@@ -1439,7 +1443,7 @@ export default function LandLeadsAdminPage() {
                 {/* Search Mode - Regrid API */}
                 {inputMode === 'search' && (
                   <div className="bg-blue-900/20 border border-blue-500/30 rounded-lg p-4">
-                    <p className="text-sm text-blue-300 mb-3">🔍 Search by ONE of the following:</p>
+                    <p className="text-sm text-blue-300 mb-3">Search by ONE of the following:</p>
 
                     <div className="grid grid-cols-2 gap-4 mb-4">
                       <div>
@@ -1486,7 +1490,7 @@ export default function LandLeadsAdminPage() {
                 {/* Click to Find Mode */}
                 {inputMode === 'click' && (
                   <div className="bg-orange-900/20 border border-orange-500/30 rounded-lg p-4 space-y-4">
-                    <p className="text-sm text-orange-300 mb-3">🖱️ Click on the map to find a parcel (1 API call per click)</p>
+                    <p className="text-sm text-orange-300 mb-3">Click on the map to find a parcel (1 API call per click)</p>
 
                     <div className="bg-slate-900/50 border border-slate-700 rounded p-3 space-y-2">
                       <p className="text-xs text-slate-400">
@@ -1509,7 +1513,7 @@ export default function LandLeadsAdminPage() {
                           : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                       }`}
                     >
-                      {clickToFindActive ? '✅ Click Mode Active - Click on Map' : '🖱️ Enable Click to Find'}
+                      {clickToFindActive ? 'Click Mode Active - Click on Map' : 'Enable Click to Find'}
                     </button>
 
                     {clickToFindActive && (
@@ -1525,7 +1529,7 @@ export default function LandLeadsAdminPage() {
                 {/* Upload Mode - File Upload */}
                 {inputMode === 'upload' && (
                   <div className="bg-green-900/20 border border-green-500/30 rounded-lg p-4 space-y-4">
-                    <p className="text-sm text-green-300 mb-3">📤 Upload parcel files from County GIS (0 API calls)</p>
+                    <p className="text-sm text-green-300 mb-3">Upload parcel files from County GIS (0 API calls)</p>
 
                     <div>
                       <label className="block text-sm font-medium text-slate-300 mb-2">
