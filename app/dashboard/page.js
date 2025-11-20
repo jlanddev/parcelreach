@@ -423,6 +423,8 @@ export default function DashboardPage() {
 
   const filteredLeads = dealTypeFilter === 'all'
     ? leads
+    : dealTypeFilter === 'ppc-inflow'
+    ? leads.filter(lead => lead.source?.includes('Haven Ground'))
     : leads.filter(lead => lead.dealtype === dealTypeFilter);
 
   // DEBUG: Log filtering results
@@ -811,6 +813,7 @@ export default function DashboardPage() {
           <div className="flex border-b border-slate-700/50 bg-slate-900/50 overflow-x-auto">
             {[
               { value: 'all', label: 'All Deals' },
+              { value: 'ppc-inflow', label: 'PPC Inflow', icon: '📊' },
               { value: 'flips', label: 'Flips' },
               { value: 'subdivisions', label: 'Subdivisions' },
               { value: 'entitlements', label: 'Entitlements' }
@@ -824,6 +827,7 @@ export default function DashboardPage() {
                     : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/30'
                 }`}
               >
+                {type.icon && <span className="mr-1.5">{type.icon}</span>}
                 {type.label}
               </button>
             ))}
@@ -1146,6 +1150,128 @@ export default function DashboardPage() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Contact Information */}
+                  <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
+                    <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
+                      <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                      </svg>
+                      Contact Information
+                    </h3>
+                    <div className="space-y-2 text-sm">
+                      {selectedLead.email && (
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-400">Email:</span>
+                          <a href={`mailto:${selectedLead.email}`} className="text-blue-400 hover:text-blue-300 underline">{selectedLead.email}</a>
+                        </div>
+                      )}
+                      {selectedLead.phone && (
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-400">Phone:</span>
+                          <a href={`tel:${selectedLead.phone}`} className="text-blue-400 hover:text-blue-300 underline">{selectedLead.phone}</a>
+                        </div>
+                      )}
+                      {selectedLead.ip_address && (
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-400">IP Address:</span>
+                          <span className="text-white font-mono text-xs">{selectedLead.ip_address}</span>
+                        </div>
+                      )}
+                      {selectedLead.source && (
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-400">Source:</span>
+                          <span className="text-white text-xs">{selectedLead.source}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Form Responses (Haven Ground) */}
+                  {selectedLead.form_data && (
+                    <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
+                      <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
+                        <svg className="w-5 h-5 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        Form Responses
+                      </h3>
+                      <div className="space-y-2 text-sm max-h-96 overflow-y-auto pr-2">
+                        {selectedLead.form_data.fullName && (
+                          <div className="flex justify-between border-b border-slate-700/50 pb-2">
+                            <span className="text-slate-400">Full Name:</span>
+                            <span className="text-white font-semibold">{selectedLead.form_data.fullName}</span>
+                          </div>
+                        )}
+                        {selectedLead.form_data.position && (
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Position:</span>
+                            <span className="text-white capitalize">{selectedLead.form_data.position.replace('-', ' ')}</span>
+                          </div>
+                        )}
+                        {selectedLead.form_data.homeOnProperty && (
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Home on Property:</span>
+                            <span className={`font-semibold uppercase ${selectedLead.form_data.homeOnProperty === 'no' ? 'text-green-400' : 'text-yellow-400'}`}>{selectedLead.form_data.homeOnProperty}</span>
+                          </div>
+                        )}
+                        {selectedLead.form_data.propertyListed && (
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Property Listed:</span>
+                            <span className={`font-semibold uppercase ${selectedLead.form_data.propertyListed === 'no' ? 'text-green-400' : 'text-yellow-400'}`}>{selectedLead.form_data.propertyListed}</span>
+                          </div>
+                        )}
+                        {selectedLead.form_data.ownedFourYears && (
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Owned 4+ Years:</span>
+                            <span className={`font-semibold uppercase ${selectedLead.form_data.ownedFourYears === 'yes' ? 'text-green-400' : 'text-yellow-400'}`}>{selectedLead.form_data.ownedFourYears}</span>
+                          </div>
+                        )}
+                        {selectedLead.form_data.propertyState && (
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">State:</span>
+                            <span className="text-white">{selectedLead.form_data.propertyState}</span>
+                          </div>
+                        )}
+                        {selectedLead.form_data.propertyCounty && (
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">County:</span>
+                            <span className="text-white">{selectedLead.form_data.propertyCounty}</span>
+                          </div>
+                        )}
+                        {selectedLead.form_data.streetAddress && (
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Street Address:</span>
+                            <span className="text-white text-right max-w-[60%]">{selectedLead.form_data.streetAddress}</span>
+                          </div>
+                        )}
+                        {selectedLead.form_data.acres && (
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Acres:</span>
+                            <span className="text-white font-semibold">{selectedLead.form_data.acres}</span>
+                          </div>
+                        )}
+                        {selectedLead.form_data.namesOnDeed && (
+                          <div className="flex justify-between border-t border-slate-700/50 pt-2 mt-2">
+                            <span className="text-slate-400">Names on Deed:</span>
+                            <span className="text-white text-right max-w-[60%]">{selectedLead.form_data.namesOnDeed}</span>
+                          </div>
+                        )}
+                        {selectedLead.form_data.email && (
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Email:</span>
+                            <a href={`mailto:${selectedLead.form_data.email}`} className="text-blue-400 hover:text-blue-300 underline text-right max-w-[60%] truncate">{selectedLead.form_data.email}</a>
+                          </div>
+                        )}
+                        {selectedLead.form_data.phone && (
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Phone:</span>
+                            <a href={`tel:${selectedLead.form_data.phone}`} className="text-blue-400 hover:text-blue-300 underline">{selectedLead.form_data.phone}</a>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Projected Revenue */}
                   <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
