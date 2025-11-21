@@ -15,7 +15,6 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
   const [mentionSearch, setMentionSearch] = useState('');
   const [cursorPosition, setCursorPosition] = useState(0);
   const [replyingTo, setReplyingTo] = useState(null);
-  const [editingNote, setEditingNote] = useState(null);
 
   useEffect(() => {
     fetchNotes();
@@ -41,7 +40,6 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
     setNewNote(value);
     setCursorPosition(position);
 
-    // Check if @ was typed
     const textBeforeCursor = value.substring(0, position);
     const lastAtIndex = textBeforeCursor.lastIndexOf('@');
 
@@ -86,13 +84,19 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
     return mentions;
   };
 
+  const handleReply = (note) => {
+    setReplyingTo(note);
+    const replyText = `Replying to ${note.user?.full_name || 'Unknown'}:\n> ${note.content.split('\n')[0]}...\n\n`;
+    setNewNote(replyText);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!newNote.trim()) return;
 
     const mentionedUsers = extractMentions(newNote);
 
-    const { data, error} = await supabase
+    const { data, error } = await supabase
       .from('lead_notes')
       .insert([{
         lead_id: leadId,
@@ -103,7 +107,6 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
       .select();
 
     if (!error && mentionedUsers.length > 0) {
-      // Create notifications via API (sends email automatically)
       for (const userId of mentionedUsers) {
         await fetch('/api/notifications/create', {
           method: 'POST',
@@ -142,19 +145,57 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
     m.users.full_name.toLowerCase().includes(mentionSearch.toLowerCase())
   ) || [];
 
+  const renderNoteContent = (content) => {
+    const lines = content.split('\n');
+    return lines.map((line, i) => {
+      if (line.startsWith('> ')) {
+        return (
+          <div key={i} className="border-l-4 border-blue-500/50 pl-3 py-1 mb-2 bg-blue-500/5 rounded">
+            <p className="text-slate-400 italic text-sm">{line.substring(2)}</p>
+          </div>
+        );
+      }
+      if (line.startsWith('Replying to ')) {
+        return <p key={i} className="text-blue-400 font-semibold text-sm mb-1">{line}</p>;
+      }
+      return <p key={i} className="text-slate-200">{line}</p>;
+    });
+  };
+
   return (
     <div className="space-y-6">
-      {/* New Note Form */}
       <form onSubmit={handleSubmit} className="relative">
+        {replyingTo && (
+          <div className="mb-3 p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <p className="text-sm font-medium text-blue-400 mb-1">Replying to {replyingTo.user?.full_name}</p>
+                <p className="text-sm text-slate-300 line-clamp-2">{replyingTo.content}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setReplyingTo(null);
+                  setNewNote('');
+                }}
+                className="text-blue-400 hover:text-blue-300 ml-3"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
+
         <textarea
           value={newNote}
           onChange={handleNoteChange}
           placeholder="Add a note... Type @ to mention a teammate"
-          rows={4}
+          rows={5}
           className="w-full bg-slate-800 border border-slate-600 rounded-xl px-5 py-4 text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 resize-none text-base"
         />
 
-        {/* @mention dropdown */}
         {showMentions && filteredMembers.length > 0 && (
           <div className="absolute z-10 mt-2 bg-slate-700 border border-slate-600 rounded-xl shadow-2xl max-h-60 overflow-y-auto w-80">
             {filteredMembers.map((member) => (
@@ -164,7 +205,7 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
                 onClick={() => insertMention(member.users)}
                 className="w-full text-left px-4 py-3 hover:bg-slate-600 text-white text-sm flex items-center gap-3 transition-colors"
               >
-                <div className="w-8 h-8 rounded-full bg-purple-600 flex items-center justify-center font-semibold">
+                <div className="w-8 h-8 rounded-full bg-purple-600 flex items-center justify-center font-semibold text-sm">
                   {member.users.full_name.charAt(0).toUpperCase()}
                 </div>
                 <div>
@@ -176,22 +217,35 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
           </div>
         )}
 
-        <button
-          type="submit"
-          className="mt-3 bg-purple-600 hover:bg-purple-500 text-white px-6 py-3 rounded-xl text-sm font-semibold transition-colors shadow-lg shadow-purple-600/20"
-        >
-          Add Note
-        </button>
+        <div className="mt-3 flex gap-3">
+          <button
+            type="submit"
+            className="bg-purple-600 hover:bg-purple-500 text-white px-6 py-3 rounded-xl text-sm font-semibold transition-colors shadow-lg shadow-purple-600/20"
+          >
+            {replyingTo ? 'Post Reply' : 'Add Note'}
+          </button>
+          {replyingTo && (
+            <button
+              type="button"
+              onClick={() => {
+                setReplyingTo(null);
+                setNewNote('');
+              }}
+              className="bg-slate-700 hover:bg-slate-600 text-white px-6 py-3 rounded-xl text-sm font-semibold transition-colors"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </form>
 
-      {/* Notes List */}
       <div className="space-y-4">
         {notes.map((note) => (
-          <div key={note.id} className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden">
-            <div className="p-5">
-              <div className="flex items-start justify-between mb-3">
+          <div key={note.id} className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden hover:border-slate-600 transition-colors">
+            <div className="p-6">
+              <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-600 to-blue-600 flex items-center justify-center font-bold text-white shadow-lg">
+                  <div className="w-11 h-11 rounded-full bg-gradient-to-br from-purple-600 to-blue-600 flex items-center justify-center font-bold text-white shadow-lg text-lg">
                     {note.user?.full_name?.charAt(0).toUpperCase() || 'U'}
                   </div>
                   <div>
@@ -213,7 +267,7 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
                 {note.user_id === currentUserId && (
                   <button
                     onClick={() => handleDelete(note.id)}
-                    className="text-slate-500 hover:text-red-400 transition-colors p-2 hover:bg-slate-700 rounded-lg"
+                    className="text-slate-500 hover:text-red-400 transition-colors p-2 hover:bg-slate-700/50 rounded-lg"
                     title="Delete note"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -223,20 +277,32 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
                 )}
               </div>
 
-              <p className="text-slate-200 text-base whitespace-pre-wrap leading-relaxed">{note.content}</p>
+              <div className="text-base whitespace-pre-wrap leading-relaxed mb-4">
+                {renderNoteContent(note.content)}
+              </div>
 
-
+              <div className="flex items-center gap-4 pt-3 border-t border-slate-700/50">
+                <button
+                  onClick={() => handleReply(note)}
+                  className="text-slate-400 hover:text-purple-400 text-sm font-medium flex items-center gap-2 transition-colors hover:bg-slate-700/30 px-3 py-2 rounded-lg"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                  </svg>
+                  Reply
+                </button>
+              </div>
             </div>
           </div>
         ))}
 
         {notes.length === 0 && (
-          <div className="text-center py-16 bg-slate-800/50 border border-slate-700 rounded-xl">
-            <svg className="w-16 h-16 text-slate-600 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div className="text-center py-20 bg-slate-800/50 border border-slate-700 rounded-xl">
+            <svg className="w-20 h-20 text-slate-600 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
             </svg>
-            <p className="text-slate-400 text-base font-medium">No notes yet</p>
-            <p className="text-slate-500 text-sm mt-1">Start a conversation about this lead</p>
+            <p className="text-slate-400 text-lg font-medium">No notes yet</p>
+            <p className="text-slate-500 text-sm mt-2">Start a conversation about this lead</p>
           </div>
         )}
       </div>
