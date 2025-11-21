@@ -26,14 +26,9 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
       .from('lead_notes')
       .select(`
         *,
-        user:users(full_name, email),
-        replies:lead_notes!parent_note_id(
-          *,
-          user:users(full_name, email)
-        )
+        user:users(full_name, email)
       `)
       .eq('lead_id', leadId)
-      .is('parent_note_id', null)
       .order('created_at', { ascending: false });
 
     if (!error) setNotes(data || []);
@@ -97,14 +92,13 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
 
     const mentionedUsers = extractMentions(newNote);
 
-    const { data, error } = await supabase
+    const { data, error} = await supabase
       .from('lead_notes')
       .insert([{
         lead_id: leadId,
         user_id: currentUserId,
         content: newNote,
-        mentioned_users: mentionedUsers,
-        parent_note_id: replyingTo
+        mentioned_users: mentionedUsers
       }])
       .select();
 
@@ -152,19 +146,6 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
     <div className="space-y-6">
       {/* New Note Form */}
       <form onSubmit={handleSubmit} className="relative">
-        {replyingTo && (
-          <div className="mb-3 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg flex items-center justify-between">
-            <span className="text-sm text-blue-400">Replying to note...</span>
-            <button
-              type="button"
-              onClick={() => setReplyingTo(null)}
-              className="text-blue-400 hover:text-blue-300"
-            >
-              ✕
-            </button>
-          </div>
-        )}
-
         <textarea
           value={newNote}
           onChange={handleNoteChange}
@@ -199,7 +180,7 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
           type="submit"
           className="mt-3 bg-purple-600 hover:bg-purple-500 text-white px-6 py-3 rounded-xl text-sm font-semibold transition-colors shadow-lg shadow-purple-600/20"
         >
-          {replyingTo ? 'Post Reply' : 'Add Note'}
+          Add Note
         </button>
       </form>
 
@@ -244,55 +225,7 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
 
               <p className="text-slate-200 text-base whitespace-pre-wrap leading-relaxed">{note.content}</p>
 
-              <div className="mt-4 flex items-center gap-4">
-                <button
-                  onClick={() => setReplyingTo(note.id)}
-                  className="text-slate-400 hover:text-purple-400 text-sm font-medium flex items-center gap-2 transition-colors"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-                  </svg>
-                  Reply
-                </button>
-              </div>
 
-              {/* Replies */}
-              {note.replies && note.replies.length > 0 && (
-                <div className="mt-4 pt-4 border-t border-slate-700 space-y-3">
-                  {note.replies.map((reply) => (
-                    <div key={reply.id} className="flex gap-3">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center font-bold text-white text-sm flex-shrink-0">
-                        {reply.user?.full_name?.charAt(0).toUpperCase() || 'U'}
-                      </div>
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="font-medium text-white text-sm">{reply.user?.full_name || 'Unknown'}</span>
-                          <span className="text-slate-500 text-xs">
-                            {new Date(reply.created_at).toLocaleDateString('en-US', {
-                              month: 'short',
-                              day: 'numeric',
-                              hour: 'numeric',
-                              minute: '2-digit'
-                            })}
-                          </span>
-                          {reply.user_id === currentUserId && (
-                            <button
-                              onClick={() => handleDelete(reply.id)}
-                              className="ml-auto text-slate-500 hover:text-red-400 transition-colors"
-                              title="Delete reply"
-                            >
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                              </svg>
-                            </button>
-                          )}
-                        </div>
-                        <p className="text-slate-300 text-sm whitespace-pre-wrap">{reply.content}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           </div>
         ))}
