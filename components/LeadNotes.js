@@ -101,17 +101,22 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
       .select();
 
     if (!error && mentionedUsers.length > 0) {
-      // Create notifications
+      // Create notifications via API (sends email automatically)
       for (const userId of mentionedUsers) {
-        await supabase.from('notifications').insert([{
-          user_id: userId,
-          type: 'mention',
-          title: 'You were mentioned',
-          message: `You were mentioned in a note`,
-          lead_id: leadId,
-          note_id: data[0].id,
-          from_user_id: currentUserId
-        }]);
+        await fetch('/api/notifications/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId,
+            fromUserId: currentUserId,
+            type: 'mention',
+            title: 'You were mentioned in a note',
+            message: 'You were mentioned in a note on a lead',
+            link: `/dashboard?lead=${leadId}`,
+            notePreview: newNote,
+            sendEmail: true
+          })
+        });
       }
     }
 
