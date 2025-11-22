@@ -75,6 +75,7 @@ export default function DashboardPage() {
   const [accountOpen, setAccountOpen] = useState(false);
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
+  const [notificationToast, setNotificationToast] = useState({ show: false, message: '', type: 'success' });
   const [zoomToLead, setZoomToLead] = useState(null);
   const [clickTimeout, setClickTimeout] = useState(null);
 

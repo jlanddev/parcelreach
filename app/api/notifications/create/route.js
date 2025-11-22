@@ -69,7 +69,7 @@ export async function POST(request) {
 
     // Send email if requested
     let emailResult = null;
-    if (sendEmail && (type === 'mention' || type === 'lead_assigned')) {
+    if (sendEmail && (type === 'mention' || type === 'lead_assigned' || type === 'team_join' || type === 'lead_added')) {
       try {
         // Get user details
         const { data: toUser } = await supabase
@@ -91,7 +91,7 @@ export async function POST(request) {
               toName: toUser.full_name || 'there',
               fromName: fromUser?.full_name || 'A team member',
               notePreview: notePreview || message,
-              link: `${process.env.NEXT_PUBLIC_BASE_URL || 'https://parcelreach.ai'}${link}`
+              link: 'https://parcelreach.ai/dashboard'
             });
           } else if (type === 'lead_assigned') {
             const { sendLeadAssignmentNotification } = await import('@/lib/email');
@@ -108,7 +108,36 @@ export async function POST(request) {
               leadName,
               location,
               acres: acres || 'N/A',
-              link: `${process.env.NEXT_PUBLIC_BASE_URL || 'https://parcelreach.ai'}${link}`
+              link: 'https://parcelreach.ai/dashboard'
+            });
+          } else if (type === 'team_join') {
+            const { sendTeamJoinNotification } = await import('@/lib/email');
+            // Parse team join message (format: "Name has joined TeamName")
+            const parts = message.split(' has joined ');
+            const memberName = parts[0] || 'A new member';
+            const teamName = parts[1] || 'your team';
+
+            emailResult = await sendTeamJoinNotification({
+              toEmail: toUser.email,
+              toName: toUser.full_name || 'there',
+              memberName,
+              teamName
+            });
+          } else if (type === 'lead_added') {
+            const { sendLeadAddedNotification } = await import('@/lib/email');
+            // Parse lead details from message (format: "Name - Acres in Location")
+            const parts = message.split(' - ');
+            const leadName = parts[0] || 'Property';
+            const acresAndLocation = parts[1] || '';
+            const [acres, ...locationParts] = acresAndLocation.split(' in ');
+            const location = locationParts.join(' in ') || 'Unknown';
+
+            emailResult = await sendLeadAddedNotification({
+              toEmail: toUser.email,
+              toName: toUser.full_name || 'there',
+              leadName,
+              location,
+              acres: acres || 'N/A'
             });
           }
         }

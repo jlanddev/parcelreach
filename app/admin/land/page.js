@@ -168,9 +168,8 @@ export default function LandLeadsAdminPage() {
                 body: JSON.stringify({
                   userId: member.user_id,
                   type: 'lead_assigned',
-                  title: 'New Lead Assigned',
-                  message: `${leadName} - ${acres} acres in ${location}`,
-                  link: '/dashboard',
+                  title: 'New Lead',
+                  message: `${leadName} - ${acres} in ${location}`,
                   sendEmail: true
                 })
               });
@@ -770,6 +769,50 @@ export default function LandLeadsAdminPage() {
         .select();
 
       if (leadError) throw leadError;
+
+      // Notify all teams about the new lead
+      if (leadData && leadData.length > 0) {
+        const newLeadData = leadData[0];
+        const leadName = newLeadData.full_name || 'Property';
+        const location = newLeadData.property_county || 'Unknown';
+        const acres = newLeadData.acres || 'N/A';
+
+        // Get all teams
+        const { data: allTeams } = await supabase
+          .from('teams')
+          .select('id');
+
+        if (allTeams && allTeams.length > 0) {
+          for (const team of allTeams) {
+            // Get all team members
+            const { data: teamMembers } = await supabase
+              .from('team_members')
+              .select('user_id')
+              .eq('team_id', team.id);
+
+            if (teamMembers && teamMembers.length > 0) {
+              // Notify each team member
+              for (const member of teamMembers) {
+                try {
+                  await fetch('/api/notifications/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      userId: member.user_id,
+                      type: 'lead_added',
+                      title: 'New Lead Available',
+                      message: `${leadName} - ${acres} in ${location}`,
+                      sendEmail: true
+                    })
+                  });
+                } catch (err) {
+                  console.error('Failed to send notification:', err);
+                }
+              }
+            }
+          }
+        }
+      }
 
       // Reset form
       setNewLead({

@@ -94,6 +94,54 @@ export function useNotifications(userId) {
     }
   };
 
+  // Request notification permission on mount
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // Show browser notification with sound
+  const showNotification = (notification) => {
+    try {
+      // Play sound using Web Audio API
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+
+      oscillator.frequency.value = 800;
+      oscillator.type = 'sine';
+
+      gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+
+      oscillator.start(audioContext.currentTime);
+      oscillator.stop(audioContext.currentTime + 0.5);
+
+      // Show browser notification if permission granted
+      if ('Notification' in window && Notification.permission === 'granted') {
+        const browserNotif = new Notification(notification.title, {
+          body: notification.message,
+          icon: '/parcelreach-logo.png',
+          badge: '/parcelreach-logo.png',
+          tag: notification.id,
+          requireInteraction: false,
+          silent: false
+        });
+
+        browserNotif.onclick = () => {
+          window.focus();
+          browserNotif.close();
+        };
+      }
+    } catch (error) {
+      console.error('Error showing notification:', error);
+    }
+  };
+
   // Subscribe to real-time notifications
   useEffect(() => {
     if (!userId) return;
@@ -114,6 +162,7 @@ export function useNotifications(userId) {
         (payload) => {
           setNotifications(prev => [payload.new, ...prev]);
           setUnreadCount(prev => prev + 1);
+          showNotification(payload.new);
         }
       )
       .subscribe();

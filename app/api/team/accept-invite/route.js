@@ -157,6 +157,40 @@ export async function POST(request) {
       console.error('Error updating invitation:', updateError);
     }
 
+    // Get team owner and new member details for notification
+    const { data: team } = await supabase
+      .from('teams')
+      .select('owner_id, name')
+      .eq('id', invitation.team_id)
+      .single();
+
+    const { data: newMember } = await supabase
+      .from('users')
+      .select('full_name, email')
+      .eq('id', userId)
+      .single();
+
+    // Notify team owner that someone joined
+    if (team && team.owner_id && newMember) {
+      try {
+        await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'https://parcelreach.ai'}/api/notifications/create`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: team.owner_id,
+            fromUserId: userId,
+            type: 'team_join',
+            title: 'New Team Member',
+            message: `${newMember.full_name || newMember.email} has joined ${team.name}`,
+            sendEmail: true
+          })
+        });
+      } catch (notifError) {
+        console.error('Failed to send team join notification:', notifError);
+        // Don't fail the request if notification fails
+      }
+    }
+
     return Response.json({
       success: true,
       message: 'Successfully joined team'
