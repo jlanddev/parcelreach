@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { sendTeamInviteEmail } from '@/lib/email';
+import { logError } from '@/lib/error-logger';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -40,7 +41,12 @@ export async function POST(request) {
     console.log('🔍 API DEBUG: Team query result:', { team, teamError });
 
     if (teamError || !team) {
-      console.error('❌ API ERROR: Team not found. TeamId:', teamId, 'Error:', teamError);
+      logError('TEAM_INVITE_TEAM_NOT_FOUND', teamError || new Error('Team not found'), {
+        teamId,
+        email,
+        url: '/api/team/invite',
+        method: 'POST'
+      });
       return Response.json(
         { error: `Team not found (ID: ${teamId})` },
         { status: 404 }
@@ -88,7 +94,12 @@ export async function POST(request) {
       .single();
 
     if (inviteError) {
-      console.error('Error creating invitation:', inviteError);
+      logError('TEAM_INVITE_CREATE_FAILED', inviteError, {
+        teamId,
+        email,
+        url: '/api/team/invite',
+        method: 'POST'
+      });
       return Response.json(
         { error: 'Failed to create invitation' },
         { status: 500 }
@@ -112,7 +123,10 @@ export async function POST(request) {
     });
 
   } catch (error) {
-    console.error('Error in team invite:', error);
+    logError('TEAM_INVITE_UNEXPECTED_ERROR', error, {
+      url: '/api/team/invite',
+      method: 'POST'
+    });
     return Response.json(
       { error: 'Internal server error' },
       { status: 500 }

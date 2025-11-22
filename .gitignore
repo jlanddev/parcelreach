@@ -35,3 +35,6 @@ next-env.d.ts
 
 # Local Netlify folder
 .netlify
+
+# Error logs
+error-log.json
