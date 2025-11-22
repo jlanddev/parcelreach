@@ -42,24 +42,30 @@ export async function POST(request) {
 
     // If team doesn't exist, create it automatically
     if (teamError || !team) {
-      console.log('⚠️  Team not found, creating it automatically');
+      console.log('⚠️  Team not found, creating it automatically for team ID:', teamId);
 
-      // Get the team owner from team_members
-      const { data: teamMember } = await supabase
+      // Get ANY team member (not just owner) from team_members
+      const { data: teamMembers, error: memberError } = await supabase
         .from('team_members')
-        .select('user_id, users(email)')
+        .select('user_id, role, users(email)')
         .eq('team_id', teamId)
-        .eq('role', 'owner')
-        .single();
+        .limit(10);
 
-      if (teamMember) {
+      console.log('🔍 Found team members:', teamMembers, 'Error:', memberError);
+
+      if (teamMembers && teamMembers.length > 0) {
+        // Find owner or use first member
+        const owner = teamMembers.find(m => m.role === 'owner') || teamMembers[0];
+
+        console.log('👤 Using member as owner:', owner);
+
         // Create the missing team
         const { data: newTeam, error: createError } = await supabase
           .from('teams')
           .insert([{
             id: teamId,
-            name: `${teamMember.users?.email || 'Team'}'s Team`,
-            owner_id: teamMember.user_id,
+            name: `${owner.users?.email || 'Team'}'s Team`,
+            owner_id: owner.user_id,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           }])
@@ -70,26 +76,30 @@ export async function POST(request) {
           console.log('✅ Team created successfully:', newTeam);
           team = newTeam;
         } else {
+          console.error('❌ Failed to create team:', createError);
           logError('TEAM_INVITE_CREATE_TEAM_FAILED', createError, {
             teamId,
             email,
+            owner,
             url: '/api/team/invite',
             method: 'POST'
           });
           return Response.json(
-            { error: 'Failed to create team' },
+            { error: 'Failed to create team',  details: createError?.message },
             { status: 500 }
           );
         }
       } else {
-        logError('TEAM_INVITE_NO_OWNER_FOUND', new Error('No team owner found'), {
+        console.error('❌ No team members found for team:', teamId);
+        logError('TEAM_INVITE_NO_MEMBERS_FOUND', new Error('No team members found'), {
           teamId,
           email,
+          memberError,
           url: '/api/team/invite',
           method: 'POST'
         });
         return Response.json(
-          { error: 'Team configuration error' },
+          { error: 'Team has no members. Cannot create team automatically.' },
           { status: 500 }
         );
       }
