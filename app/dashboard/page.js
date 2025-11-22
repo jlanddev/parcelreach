@@ -152,6 +152,9 @@ export default function DashboardPage() {
           .eq('user_id', user.id);
 
         if (teams && teams.length > 0) {
+          console.log('🔍 DEBUG: Team data loaded:', teams[0]);
+          console.log('🔍 DEBUG: Setting currentTeam to:', teams[0].teams);
+          console.log('🔍 DEBUG: Team ID:', teams[0].teams?.id);
           setCurrentTeam(teams[0].teams);
           loadTeamMembers(teams[0].team_id);
           fetchLeads(teams[0].team_id);
@@ -1868,18 +1871,25 @@ export default function DashboardPage() {
                   onClick={async () => {
                     if (inviteEmail && inviteEmail.trim()) {
                       try {
+                        console.log('🔍 DEBUG: Attempting to invite with currentTeam:', currentTeam);
+                        console.log('🔍 DEBUG: Team ID being sent:', currentTeam?.id);
+
                         if (!currentTeam?.id) {
                           throw new Error('No team found. Please refresh the page and try again.');
                         }
 
+                        const payload = {
+                          email: inviteEmail.trim().toLowerCase(),
+                          teamId: currentTeam.id,
+                          inviterName: currentUser?.user_metadata?.full_name || currentUser?.email || 'Team member'
+                        };
+
+                        console.log('🔍 DEBUG: Sending invite payload:', payload);
+
                         const response = await fetch('/api/team/invite', {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            email: inviteEmail.trim().toLowerCase(),
-                            teamId: currentTeam.id,
-                            inviterName: currentUser?.user_metadata?.full_name || currentUser?.email || 'Team member'
-                          })
+                          body: JSON.stringify(payload)
                         });
 
                         const result = await response.json();
