@@ -1,7 +1,7 @@
 #!/bin/bash
 
-echo "🧪 Auto-Testing ParcelReach Notifications"
-echo "========================================="
+echo "Auto-Testing ParcelReach Notifications"
+echo "======================================="
 echo ""
 
 # Use the known team ID from previous tests
@@ -17,9 +17,9 @@ echo "   Test Email: $TEST_USER_EMAIL"
 echo ""
 
 # Test 1: @Mention Notification
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "TEST 1: 📢 @Mention Notification"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "==========================================="
+echo "TEST 1: @Mention Notification"
+echo "==========================================="
 echo ""
 
 # For now, we'll use a placeholder user ID - in production this would be looked up
@@ -31,7 +31,7 @@ RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST "https://parcelreach.
   -d '{
     "userId": "'$MOCK_USER_ID'",
     "type": "mention",
-    "title": "📢 You were mentioned",
+    "title": "You were mentioned",
     "message": "Test User mentioned you in a note",
     "notePreview": "@you This is a test mention notification",
     "sendEmail": true
@@ -47,21 +47,21 @@ echo "$BODY" | jq . 2>/dev/null || echo "$BODY"
 echo ""
 
 if [ "$HTTP_STATUS" = "200" ]; then
-  echo "✅ API endpoint is working!"
+  echo "SUCCESS: API endpoint is working!"
   EMAIL_SENT=$(echo "$BODY" | jq -r '.emailSent' 2>/dev/null)
   echo "   Email sent: $EMAIL_SENT"
 else
-  echo "❌ API test failed"
+  echo "FAILED: API test failed"
   echo ""
   echo "This is expected if the user ID doesn't exist."
   echo "The API endpoint structure is correct though!"
 fi
 
 echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "==========================================="
 echo ""
-echo "📋 Next Steps:"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Next Steps:"
+echo "==========================================="
 echo ""
 echo "To test with a real user:"
 echo ""
