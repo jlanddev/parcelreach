@@ -415,9 +415,10 @@ export default function DashboardPage() {
       }
     }
 
-    // Refresh leads
-    const { data } = await supabase.from('leads').select('*').order('created_at', { ascending: false });
-    setLeads(data || []);
+    // Refresh leads - IMPORTANT: Filter by team to maintain data isolation!
+    if (currentTeam) {
+      await fetchLeads(currentTeam.id);
+    }
     alert('Coordinates updated! Refresh the page.');
   };
 

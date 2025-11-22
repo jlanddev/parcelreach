@@ -55,21 +55,59 @@ export async function POST(request) {
       );
     }
 
-    // Get user by email
-    const { data: users, error: userError } = await supabase
+    // Get user by email or create if doesn't exist
+    let { data: users, error: userError } = await supabase
       .from('users')
-      .select('id')
+      .select('id, email')
       .eq('email', invitation.email.toLowerCase())
       .single();
 
-    if (userError || !users) {
-      return Response.json(
-        { error: 'User not found. Please create an account first.' },
-        { status: 404 }
-      );
-    }
+    let userId;
 
-    const userId = users.id;
+    if (userError || !users) {
+      // User record doesn't exist yet - get the auth user ID and create it
+      const { data: { users: authUsers }, error: authError } = await supabase.auth.admin.listUsers();
+
+      if (authError) {
+        console.error('Error listing auth users:', authError);
+        return Response.json(
+          { error: 'Failed to verify user account' },
+          { status: 500 }
+        );
+      }
+
+      const authUser = authUsers.find(u => u.email.toLowerCase() === invitation.email.toLowerCase());
+
+      if (!authUser) {
+        return Response.json(
+          { error: 'No account found with this email. Please create an account first.' },
+          { status: 404 }
+        );
+      }
+
+      // Create user record in users table
+      const { data: newUser, error: createUserError } = await supabase
+        .from('users')
+        .insert([{
+          id: authUser.id,
+          email: authUser.email,
+          full_name: authUser.user_metadata?.full_name || authUser.email.split('@')[0]
+        }])
+        .select()
+        .single();
+
+      if (createUserError) {
+        console.error('Error creating user record:', createUserError);
+        return Response.json(
+          { error: 'Failed to create user record' },
+          { status: 500 }
+        );
+      }
+
+      userId = newUser.id;
+    } else {
+      userId = users.id;
+    }
 
     // Check if user is already a team member
     const { data: existingMember } = await supabase

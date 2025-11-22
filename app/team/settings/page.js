@@ -32,26 +32,22 @@ export default function TeamSettingsPage() {
 
   async function loadTeamData(userId) {
     try {
-      // Get user's team
-      const { data: userData, error: userError } = await supabase
-        .from('users')
-        .select('id, team_id, full_name, email')
-        .eq('id', userId)
-        .single();
+      // Get user's team through team_members junction table
+      const { data: teamMemberships, error: memberError } = await supabase
+        .from('team_members')
+        .select('team_id, teams(*)')
+        .eq('user_id', userId);
 
-      if (userError || !userData || !userData.team_id) {
+      if (memberError || !teamMemberships || teamMemberships.length === 0) {
         setLoading(false);
         return;
       }
 
-      // Get team details
-      const { data: teamData, error: teamError } = await supabase
-        .from('teams')
-        .select('*')
-        .eq('id', userData.team_id)
-        .single();
+      // Use the first team (users can be in multiple teams)
+      const userTeamId = teamMemberships[0].team_id;
+      const teamData = teamMemberships[0].teams;
 
-      if (teamError || !teamData) {
+      if (!teamData) {
         setLoading(false);
         return;
       }
@@ -71,7 +67,7 @@ export default function TeamSettingsPage() {
             full_name
           )
         `)
-        .eq('team_id', userData.team_id);
+        .eq('team_id', userTeamId);
 
       if (!membersError && members) {
         setTeamMembers(members);
@@ -82,7 +78,7 @@ export default function TeamSettingsPage() {
         const { data: invites, error: invitesError } = await supabase
           .from('team_invitations')
           .select('*')
-          .eq('team_id', userData.team_id)
+          .eq('team_id', userTeamId)
           .eq('accepted', false)
           .gt('expires_at', new Date().toISOString());
 

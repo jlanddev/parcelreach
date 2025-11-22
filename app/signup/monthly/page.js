@@ -1,15 +1,18 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import Image from 'next/image';
 
-export default function MonthlySignupPage() {
+function MonthlySignupContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [passwordStrength, setPasswordStrength] = useState(0);
+  const [inviteToken, setInviteToken] = useState(null);
+  const [invitation, setInvitation] = useState(null);
 
   const [formData, setFormData] = useState({
     organizationName: '',
@@ -18,6 +21,33 @@ export default function MonthlySignupPage() {
     password: '',
     confirmPassword: ''
   });
+
+  // Check for invite token on mount
+  useEffect(() => {
+    const token = searchParams.get('inviteToken');
+    if (token) {
+      setInviteToken(token);
+      loadInvitation(token);
+    }
+  }, [searchParams]);
+
+  async function loadInvitation(token) {
+    try {
+      const { data: invite, error } = await supabase
+        .from('team_invitations')
+        .select('*, teams(name)')
+        .eq('token', token)
+        .single();
+
+      if (!error && invite && !invite.accepted && new Date(invite.expires_at) > new Date()) {
+        setInvitation(invite);
+        // Pre-fill email if invited
+        setFormData(prev => ({ ...prev, email: invite.email }));
+      }
+    } catch (err) {
+      console.error('Error loading invitation:', err);
+    }
+  }
 
   // Calculate password strength
   useEffect(() => {
@@ -94,33 +124,52 @@ export default function MonthlySignupPage() {
 
       if (userError) throw userError;
 
-      // Create team/organization with monthly subscription
-      const { data: teamData, error: teamError } = await supabase
-        .from('teams')
-        .insert([{
-          name: formData.organizationName,
-          subscription_type: 'monthly',
-          owner_id: authData.user.id,
-          created_at: new Date().toISOString()
-        }])
-        .select()
-        .single();
+      // If user was invited to a team, join that team instead of creating new one
+      if (inviteToken && invitation) {
+        // Accept the invitation via API
+        const inviteResponse = await fetch('/api/team/accept-invite', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: inviteToken })
+        });
 
-      if (teamError) throw teamError;
+        const inviteResult = await inviteResponse.json();
 
-      // Create team member record
-      const { error: memberError } = await supabase
-        .from('team_members')
-        .insert([{
-          team_id: teamData.id,
-          user_id: authData.user.id,
-          role: 'owner'
-        }]);
+        if (!inviteResponse.ok) {
+          throw new Error(inviteResult.error || 'Failed to accept team invitation');
+        }
 
-      if (memberError) throw memberError;
+        // Redirect to dashboard with team welcome message
+        router.push('/dashboard?welcome=team');
+      } else {
+        // Create team/organization with monthly subscription
+        const { data: teamData, error: teamError } = await supabase
+          .from('teams')
+          .insert([{
+            name: formData.organizationName,
+            subscription_type: 'monthly',
+            owner_id: authData.user.id,
+            created_at: new Date().toISOString()
+          }])
+          .select()
+          .single();
 
-      // Redirect to dashboard
-      router.push('/dashboard');
+        if (teamError) throw teamError;
+
+        // Create team member record
+        const { error: memberError } = await supabase
+          .from('team_members')
+          .insert([{
+            team_id: teamData.id,
+            user_id: authData.user.id,
+            role: 'owner'
+          }]);
+
+        if (memberError) throw memberError;
+
+        // Redirect to dashboard
+        router.push('/dashboard');
+      }
 
     } catch (err) {
       console.error('Signup error:', err);
@@ -171,6 +220,15 @@ export default function MonthlySignupPage() {
           />
         </div>
 
+        {/* Team Invitation Message */}
+        {invitation && (
+          <div className="mb-6 p-4 bg-green-500/10 border border-green-500/20 rounded-lg">
+            <p className="text-green-400 text-sm">
+              You've been invited to join <strong>{invitation.teams?.name || 'a team'}</strong>
+            </p>
+          </div>
+        )}
+
         {error && (
           <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
             <p className="text-red-400 text-sm">{error}</p>
@@ -178,17 +236,19 @@ export default function MonthlySignupPage() {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Organization Name */}
-          <div>
-            <label className="block text-sm font-semibold text-slate-300 mb-2">Organization Name</label>
-            <input
-              type="text"
-              required
-              value={formData.organizationName}
-              onChange={(e) => setFormData(prev => ({ ...prev, organizationName: e.target.value }))}
-              className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white"
-            />
-          </div>
+          {/* Organization Name - Only show if NOT joining via invitation */}
+          {!invitation && (
+            <div>
+              <label className="block text-sm font-semibold text-slate-300 mb-2">Organization Name</label>
+              <input
+                type="text"
+                required={!invitation}
+                value={formData.organizationName}
+                onChange={(e) => setFormData(prev => ({ ...prev, organizationName: e.target.value }))}
+                className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white"
+              />
+            </div>
+          )}
 
           {/* Full Name */}
           <div>
@@ -210,9 +270,13 @@ export default function MonthlySignupPage() {
               required
               value={formData.email}
               onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-              className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white"
+              disabled={!!invitation}
+              className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white disabled:opacity-60 disabled:cursor-not-allowed"
               placeholder="you@example.com"
             />
+            {invitation && (
+              <p className="text-xs text-slate-400 mt-1">This email was invited to the team</p>
+            )}
           </div>
 
           {/* Password */}
@@ -285,5 +349,20 @@ export default function MonthlySignupPage() {
       </div>
     </div>
     </>
+  );
+}
+
+export default function MonthlySignupPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+          <p className="text-slate-400">Loading...</p>
+        </div>
+      </div>
+    }>
+      <MonthlySignupContent />
+    </Suspense>
   );
 }
