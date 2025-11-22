@@ -109,12 +109,17 @@ export async function POST(request) {
     });
 
   } catch (error) {
+    console.error('Unexpected error in team invite:', error);
     logError('TEAM_INVITE_UNEXPECTED_ERROR', error, {
       url: '/api/team/invite',
       method: 'POST'
     });
     return Response.json(
-      { error: 'Internal server error' },
+      {
+        error: 'Internal server error',
+        details: error.message,
+        stack: error.stack?.split('\n')[0]
+      },
       { status: 500 }
     );
   }
