@@ -29,15 +29,20 @@ export async function POST(request) {
     }
 
     // Get team details
+    console.log('🔍 API DEBUG: Looking for team with ID:', teamId);
+
     const { data: team, error: teamError } = await supabase
       .from('teams')
       .select('name')
       .eq('id', teamId)
       .single();
 
+    console.log('🔍 API DEBUG: Team query result:', { team, teamError });
+
     if (teamError || !team) {
+      console.error('❌ API ERROR: Team not found. TeamId:', teamId, 'Error:', teamError);
       return Response.json(
-        { error: 'Team not found' },
+        { error: `Team not found (ID: ${teamId})` },
         { status: 404 }
       );
     }
