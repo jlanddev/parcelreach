@@ -46,7 +46,7 @@ export async function POST(request) {
     }
 
     // Create notification in database
-    const { data: notification, error: notifError } = await supabase
+    const { data: notification, error: notifError} = await supabase
       .from('notifications')
       .insert([{
         user_id: userId,
@@ -54,7 +54,6 @@ export async function POST(request) {
         type,
         title,
         message,
-        link,
         read: false
       }])
       .select()
