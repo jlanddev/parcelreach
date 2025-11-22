@@ -97,7 +97,7 @@ export async function POST(request) {
 
     const emailResult = await sendTeamInviteEmail({
       toEmail: email,
-      teamName: team.name,
+      teamName: 'the team',
       inviterName: inviterName || 'A team member',
       inviteLink
     });
