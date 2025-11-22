@@ -74,6 +74,7 @@ export async function POST(request) {
       .single();
 
     if (inviteError) {
+      console.error('Failed to create invitation:', inviteError);
       logError('TEAM_INVITE_CREATE_FAILED', inviteError, {
         teamId,
         email,
@@ -81,7 +82,12 @@ export async function POST(request) {
         method: 'POST'
       });
       return Response.json(
-        { error: 'Failed to create invitation' },
+        {
+          error: 'Failed to create invitation',
+          details: inviteError.message,
+          code: inviteError.code,
+          hint: inviteError.hint
+        },
         { status: 500 }
       );
     }
