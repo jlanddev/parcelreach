@@ -117,7 +117,6 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
             type: 'mention',
             title: 'You were mentioned in a note',
             message: 'You were mentioned in a note on a lead',
-            link: `/dashboard?lead=${leadId}`,
             notePreview: newNote,
             sendEmail: true
           })
