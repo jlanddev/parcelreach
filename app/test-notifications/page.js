@@ -41,7 +41,7 @@ export default function TestNotificationsPage() {
       const notifications = {
         mention: {
           type: 'mention',
-          title: '=â You were mentioned',
+          title: '=ï¿½ You were mentioned',
           message: 'John Doe mentioned you in a note on the Smith Property',
           notePreview: '@you Check out this amazing parcel! We should make an offer.',
           link: '/dashboard?lead=test-123'
@@ -54,13 +54,13 @@ export default function TestNotificationsPage() {
         },
         lead_assigned: {
           type: 'lead_assigned',
-          title: '<¯ New Lead Assigned',
+          title: '<ï¿½ New Lead Assigned',
           message: 'Johnson Ranch - 45 acres in Travis County, TX',
           link: '/dashboard?lead=test-456'
         },
         lead_added: {
           type: 'lead_added',
-          title: '=Í New Lead Available',
+          title: '=ï¿½ New Lead Available',
           message: 'New property added: Anderson Farm - 120 acres in Williamson County, TX',
           link: '/dashboard?lead=test-789'
         }
@@ -100,7 +100,7 @@ export default function TestNotificationsPage() {
     <div className="min-h-screen bg-slate-950 text-white p-8">
       <div className="max-w-4xl mx-auto">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold mb-2">>ê Notification Testing</h1>
+          <h1 className="text-3xl font-bold mb-2">Notification Testing</h1>
           <p className="text-slate-400">Test notifications and email delivery</p>
         </div>
 
@@ -153,10 +153,10 @@ export default function TestNotificationsPage() {
               </label>
               <div className="grid grid-cols-2 gap-3">
                 {[
-                  { value: 'mention', label: '=â @Mention', desc: 'User tagged in a note' },
+                  { value: 'mention', label: '=ï¿½ @Mention', desc: 'User tagged in a note' },
                   { value: 'team_join', label: '=K Team Join', desc: 'New team member' },
-                  { value: 'lead_assigned', label: '<¯ Lead Assigned', desc: 'Lead assigned to team' },
-                  { value: 'lead_added', label: '=Í Lead Added', desc: 'New lead in dashboard' }
+                  { value: 'lead_assigned', label: '<ï¿½ Lead Assigned', desc: 'Lead assigned to team' },
+                  { value: 'lead_added', label: '=ï¿½ Lead Added', desc: 'New lead in dashboard' }
                 ].map(type => (
                   <button
                     key={type.value}
