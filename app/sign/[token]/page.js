@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
-import { createClient } from '@supabase/supabase-js';
 import SignatureCanvas from 'react-signature-canvas';
 
 export default function SignaturePage() {
@@ -15,74 +14,35 @@ export default function SignaturePage() {
   const [error, setError] = useState(null);
   const [signed, setSigned] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [mounted, setMounted] = useState(false);
-
-  // Check if client-side JS is running
-  useEffect(() => {
-    console.log('Component mounted on client');
-    setMounted(true);
-    setError('CLIENT JS IS RUNNING - If you see this, JavaScript works!');
-    setTimeout(() => setError(null), 2000);
-  }, []);
 
   useEffect(() => {
     const loadSignatureRequest = async () => {
-    try {
-      console.log('Loading signature request for token:', token);
-      console.log('Supabase URL:', process.env.NEXT_PUBLIC_SUPABASE_URL);
-      console.log('Supabase Key exists:', !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+      try {
+        if (!token) {
+          throw new Error('No token provided');
+        }
 
-      if (!token) {
-        throw new Error('No token provided');
-      }
+        // Fetch signature request from API route
+        const response = await fetch(`/api/signature-request/${token}`);
+        const result = await response.json();
 
-      if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-        throw new Error('Supabase configuration missing');
-      }
+        if (!response.ok) {
+          throw new Error(result.error || 'Failed to load signature request');
+        }
 
-      // Create Supabase client
-      const supabase = createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-      );
+        const data = result.data;
 
-      const { data, error } = await supabase
-        .from('signature_requests')
-        .select('*')
-        .eq('token', token)
-        .single();
+        if (data.status === 'signed') {
+          setSigned(true);
+        }
 
-      console.log('Query result:', { data, error });
-
-      if (error) {
-        console.error('Supabase error:', error);
-        throw error;
-      }
-
-      if (!data) {
-        setError('Signature request not found');
+        setSigRequest(data);
+      } catch (err) {
+        console.error('Error loading signature request:', err);
+        setError(err.message || 'Failed to load signature request');
+      } finally {
         setLoading(false);
-        return;
       }
-
-      if (data.status === 'signed') {
-        setSigned(true);
-      }
-
-      if (new Date(data.expires_at) < new Date()) {
-        setError('This signature request has expired');
-        setLoading(false);
-        return;
-      }
-
-      console.log('Signature request loaded successfully:', data);
-      setSigRequest(data);
-    } catch (err) {
-      console.error('Error loading signature request:', err);
-      setError(err?.message || 'Failed to load signature request');
-    } finally {
-      setLoading(false);
-    }
     };
 
     loadSignatureRequest();
@@ -103,33 +63,18 @@ export default function SignaturePage() {
     try {
       const signatureData = sigPad.current.toDataURL();
 
-      // Create Supabase client
-      const supabase = createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-      );
+      // Submit signature via API route
+      const response = await fetch(`/api/signature-request/${token}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ signatureData })
+      });
 
-      // Update signature request with seller signature
-      const { error } = await supabase
-        .from('signature_requests')
-        .update({
-          seller_signature: signatureData,
-          seller_signed_at: new Date().toISOString(),
-          status: 'signed'
-        })
-        .eq('token', token);
+      const result = await response.json();
 
-      if (error) throw error;
-
-      // Update lead contract status
-      await supabase
-        .from('team_lead_data')
-        .update({
-          contract_status: 'signed',
-          contract_signed_date: new Date().toISOString()
-        })
-        .eq('lead_id', sigRequest.lead_id)
-        .eq('team_id', sigRequest.team_id);
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to submit signature');
+      }
 
       setSigned(true);
     } catch (err) {
