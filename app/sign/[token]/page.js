@@ -1,13 +1,11 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
-import SignatureCanvas from 'react-signature-canvas';
 
 export default function SignaturePage() {
   const params = useParams();
   const token = params.token;
-  const sigPad = useRef(null);
 
   const [loading, setLoading] = useState(true);
   const [sigRequest, setSigRequest] = useState(null);
@@ -15,6 +13,9 @@ export default function SignaturePage() {
   const [signed, setSigned] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [debugInfo, setDebugInfo] = useState([]);
+  const [signatureName, setSignatureName] = useState('');
+  const [signatureDate, setSignatureDate] = useState(new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }));
+  const [showSignatureModal, setShowSignatureModal] = useState(false);
 
   const addDebug = (msg) => {
     setDebugInfo(prev => [...prev, `${new Date().toISOString().split('T')[1].split('.')[0]} - ${msg}`]);
@@ -66,26 +67,25 @@ export default function SignaturePage() {
     loadSignatureRequest();
   }, [token]);
 
-  const clearSignature = () => {
-    sigPad.current.clear();
-  };
-
   const handleSubmit = async () => {
-    if (sigPad.current.isEmpty()) {
-      alert('Please provide your signature');
+    if (!signatureName || signatureName.trim() === '') {
+      alert('Please enter your signature');
       return;
     }
 
     setSubmitting(true);
 
     try {
-      const signatureData = sigPad.current.toDataURL();
+      const signatureData = {
+        name: signatureName,
+        date: signatureDate
+      };
 
       // Submit signature via API route
       const response = await fetch(`/api/signature-request/${token}/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ signatureData })
+        body: JSON.stringify({ signatureData: JSON.stringify(signatureData) })
       });
 
       const result = await response.json();
@@ -162,38 +162,81 @@ export default function SignaturePage() {
 
         {/* Signature Section */}
         <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-6">
-          <h2 className="text-xl font-bold text-white mb-4">Sign Agreement</h2>
+          <h2 className="text-xl font-bold text-white mb-6">Complete Your Signature</h2>
 
-          <div className="mb-4">
-            <label className="block text-slate-300 mb-2">Seller Signature</label>
-            <div className="border-2 border-slate-600 rounded bg-white">
-              <SignatureCanvas
-                ref={sigPad}
-                canvasProps={{
-                  className: 'w-full h-40'
-                }}
+          {/* Signature Name Field */}
+          <div className="mb-6">
+            <label className="block text-slate-300 mb-2 font-semibold">
+              Signature <span className="text-purple-400">*</span>
+            </label>
+            <div className="relative">
+              <input
+                type="text"
+                value={signatureName}
+                onChange={(e) => setSignatureName(e.target.value)}
+                placeholder="Type your full name"
+                className="w-full bg-white border-2 border-slate-600 rounded-lg px-4 py-3 text-gray-900 focus:border-purple-500 focus:outline-none"
+                style={{ fontFamily: "'Dancing Script', cursive", fontSize: '24px' }}
               />
+              {signatureName && (
+                <div className="mt-2 text-slate-400 text-sm flex items-center gap-2">
+                  <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  </svg>
+                  Signature added
+                </div>
+              )}
             </div>
-            <button
-              onClick={clearSignature}
-              className="mt-2 text-sm text-slate-400 hover:text-white"
-            >
-              Clear Signature
-            </button>
           </div>
 
-          <div className="bg-yellow-900/20 border border-yellow-500/50 rounded p-4 mb-4">
+          {/* Date Field */}
+          <div className="mb-6">
+            <label className="block text-slate-300 mb-2 font-semibold">
+              Date <span className="text-purple-400">*</span>
+            </label>
+            <div className="relative">
+              <input
+                type="text"
+                value={signatureDate}
+                readOnly
+                className="w-full bg-slate-700/50 border-2 border-slate-600 rounded-lg px-4 py-3 text-white cursor-not-allowed"
+              />
+              <div className="mt-2 text-slate-400 text-sm flex items-center gap-2">
+                <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                Today's date
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-yellow-900/20 border border-yellow-500/50 rounded-lg p-4 mb-6">
             <p className="text-yellow-200 text-sm">
-              By signing this document, you agree to the terms and conditions outlined in the Purchase Agreement above.
+              By clicking "Finish & Sign" below, you agree to the terms and conditions outlined in the Purchase Agreement above. This constitutes a legally binding electronic signature.
             </p>
           </div>
 
           <button
             onClick={handleSubmit}
-            disabled={submitting}
-            className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 rounded-lg transition-colors disabled:opacity-50"
+            disabled={submitting || !signatureName}
+            className="w-full bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-500 hover:to-purple-600 text-white font-bold py-4 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
-            {submitting ? 'Submitting...' : 'Submit Signature'}
+            {submitting ? (
+              <>
+                <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                Submitting...
+              </>
+            ) : (
+              <>
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Finish & Sign
+              </>
+            )}
           </button>
         </div>
       </div>
