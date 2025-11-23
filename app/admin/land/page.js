@@ -251,10 +251,11 @@ export default function LandLeadsAdminPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   userId: member.user_id,
-                  type: isPricedLead ? 'lead_available_purchase' : 'lead_assigned',
+                  type: 'lead_assigned', // Always use lead_assigned, email template determined by message format
                   title: title,
                   message: message,
-                  sendEmail: true
+                  sendEmail: true,
+                  isPricedLead: isPricedLead // Pass flag to determine email template
                 })
               });
             } catch (err) {

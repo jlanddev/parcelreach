@@ -30,7 +30,7 @@ export async function POST(request) {
       // Get lead details for notification and email
       const { data: lead } = await supabase
         .from('leads')
-        .select('property_county, property_state, acres, full_name, email, phone, street_address')
+        .select('property_county, property_state, county, state, acres, full_name, email, phone, street_address, address')
         .eq('id', leadId)
         .single();
 
@@ -87,13 +87,16 @@ export async function POST(request) {
 
       // Create notification for the purchase
       if (lead) {
+        const county = lead.property_county || lead.county || 'Unknown';
+        const state = lead.property_state || lead.state || 'Unknown';
+
         const { error: notifError } = await supabase
           .from('notifications')
           .insert([{
             user_id: userId,
             lead_id: leadId,
             title: 'Lead Purchased',
-            message: `You purchased a lead: ${lead.acres || 'N/A'} acres in ${lead.property_county}, ${lead.property_state} for $${price}`,
+            message: `You purchased a lead: ${lead.acres || 'N/A'} acres in ${county}, ${state} for $${price}`,
             type: 'lead_assigned',
             read: false
           }]);
@@ -107,7 +110,7 @@ export async function POST(request) {
         // Send purchase confirmation email
         if (user && user.email) {
           try {
-            const location = `${lead.property_county || 'Unknown'}, ${lead.property_state || 'Unknown'}`;
+            const location = `${county}, ${state}`;
             await sendLeadPurchaseConfirmation({
               toEmail: user.email,
               toName: user.full_name || 'there',
@@ -117,7 +120,7 @@ export async function POST(request) {
               price,
               email: lead.email || 'N/A',
               phone: lead.phone || 'N/A',
-              address: lead.street_address || 'N/A'
+              address: lead.street_address || lead.address || 'N/A'
             });
             console.log('✅ Purchase confirmation email sent');
           } catch (emailError) {

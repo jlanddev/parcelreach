@@ -34,7 +34,8 @@ export async function POST(request) {
       message,
       link,
       notePreview,
-      sendEmail = true
+      sendEmail = true,
+      isPricedLead = false
     } = body;
 
     // Validation
@@ -69,7 +70,7 @@ export async function POST(request) {
 
     // Send email if requested
     let emailResult = null;
-    if (sendEmail && (type === 'mention' || type === 'lead_assigned' || type === 'team_join' || type === 'lead_added' || type === 'lead_available_purchase')) {
+    if (sendEmail && (type === 'mention' || type === 'lead_assigned' || type === 'team_join' || type === 'lead_added')) {
       try {
         // Get user details
         const { data: toUser } = await supabase
@@ -94,22 +95,42 @@ export async function POST(request) {
               link: 'https://parcelreach.ai/dashboard'
             });
           } else if (type === 'lead_assigned') {
-            const { sendLeadAssignmentNotification } = await import('@/lib/email');
-            // Parse lead details from message (format: "Name - Acres in Location")
-            const parts = message.split(' - ');
-            const leadName = parts[0] || 'Property';
-            const acresAndLocation = parts[1] || '';
-            const [acres, ...locationParts] = acresAndLocation.split(' in ');
-            const location = locationParts.join(' in ') || 'Unknown';
+            // Check if this is a priced lead (format: "15.2 acres in Travis, TX - $197")
+            if (isPricedLead || message.includes('$')) {
+              const { sendPricedLeadAvailableNotification } = await import('@/lib/email');
+              // Parse message (format: "15.2 acres in Travis, TX - $197")
+              const parts = message.split(' - $');
+              const acresAndLocation = parts[0] || '';
+              const price = parts[1] || '0';
+              const [acres, ...locationParts] = acresAndLocation.split(' acres in ');
+              const location = locationParts.join(' acres in ') || 'Unknown';
 
-            emailResult = await sendLeadAssignmentNotification({
-              toEmail: toUser.email,
-              toName: toUser.full_name || 'there',
-              leadName,
-              location,
-              acres: acres || 'N/A',
-              link: 'https://parcelreach.ai/dashboard'
-            });
+              emailResult = await sendPricedLeadAvailableNotification({
+                toEmail: toUser.email,
+                toName: toUser.full_name || 'there',
+                location,
+                acres: acres || 'N/A',
+                price
+              });
+            } else {
+              // Regular lead assignment
+              const { sendLeadAssignmentNotification } = await import('@/lib/email');
+              // Parse lead details from message (format: "Name - Acres in Location")
+              const parts = message.split(' - ');
+              const leadName = parts[0] || 'Property';
+              const acresAndLocation = parts[1] || '';
+              const [acres, ...locationParts] = acresAndLocation.split(' in ');
+              const location = locationParts.join(' in ') || 'Unknown';
+
+              emailResult = await sendLeadAssignmentNotification({
+                toEmail: toUser.email,
+                toName: toUser.full_name || 'there',
+                leadName,
+                location,
+                acres: acres || 'N/A',
+                link: 'https://parcelreach.ai/dashboard'
+              });
+            }
           } else if (type === 'team_join') {
             const { sendTeamJoinNotification } = await import('@/lib/email');
             // Parse team join message (format: "Name has joined TeamName")
@@ -138,22 +159,6 @@ export async function POST(request) {
               leadName,
               location,
               acres: acres || 'N/A'
-            });
-          } else if (type === 'lead_available_purchase') {
-            const { sendPricedLeadAvailableNotification } = await import('@/lib/email');
-            // Parse message (format: "15.2 acres in Travis, TX - $197")
-            const parts = message.split(' - $');
-            const acresAndLocation = parts[0] || '';
-            const price = parts[1] || '0';
-            const [acres, ...locationParts] = acresAndLocation.split(' acres in ');
-            const location = locationParts.join(' acres in ') || 'Unknown';
-
-            emailResult = await sendPricedLeadAvailableNotification({
-              toEmail: toUser.email,
-              toName: toUser.full_name || 'there',
-              location,
-              acres: acres || 'N/A',
-              price
             });
           }
         }
