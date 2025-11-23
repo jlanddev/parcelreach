@@ -270,7 +270,9 @@ export default function DashboardPage() {
 
       // Reload leads after a brief delay to allow webhook to process
       setTimeout(() => {
-        fetchLeads();
+        if (currentTeam?.id) {
+          fetchLeads(currentTeam.id);
+        }
       }, 2000);
     }
   }, []);
@@ -3301,7 +3303,9 @@ export default function DashboardPage() {
                 onClick={() => {
                   setPurchaseSuccessModal(false);
                   // Refresh leads to show unlocked lead
-                  fetchLeads();
+                  if (currentTeam?.id) {
+                    fetchLeads(currentTeam.id);
+                  }
                 }}
                 className="w-full px-6 py-3 bg-gradient-to-r from-green-600 to-green-500 text-white rounded-lg font-semibold hover:from-green-500 hover:to-green-400 transition-all shadow-lg"
               >
