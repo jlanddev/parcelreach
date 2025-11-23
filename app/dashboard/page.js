@@ -1077,7 +1077,7 @@ export default function DashboardPage() {
 
                                   if (error) {
                                     console.error('Error updating dealType:', error);
-                                    alert(`Failed to update: ${error.message}`);
+                                    showToast(`Failed to update: ${error.message}`, 'error');
                                   } else {
                                     console.log('Successfully updated dealType:', data);
                                     // Update local state
@@ -1088,7 +1088,7 @@ export default function DashboardPage() {
                                   }
                                 } catch (err) {
                                   console.error('Exception updating dealType:', err);
-                                  alert(`Error: ${err.message}`);
+                                  showToast(`Error: ${err.message}`, 'error');
                                 }
                               }}
                               className="w-full bg-blue-500/10 border border-blue-500/30 text-blue-400 text-[10px] px-1.5 py-0.5 rounded appearance-none cursor-pointer hover:bg-blue-500/20 transition-colors pr-4 font-bold"
@@ -1624,7 +1624,7 @@ export default function DashboardPage() {
                         onClick={() => {
                           // Check if they have legal entities
                           if (!legalEntities || legalEntities.length === 0) {
-                            alert('Please add legal entities in Account Settings → Legal Entities tab first.');
+                            showToast('Please add legal entities in Account Settings → Legal Entities tab first.', 'info');
                             return;
                           }
                           // Open PA modal to select LLC
@@ -1984,7 +1984,7 @@ export default function DashboardPage() {
                   onClick={() => {
                     // TODO: Save campaign settings to database
                     if (!campaignName.trim()) {
-                      alert('Please enter a campaign name');
+                      showToast('Please enter a campaign name', 'error');
                       return;
                     }
 
@@ -2010,7 +2010,7 @@ export default function DashboardPage() {
                     setSelectedStates([]);
                     setSelectedAcreageRange('');
                     setCampaignsOpen(false);
-                    alert('Campaign saved as draft!');
+                    showToast('Campaign saved as draft!', 'success');
                   }}
                   className="flex-1 px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-400 transition-colors font-semibold"
                 >
@@ -2110,7 +2110,7 @@ export default function DashboardPage() {
                 <button
                   onClick={() => {
                     if (!currentTeam?.id) {
-                      alert('Please wait for your team to load before inviting members.');
+                      showToast('Please wait for your team to load before inviting members.', 'info');
                       return;
                     }
                     setInviteEmail('');
@@ -2132,10 +2132,10 @@ export default function DashboardPage() {
                         redirectTo: `${window.location.origin}/reset-password`,
                       });
                       if (error) throw error;
-                      alert('Password reset email sent! Please check your inbox.');
+                      showToast('Password reset email sent! Please check your inbox.', 'success');
                     } catch (error) {
                       console.error('Error sending password reset:', error);
-                      alert('Failed to send password reset email. Please try again.');
+                      showToast('Failed to send password reset email. Please try again.', 'error');
                     }
                   }}
                   className="w-full bg-slate-700 text-white px-4 py-3 rounded-lg hover:bg-slate-600 transition-colors text-sm font-semibold"
@@ -2168,15 +2168,15 @@ export default function DashboardPage() {
 
                         if (error) {
                           console.error('Error updating team name:', error);
-                          alert('Failed to update organization name. Please try again.');
+                          showToast('Failed to update organization name. Please try again.', 'error');
                         } else {
                           // Update local state
                           setCurrentTeam({ ...currentTeam, name: organizationName.trim() });
-                          alert('Organization name updated successfully!');
+                          showToast('Organization name updated successfully!', 'success');
                         }
                       } catch (error) {
                         console.error('Error updating team name:', error);
-                        alert('Failed to update organization name. Please try again.');
+                        showToast('Failed to update organization name. Please try again.', 'error');
                       }
                     }
                     setAccountOpen(false);
@@ -2270,14 +2270,14 @@ export default function DashboardPage() {
 
                         if (error) {
                           console.error('Error updating legal entities:', error);
-                          alert('Failed to update legal entities. Please try again.');
+                          showToast('Failed to update legal entities. Please try again.', 'error');
                         } else {
-                          alert('Legal entities updated successfully!');
+                          showToast('Legal entities updated successfully!', 'success');
                           setAccountOpen(false);
                         }
                       } catch (error) {
                         console.error('Error updating legal entities:', error);
-                        alert('Failed to update legal entities. Please try again.');
+                        showToast('Failed to update legal entities. Please try again.', 'error');
                       }
                     }
                   }}
@@ -2366,12 +2366,12 @@ export default function DashboardPage() {
                           throw new Error(result.error || 'Failed to send invitation');
                         }
 
-                        alert(`Successfully sent invitation to ${inviteEmail}! They will receive an email with a link to join your team.`);
+                        showToast(`Successfully sent invitation to ${inviteEmail}! They will receive an email with a link to join your team.`, 'success');
                         setInviteModalOpen(false);
                         setInviteEmail('');
                       } catch (error) {
                         console.error('Error inviting team member:', error);
-                        alert(`Failed to invite team member: ${error.message}`);
+                        showToast(`Failed to invite team member: ${error.message}`, 'error');
                       }
                     }
                   }}
@@ -2535,7 +2535,7 @@ export default function DashboardPage() {
                         window.open(data.url, '_blank');
                       } catch (error) {
                         console.error('Error opening signed PA:', error);
-                        alert('Error opening signed agreement: ' + error.message);
+                        showToast('Error opening signed agreement: ' + error.message, 'error');
                       }
                     }}
                     className="w-full bg-gradient-to-r from-green-600 to-green-700 hover:from-green-500 hover:to-green-600 text-white font-bold py-3 rounded-lg transition-all flex items-center justify-center gap-2"
@@ -2602,7 +2602,7 @@ export default function DashboardPage() {
                   <button
                     onClick={() => {
                       if (!selectedBuyerEntity) {
-                        alert('Please select a buyer entity (LLC)');
+                        showToast('Please select a buyer entity (LLC)', 'error');
                         return;
                       }
 
@@ -2805,7 +2805,7 @@ export default function DashboardPage() {
                   <button
                     onClick={async () => {
                       if (!sellerEmailToSend) {
-                        alert('Seller email is required to send for signature');
+                        showToast('Seller email is required to send for signature', 'error');
                         return;
                       }
 
@@ -2939,7 +2939,7 @@ export default function DashboardPage() {
                     setLeadToDelete(null);
                   } catch (error) {
                     console.error('Error deleting lead:', error);
-                    alert('Failed to delete lead. Please try again.');
+                    showToast('Failed to delete lead. Please try again.', 'error');
                   }
                 }}
                 className="flex-1 px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-500 transition-colors font-semibold"
