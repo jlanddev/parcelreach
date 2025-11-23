@@ -27,9 +27,17 @@ export async function GET() {
     }
     addTest('Environment Variables', true, 'All required env vars present');
 
+    // Use service role for testing (bypasses RLS)
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!serviceRoleKey) {
+      addTest('Service Role Key', false, 'SUPABASE_SERVICE_ROLE_KEY not set');
+      return Response.json(results);
+    }
+    addTest('Service Role Key', true, 'Service role key present');
+
     // Test 2: Supabase Connection
     try {
-      const supabase = createClient(supabaseUrl, supabaseKey);
+      const supabase = createClient(supabaseUrl, serviceRoleKey);
       const { error } = await supabase.from('signature_requests').select('count').limit(1);
 
       if (error) throw error;
@@ -41,7 +49,7 @@ export async function GET() {
 
     // Test 3: Table Schema Check
     try {
-      const supabase = createClient(supabaseUrl, supabaseKey);
+      const supabase = createClient(supabaseUrl, serviceRoleKey);
       const { data, error } = await supabase
         .from('signature_requests')
         .select('*')
@@ -56,7 +64,7 @@ export async function GET() {
 
     // Test 4: Create Test Signature Request
     try {
-      const supabase = createClient(supabaseUrl, supabaseKey);
+      const supabase = createClient(supabaseUrl, serviceRoleKey);
       const testToken = `apitest-${Date.now()}`;
 
       const { data, error: insertError } = await supabase

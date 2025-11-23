@@ -5,9 +5,16 @@ sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 export async function POST(request) {
   try {
+    // Use service role to bypass RLS
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE_KEY
+      process.env.SUPABASE_SERVICE_ROLE_KEY,
+      {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false
+        }
+      }
     );
 
     const {
