@@ -78,6 +78,7 @@ export default function DashboardPage() {
   const [paModalOpen, setPaModalOpen] = useState(false);
   const [generatedPA, setGeneratedPA] = useState('');
   const [sendingPA, setSendingPA] = useState(false);
+  const [sellerEmailToSend, setSellerEmailToSend] = useState('');
   const [accountTab, setAccountTab] = useState('general');
   const [legalEntities, setLegalEntities] = useState([]);
   const [newEntity, setNewEntity] = useState('');
@@ -2603,6 +2604,7 @@ export default function DashboardPage() {
 
 
                       setGeneratedPA(paText);
+                      setSellerEmailToSend(sellerEmail);
                     }}
                     className="flex-1 px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-500 transition-colors font-semibold disabled:opacity-50"
                     disabled={!selectedBuyerEntity}
@@ -2616,6 +2618,23 @@ export default function DashboardPage() {
               <div className="space-y-4">
                 <div id="pa-document" className="bg-white text-black p-8 rounded-lg border border-slate-300 max-h-[500px] overflow-y-auto">
                   <div dangerouslySetInnerHTML={{ __html: generatedPA }} />
+                </div>
+
+                {/* Email input for sending */}
+                <div className="bg-purple-900/20 border border-purple-500/30 rounded-lg p-4">
+                  <label className="block text-white font-semibold mb-2">
+                    Send Contract To:
+                  </label>
+                  <input
+                    type="email"
+                    value={sellerEmailToSend}
+                    onChange={(e) => setSellerEmailToSend(e.target.value)}
+                    placeholder="seller@example.com"
+                    className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-3 py-2 text-white focus:outline-none focus:border-purple-500/50"
+                  />
+                  <p className="text-slate-400 text-xs mt-1">
+                    You can edit the email address before sending
+                  </p>
                 </div>
 
                 <div className="flex gap-3">
@@ -2632,7 +2651,7 @@ export default function DashboardPage() {
                   </button>
                   <button
                     onClick={async () => {
-                      if (!selectedLead.email) {
+                      if (!sellerEmailToSend) {
                         alert('Seller email is required to send for signature');
                         return;
                       }
@@ -2640,7 +2659,6 @@ export default function DashboardPage() {
                       setSendingPA(true);
                       try {
                         const sellerName = selectedLead.name || selectedLead.fullname || selectedLead.full_name || 'Seller';
-                        const sellerEmail = selectedLead.email;
                         const sellerPhone = selectedLead.phone || '';
                         const propertyAddress = `${selectedLead.address || ''}, ${selectedLead.city || ''}, ${selectedLead.state || ''}`.trim();
                         const purchasePrice = selectedLead.purchase_price || selectedLead.offerprice || 0;
@@ -2653,7 +2671,7 @@ export default function DashboardPage() {
                             teamId: currentTeam.id,
                             paHtml: generatedPA,
                             sellerName,
-                            sellerEmail,
+                            sellerEmail: sellerEmailToSend,
                             sellerPhone,
                             buyerEntity: selectedBuyerEntity,
                             purchasePrice,
@@ -2667,7 +2685,7 @@ export default function DashboardPage() {
                           throw new Error(data.error || 'Failed to send PA');
                         }
 
-                        alert(`✅ Purchase Agreement sent to ${sellerEmail}!\n\nThe seller will receive an email with a link to review and sign the agreement.`);
+                        alert(`✅ Purchase Agreement sent to ${sellerEmailToSend}!\n\nThe seller will receive an email with a link to review and sign the agreement.`);
 
                         // Refresh leads to show updated contract status
                         fetchLeads();
@@ -2678,7 +2696,7 @@ export default function DashboardPage() {
                         setSendingPA(false);
                       }
                     }}
-                    disabled={sendingPA || !selectedLead.email}
+                    disabled={sendingPA || !sellerEmailToSend}
                     className="flex-1 px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-500 transition-colors font-semibold flex items-center justify-center gap-2 disabled:opacity-50"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
