@@ -341,6 +341,48 @@ export default function DashboardPage() {
     }
   }, [isDraggingLogo, isResizingLogo, isDraggingPadding, logoPosition, logoSize, headerPaddingTop, dragStart, resizeStart, paddingDragStart]);
 
+  // Helper function to mask unpurchased priced leads
+  const maskLead = (lead) => {
+    // Offset location by ~50 miles in random direction
+    const offsetMiles = 50;
+    const offsetDegrees = offsetMiles / 69; // 1 degree ≈ 69 miles
+    const randomAngle = Math.random() * 2 * Math.PI;
+    const offsetLat = offsetDegrees * Math.cos(randomAngle);
+    const offsetLon = offsetDegrees * Math.sin(randomAngle);
+
+    return {
+      ...lead,
+      // Keep these fields visible
+      county: lead.county || lead.propertyCounty,
+      propertyCounty: lead.county || lead.propertyCounty,
+      state: lead.state || lead.propertyState,
+      propertyState: lead.state || lead.propertyState,
+      acres: lead.acres,
+      price: lead.price, // Show the price
+
+      // Mask these fields
+      fullname: '████████',
+      fullName: '████████',
+      name: '████████',
+      email: 'masked@masked.com',
+      phone: '███-███-████',
+      address: '████████',
+      streetAddress: '████████',
+      city: '████████',
+      zip: '█████',
+      parcelid: '████████',
+      parcelId: '████████',
+
+      // Offset location
+      latitude: lead.latitude ? parseFloat(lead.latitude) + offsetLat : null,
+      longitude: lead.longitude ? parseFloat(lead.longitude) + offsetLon : null,
+
+      // Add flag to identify masked leads
+      isMasked: true,
+      originalLeadId: lead.id
+    };
+  };
+
   // Fetch land leads from database
   const fetchLeads = async (teamId) => {
     try {
@@ -464,7 +506,27 @@ export default function DashboardPage() {
           offerMade: lead.offermade
         };
       });
-      setLeads(normalizedLeads);
+
+      // Fetch user's purchases to check which priced leads they've bought
+      const { data: purchases } = await supabase
+        .from('lead_purchases')
+        .select('lead_id')
+        .eq('user_id', currentUser?.id);
+
+      const purchasedLeadIds = new Set(purchases?.map(p => p.lead_id) || []);
+
+      // Apply masking to leads with price that haven't been purchased
+      const maskedLeads = normalizedLeads.map(lead => {
+        const hasPrice = lead.price && parseFloat(lead.price) > 0;
+        const isPurchased = purchasedLeadIds.has(lead.id);
+
+        if (hasPrice && !isPurchased) {
+          return maskLead(lead);
+        }
+        return lead;
+      });
+
+      setLeads(maskedLeads);
 
       // Auto-assign unassigned leads to this team
       const unassignedLeads = data?.filter(l => !l.team_id) || [];
@@ -551,6 +613,11 @@ export default function DashboardPage() {
 
   // Open lead detail modal
   const openLeadDetail = (lead) => {
+    // Prevent opening full details for masked leads
+    if (lead.isMasked) {
+      alert('This lead is locked. Purchase to unlock full details.');
+      return;
+    }
     setSelectedLead(lead);
     setModalOpen(true);
   };
