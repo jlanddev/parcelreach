@@ -5,11 +5,6 @@ import { useParams } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 import SignatureCanvas from 'react-signature-canvas';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
-
 export default function SignaturePage() {
   const params = useParams();
   const token = params.token;
@@ -20,6 +15,12 @@ export default function SignaturePage() {
   const [error, setError] = useState(null);
   const [signed, setSigned] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  // Create Supabase client
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  );
 
   useEffect(() => {
     loadSignatureRequest();
