@@ -17,6 +17,7 @@ export default function LandLeadsAdminPage() {
   const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [selectedLead, setSelectedLead] = useState(null);
   const [selectedOrgsForAssignment, setSelectedOrgsForAssignment] = useState([]);
+  const [leadPrice, setLeadPrice] = useState(''); // Price for marketplace leads
   const [findMapModalOpen, setFindMapModalOpen] = useState(false);
   const [leadForMapSearch, setLeadForMapSearch] = useState(null);
   const [isAssigning, setIsAssigning] = useState(false);
@@ -190,6 +191,16 @@ export default function LandLeadsAdminPage() {
 
       console.log('✅ Assignments and team data created successfully');
 
+      // Update lead price if set (makes it a marketplace lead)
+      const priceValue = leadPrice ? parseFloat(leadPrice) : null;
+      if (priceValue !== null) {
+        await supabase
+          .from('leads')
+          .update({ price: priceValue })
+          .eq('id', leadId);
+        console.log(`💰 Lead price set to $${priceValue}`);
+      }
+
       // Update lead status if not already assigned
       await supabase
         .from('leads')
@@ -234,6 +245,7 @@ export default function LandLeadsAdminPage() {
       setAssignModalOpen(false);
       setSelectedLead(null);
       setSelectedOrgsForAssignment([]);
+      setLeadPrice(''); // Reset price
       fetchAllData();
     } catch (err) {
       console.error('❌ Error assigning lead:', err);
@@ -1757,6 +1769,34 @@ export default function LandLeadsAdminPage() {
                 {selectedLead.property_county || selectedLead.county}, {selectedLead.property_state || selectedLead.state}
               </p>
             </div>
+
+            {/* Price Input for Marketplace Leads */}
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-slate-300 mb-2">
+                Lead Price (Optional)
+              </label>
+              <div className="flex items-center gap-3">
+                <div className="flex-1 relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-lg">$</span>
+                  <input
+                    type="number"
+                    value={leadPrice}
+                    onChange={(e) => setLeadPrice(e.target.value)}
+                    placeholder="197"
+                    min="0"
+                    step="1"
+                    className="w-full pl-8 pr-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                  />
+                </div>
+                <div className="text-sm text-slate-400">
+                  Leave empty for free/allocated leads
+                </div>
+              </div>
+              <p className="text-xs text-slate-500 mt-2">
+                💡 If price is set, lead will be masked until purchased
+              </p>
+            </div>
+
             <p className="text-sm text-slate-300 mb-3">Select one or more organizations:</p>
             <div className="space-y-2 max-h-96 overflow-y-auto mb-6">
               {organizations.map((org) => (
@@ -1793,6 +1833,7 @@ export default function LandLeadsAdminPage() {
                   setAssignModalOpen(false);
                   setSelectedLead(null);
                   setSelectedOrgsForAssignment([]);
+                  setLeadPrice(''); // Reset price
                 }}
                 className="flex-1 px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-600 transition-colors"
               >
