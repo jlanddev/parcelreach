@@ -401,9 +401,10 @@ export default function LeadsMap({ leads = [], zoomToLead = null, developments =
             properties: {
               leadStatus: lead.status,
               isLeadSubmission: true,
+              isMasked: lead.isMasked || false,
               headline: lead.address || lead.street_address || lead.county ? `${lead.address || lead.street_address || ''}, ${lead.county || lead.property_county || ''}, TX` : 'Address not available',
               fields: {
-                owner: lead.full_name || lead.name || lead.names_on_deed || 'Unknown',
+                owner: lead.isMasked ? '████████' : (lead.full_name || lead.name || lead.names_on_deed || 'Unknown'),
                 ll_gisacre: lead.acres ? parseFloat(lead.acres) : (lead.acreage ? parseFloat(lead.acreage) : null),
                 parcelnumb: lead.parcel_id || lead.parcelid || 'N/A',
                 county: lead.county || lead.property_county || 'Unknown',
