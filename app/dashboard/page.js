@@ -2416,11 +2416,11 @@ export default function DashboardPage() {
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div>
                       <span className="text-slate-400">Seller:</span>
-                      <span className="ml-2 text-white">{selectedLead.fullname || 'N/A'}</span>
+                      <span className="ml-2 text-white">{selectedLead.name || selectedLead.fullname || 'N/A'}</span>
                     </div>
                     <div>
                       <span className="text-slate-400">Acres:</span>
-                      <span className="ml-2 text-white">{selectedLead.acres || 'N/A'}</span>
+                      <span className="ml-2 text-white">{selectedLead.acres || selectedLead.acreage || 'N/A'}</span>
                     </div>
                     <div className="col-span-2">
                       <span className="text-slate-400">Address:</span>
@@ -2455,15 +2455,24 @@ export default function DashboardPage() {
                       const purchasePrice = selectedLead.purchase_price || selectedLead.offerprice || 0;
                       const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
-                      const sellerName = selectedLead.full_name || selectedLead.fullname || selectedLead.fullName || '[Seller Name]';
-                      const propertyAddress = selectedLead.street_address || selectedLead.address || '[Property Address]';
+                      // Debug: Log the full selectedLead object to see what fields exist
+                      console.log('📋 Selected Lead Data:', selectedLead);
+                      console.log('📋 Available fields:', Object.keys(selectedLead));
+
+                      // Use the correct field names from the leads table schema
+                      const sellerName = selectedLead.name || selectedLead.fullname || selectedLead.full_name || selectedLead.fullName || '[Seller Name]';
+                      const sellerEmail = selectedLead.email || '[Email]';
+                      const sellerPhone = selectedLead.phone || '[Phone]';
+                      const propertyAddress = selectedLead.address || selectedLead.street_address || selectedLead.streetaddress || '[Property Address]';
                       const propertyCity = selectedLead.city || '[City]';
-                      const propertyState = selectedLead.property_state || selectedLead.state || 'OK';
-                      const propertyCounty = selectedLead.property_county || selectedLead.county || '[County]';
-                      const propertyZip = selectedLead.zip || '[ZIP]';
-                      const parcelNumber = selectedLead.parcel_id || selectedLead.parcelid || selectedLead.parcelId || '[Parcel Number]';
-                      const acreage = selectedLead.acres || '[Acreage]';
+                      const propertyState = selectedLead.state || selectedLead.property_state || selectedLead.propertystate || 'OK';
+                      const propertyCounty = selectedLead.county || selectedLead.property_county || selectedLead.propertycounty || '[County]';
+                      const propertyZip = selectedLead.zip || selectedLead.zipcode || '[ZIP]';
+                      const parcelNumber = selectedLead.parcelid || selectedLead.parcel_id || selectedLead.parcelId || selectedLead.parcel_number || '[Parcel Number]';
+                      const acreage = selectedLead.acreage || selectedLead.acres || '[Acreage]';
                       const offerAmount = purchasePrice > 0 ? `$${purchasePrice.toLocaleString()}` : '[Offer Amount]';
+
+                      console.log('📋 Extracted values:', { sellerName, sellerEmail, sellerPhone, propertyAddress, propertyCity, propertyState, propertyCounty });
 
                       const paText = `
 <style>
@@ -2554,11 +2563,40 @@ export default function DashboardPage() {
   </div>
 
   <div style="margin-top: 60px;">
-    <span class="pa-signature-line"></span> &nbsp;&nbsp;&nbsp; <span class="pa-small-line"></span> &nbsp;&nbsp;&nbsp; <span class="pa-signature-line"></span><br>
-    Seller: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Date: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Buyer:<br><br>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Date:<br><br>
-    Phone and Email :<span class="pa-large-line"></span><br><br>
-    Agreed Sales Price :<span class="pa-large-line"></span>
+    <table style="width: 100%; border-collapse: collapse;">
+      <tr>
+        <td style="width: 45%; padding: 10px 0; vertical-align: bottom;">
+          <div style="border-bottom: 1px solid #000; margin-bottom: 5px;">&nbsp;</div>
+          <strong>Seller:</strong> ${sellerName}
+        </td>
+        <td style="width: 10%;">&nbsp;</td>
+        <td style="width: 45%; padding: 10px 0; vertical-align: bottom;">
+          <div style="border-bottom: 1px solid #000; margin-bottom: 5px;">&nbsp;</div>
+          <strong>Buyer:</strong> ${selectedBuyerEntity || '[Buyer Entity]'}
+        </td>
+      </tr>
+      <tr>
+        <td style="padding: 10px 0; vertical-align: bottom;">
+          <div style="border-bottom: 1px solid #000; margin-bottom: 5px;">&nbsp;</div>
+          <strong>Date:</strong>
+        </td>
+        <td>&nbsp;</td>
+        <td style="padding: 10px 0; vertical-align: bottom;">
+          <div style="border-bottom: 1px solid #000; margin-bottom: 5px;">&nbsp;</div>
+          <strong>Date:</strong>
+        </td>
+      </tr>
+    </table>
+
+    <div style="margin-top: 30px;">
+      <strong>Phone and Email:</strong><br>
+      <div style="border-bottom: 1px solid #000; margin-top: 5px; padding-bottom: 5px;">${sellerPhone} / ${sellerEmail}</div>
+    </div>
+
+    <div style="margin-top: 20px;">
+      <strong>Agreed Sales Price:</strong><br>
+      <div style="border-bottom: 1px solid #000; margin-top: 5px; padding-bottom: 5px;">${offerAmount}</div>
+    </div>
   </div>
 </div>`;
 
