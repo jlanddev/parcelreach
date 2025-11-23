@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 
 export async function GET(request, { params }) {
   try {
-    const { token } = params;
+    const { token } = await params;
 
     if (!token) {
       return Response.json({ error: 'No token provided' }, { status: 400 });

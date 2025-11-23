@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 
 export async function POST(request, { params }) {
   try {
-    const { token } = params;
+    const { token } = await params;
     const { signatureData } = await request.json();
 
     if (!token || !signatureData) {
