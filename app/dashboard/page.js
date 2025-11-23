@@ -1181,13 +1181,27 @@ export default function DashboardPage() {
                             <div className="font-semibold text-white text-sm truncate group-hover:text-blue-300 transition-colors">
                               {lead.name}
                             </div>
-                            <div className="flex items-center gap-1.5 text-xs text-slate-400 mt-0.5">
-                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                              </svg>
-                              <span className="truncate text-[11px]">
-                                {lead.county || lead.propertyCounty || 'Unknown'} County, {lead.state || lead.propertyState || 'Unknown'} | Parcel ID: {lead.parcelid || lead.parcelId || 'N/A'}
-                              </span>
+                            <div className="flex items-center gap-1.5 mt-1">
+                              {/* Location Badge */}
+                              <div className="inline-flex items-center gap-1 px-2 py-0.5 bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-500/20 rounded-md">
+                                <svg className="w-3 h-3 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+                                  <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
+                                </svg>
+                                <span className="text-[10px] font-medium text-blue-300">
+                                  {lead.county || lead.propertyCounty || 'Unknown'} County, {lead.state || lead.propertyState || 'Unknown'}
+                                </span>
+                              </div>
+                              {/* Parcel ID Badge */}
+                              {(lead.parcelid || lead.parcelId) && lead.parcelid !== 'N/A' && lead.parcelId !== 'N/A' && (
+                                <div className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-700/50 border border-slate-600/50 rounded-md">
+                                  <svg className="w-3 h-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                                  </svg>
+                                  <span className="text-[9px] font-mono text-slate-300 truncate max-w-[80px]">
+                                    {lead.parcelid || lead.parcelId}
+                                  </span>
+                                </div>
+                              )}
                             </div>
                           </div>
                         </div>
