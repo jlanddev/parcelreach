@@ -16,28 +16,46 @@ export default function SignaturePage() {
   const [signed, setSigned] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  // Create Supabase client
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  );
-
   useEffect(() => {
     loadSignatureRequest();
   }, [token]);
 
   const loadSignatureRequest = async () => {
     try {
+      console.log('Loading signature request for token:', token);
+      console.log('Supabase URL:', process.env.NEXT_PUBLIC_SUPABASE_URL);
+      console.log('Supabase Key exists:', !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+
+      if (!token) {
+        throw new Error('No token provided');
+      }
+
+      if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+        throw new Error('Supabase configuration missing');
+      }
+
+      // Create Supabase client
+      const supabase = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+      );
+
       const { data, error } = await supabase
         .from('signature_requests')
         .select('*')
         .eq('token', token)
         .single();
 
-      if (error) throw error;
+      console.log('Query result:', { data, error });
+
+      if (error) {
+        console.error('Supabase error:', error);
+        throw error;
+      }
 
       if (!data) {
         setError('Signature request not found');
+        setLoading(false);
         return;
       }
 
@@ -47,13 +65,15 @@ export default function SignaturePage() {
 
       if (new Date(data.expires_at) < new Date()) {
         setError('This signature request has expired');
+        setLoading(false);
         return;
       }
 
+      console.log('Signature request loaded successfully:', data);
       setSigRequest(data);
     } catch (err) {
       console.error('Error loading signature request:', err);
-      setError(err.message);
+      setError(err?.message || 'Failed to load signature request');
     } finally {
       setLoading(false);
     }
@@ -73,6 +93,12 @@ export default function SignaturePage() {
 
     try {
       const signatureData = sigPad.current.toDataURL();
+
+      // Create Supabase client
+      const supabase = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+      );
 
       // Update signature request with seller signature
       const { error } = await supabase
