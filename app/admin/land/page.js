@@ -1135,8 +1135,6 @@ export default function LandLeadsAdminPage() {
                         <input
                           type="text"
                           value={lead.name || lead.full_name || ''}
-                          onClick={(e) => e.stopPropagation()}
-                          onClick={(e) => e.stopPropagation()}
                           onChange={async (e) => {
                             const { error } = await supabase
                               .from('leads')
@@ -1166,9 +1164,7 @@ export default function LandLeadsAdminPage() {
                       <input
                         type="text"
                         value={lead.form_data?.streetAddress || lead.street_address || lead.address || ''}
-                        onClick={(e) => e.stopPropagation()}
-                        onClick={(e) => e.stopPropagation()}
-                          onChange={async (e) => {
+                        onChange={async (e) => {
                           const updatedFormData = { ...lead.form_data, streetAddress: e.target.value };
                           const { error } = await supabase
                             .from('leads')
@@ -1189,7 +1185,6 @@ export default function LandLeadsAdminPage() {
                         <input
                           type="text"
                           value={lead.form_data?.propertyCounty || lead.property_county || lead.county || ''}
-                          onClick={(e) => e.stopPropagation()}
                           onChange={async (e) => {
                             const updatedFormData = { ...lead.form_data, propertyCounty: e.target.value };
                             const { error } = await supabase
@@ -1210,7 +1205,6 @@ export default function LandLeadsAdminPage() {
                         <input
                           type="text"
                           value={lead.form_data?.propertyState || lead.property_state || lead.state || ''}
-                          onClick={(e) => e.stopPropagation()}
                           onChange={async (e) => {
                             const updatedFormData = { ...lead.form_data, propertyState: e.target.value };
                             const { error } = await supabase
@@ -1232,8 +1226,7 @@ export default function LandLeadsAdminPage() {
                       <input
                         type="text"
                         value={lead.form_data?.acres || lead.acres || lead.acreage || ''}
-                        onClick={(e) => e.stopPropagation()}
-                          onChange={async (e) => {
+                        onChange={async (e) => {
                           const updatedFormData = { ...lead.form_data, acres: e.target.value };
                           const { error } = await supabase
                             .from('leads')
@@ -1298,7 +1291,6 @@ export default function LandLeadsAdminPage() {
                         <input
                           type="email"
                           value={lead.email || lead.owner_email || ''}
-                          onClick={(e) => e.stopPropagation()}
                           onChange={async (e) => {
                             const { error } = await supabase
                               .from('leads')
@@ -1319,7 +1311,6 @@ export default function LandLeadsAdminPage() {
                         <input
                           type="tel"
                           value={lead.phone || lead.owner_phone || ''}
-                          onClick={(e) => e.stopPropagation()}
                           onChange={async (e) => {
                             const { error } = await supabase
                               .from('leads')
@@ -2184,8 +2175,7 @@ export default function LandLeadsAdminPage() {
               <input
                 type="file"
                 accept=".kml"
-                onClick={(e) => e.stopPropagation()}
-                          onChange={async (e) => {
+                onChange={async (e) => {
                   const file = e.target.files[0];
                   if (file) {
                     setKmlFile(file);
