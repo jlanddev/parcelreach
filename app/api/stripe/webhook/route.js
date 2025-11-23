@@ -79,7 +79,7 @@ export async function POST(request) {
 
       // Create notification for the purchase
       if (lead) {
-        await supabase
+        const { error: notifError } = await supabase
           .from('notifications')
           .insert([{
             team_id: teamId,
@@ -90,6 +90,12 @@ export async function POST(request) {
             read: false,
             created_at: new Date().toISOString()
           }]);
+
+        if (notifError) {
+          console.error('❌ Failed to create notification:', notifError);
+        } else {
+          console.log('✅ Notification created for purchase');
+        }
       }
 
       console.log(`✅ Lead ${leadId} purchased by user ${userId} for $${price}`);

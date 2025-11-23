@@ -101,12 +101,20 @@ export default function LeadsMap({ leads = [], zoomToLead = null, developments =
 
   // Get marker color based on lead status or priced status
   const getMarkerColor = (lead) => {
-    // Priced leads (for purchase) = GREEN until purchased
-    if (lead.isPriced || lead.isMasked || (lead.price && parseFloat(lead.price) > 0)) {
-      return '#10B981'; // Bright green for priced leads
+    // Check if lead is priced (has a price > 0)
+    const hasPrice = lead.price && parseFloat(lead.price) > 0;
+
+    // If lead is masked, it's a priced lead NOT YET purchased = GREEN
+    if (lead.isMasked) {
+      return '#10B981'; // Bright green for priced leads not purchased
     }
 
-    // Regular status colors
+    // If lead has price but is NOT masked, it's been purchased = BLUE
+    if (hasPrice && !lead.isMasked) {
+      return '#3B82F6'; // Bright blue for purchased leads
+    }
+
+    // Regular status colors for non-priced leads
     switch (lead.status) {
       case 'new':
         return '#3B82F6'; // Bright blue
