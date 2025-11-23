@@ -69,7 +69,7 @@ export async function POST(request) {
 
     // Send email if requested
     let emailResult = null;
-    if (sendEmail && (type === 'mention' || type === 'lead_assigned' || type === 'team_join' || type === 'lead_added')) {
+    if (sendEmail && (type === 'mention' || type === 'lead_assigned' || type === 'team_join' || type === 'lead_added' || type === 'lead_available_purchase')) {
       try {
         // Get user details
         const { data: toUser } = await supabase
@@ -138,6 +138,22 @@ export async function POST(request) {
               leadName,
               location,
               acres: acres || 'N/A'
+            });
+          } else if (type === 'lead_available_purchase') {
+            const { sendPricedLeadAvailableNotification } = await import('@/lib/email');
+            // Parse message (format: "15.2 acres in Travis, TX - $197")
+            const parts = message.split(' - $');
+            const acresAndLocation = parts[0] || '';
+            const price = parts[1] || '0';
+            const [acres, ...locationParts] = acresAndLocation.split(' acres in ');
+            const location = locationParts.join(' acres in ') || 'Unknown';
+
+            emailResult = await sendPricedLeadAvailableNotification({
+              toEmail: toUser.email,
+              toName: toUser.full_name || 'there',
+              location,
+              acres: acres || 'N/A',
+              price
             });
           }
         }
