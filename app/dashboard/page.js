@@ -8,6 +8,7 @@ import NotificationsPanel from '@/components/NotificationsPanel';
 import NotificationBell from '@/components/NotificationBell';
 import LeadNotes from '@/components/LeadNotes';
 import Toast from '@/components/Toast';
+import MaskedLeadCard from '@/components/MaskedLeadCard';
 
 // Dynamically import map to avoid SSR issues
 const LeadsMap = dynamicImport(() => import('@/components/LeadsMap'), {
@@ -1071,7 +1072,15 @@ export default function DashboardPage() {
                   <p className="text-xs text-slate-600 mt-1">Submit a test lead to get started</p>
                 </div>
               ) : (
-                filteredLeads.map((lead) => (
+                filteredLeads.map((lead) => lead.isMasked ? (
+                  <MaskedLeadCard
+                    key={lead.id}
+                    lead={lead}
+                    onPurchase={(lead) => {
+                      alert('Purchase flow coming soon!');
+                    }}
+                  />
+                ) : (
                   <div
                     key={lead.id}
                     className="bg-slate-800/40 backdrop-blur-sm border border-slate-700/50 rounded-lg p-3 hover:bg-slate-800/60 hover:border-slate-600/50 transition-all group relative"
@@ -1276,7 +1285,8 @@ export default function DashboardPage() {
                       </div>
                     </div>
                   </div>
-                ))
+                )
+              ))
               )}
             </div>
           </div>
