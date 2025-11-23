@@ -202,9 +202,18 @@ export default function LandLeadsAdminPage() {
           .eq('team_id', teamId);
 
         if (teamMembers && teamMembers.length > 0) {
-          const leadName = leadData?.full_name || leadData?.name || 'Property';
           const location = leadData?.property_county || leadData?.county || 'Unknown';
+          const state = leadData?.property_state || leadData?.state || 'TX';
           const acres = leadData?.acres || leadData?.acreage || 'N/A';
+
+          // Check if this is a priced lead (for purchase)
+          const isPricedLead = priceValue && priceValue > 0;
+
+          // For priced leads, DON'T show owner name (prevents lookup without purchase)
+          const title = isPricedLead ? 'New Lead Available for Purchase' : 'New Lead';
+          const message = isPricedLead
+            ? `${acres} acres in ${location}, ${state} - $${priceValue}`
+            : `${leadData?.full_name || leadData?.name || 'Property'} - ${acres} in ${location}`;
 
           // Create notification for each team member via API (sends email too)
           for (const member of teamMembers) {
@@ -214,9 +223,9 @@ export default function LandLeadsAdminPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   userId: member.user_id,
-                  type: 'lead_assigned',
-                  title: 'New Lead',
-                  message: `${leadName} - ${acres} in ${location}`,
+                  type: isPricedLead ? 'lead_available_purchase' : 'lead_assigned',
+                  title: title,
+                  message: message,
                   sendEmail: true
                 })
               });
@@ -821,9 +830,18 @@ export default function LandLeadsAdminPage() {
       // Notify all teams about the new lead
       if (leadData && leadData.length > 0) {
         const newLeadData = leadData[0];
-        const leadName = newLeadData.full_name || 'Property';
         const location = newLeadData.property_county || 'Unknown';
+        const state = newLeadData.property_state || newLeadData.state || 'TX';
         const acres = newLeadData.acres || 'N/A';
+        const price = newLeadData.price;
+
+        // Check if this is a priced lead (for purchase)
+        const isPricedLead = price && parseFloat(price) > 0;
+
+        const title = isPricedLead ? 'New Lead Available for Purchase' : 'New Lead Available';
+        const message = isPricedLead
+          ? `${acres} acres in ${location}, ${state} - $${price}`
+          : `${newLeadData.full_name || 'Property'} - ${acres} in ${location}`;
 
         // Get all teams
         const { data: allTeams } = await supabase
@@ -847,9 +865,9 @@ export default function LandLeadsAdminPage() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                       userId: member.user_id,
-                      type: 'lead_added',
-                      title: 'New Lead Available',
-                      message: `${leadName} - ${acres} in ${location}`,
+                      type: isPricedLead ? 'lead_available_purchase' : 'lead_added',
+                      title: title,
+                      message: message,
                       sendEmail: true
                     })
                   });
