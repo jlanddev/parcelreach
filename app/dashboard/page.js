@@ -1435,14 +1435,7 @@ export default function DashboardPage() {
                     <div className="space-y-2 text-sm">
                       <div className="flex justify-between">
                         <span className="text-slate-400">Acreage:</span>
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={selectedLead.acreage || selectedLead.acres || ''}
-                          onChange={(e) => updateLead(selectedLead.id, { acreage: parseFloat(e.target.value), acres: parseFloat(e.target.value) }, true)}
-                          placeholder="Enter acreage"
-                          className="text-right bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-white font-semibold text-xs focus:outline-none focus:border-blue-500/50 w-24"
-                        />
+                        <span className="text-white font-semibold">{(selectedLead.acreage || selectedLead.acres) > 0 ? (selectedLead.acreage || selectedLead.acres).toFixed(2) : 'N/A'}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-400">Parcel ID:</span>
@@ -1486,46 +1479,18 @@ export default function DashboardPage() {
                       Contact Information
                     </h3>
                     <div className="space-y-2 text-sm">
-                      <div className="flex justify-between items-center">
-                        <span className="text-slate-400">Owner Name:</span>
-                        <input
-                          type="text"
-                          value={selectedLead.name || ''}
-                          onChange={(e) => updateLead(selectedLead.id, { name: e.target.value }, true)}
-                          placeholder="Enter owner name"
-                          className="text-right bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-purple-500/50 max-w-[60%]"
-                        />
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-slate-400">Email:</span>
-                        <input
-                          type="email"
-                          value={selectedLead.email || selectedLead.owner_email || ''}
-                          onChange={(e) => updateLead(selectedLead.id, { email: e.target.value, owner_email: e.target.value }, true)}
-                          placeholder="Enter email"
-                          className="text-right bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-purple-500/50 max-w-[60%]"
-                        />
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-slate-400">Phone:</span>
-                        <input
-                          type="tel"
-                          value={selectedLead.phone || selectedLead.owner_phone || ''}
-                          onChange={(e) => updateLead(selectedLead.id, { phone: e.target.value, owner_phone: e.target.value }, true)}
-                          placeholder="Enter phone"
-                          className="text-right bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-purple-500/50 max-w-[60%]"
-                        />
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-slate-400">Address:</span>
-                        <input
-                          type="text"
-                          value={selectedLead.address || selectedLead.street_address || selectedLead.property_address || ''}
-                          onChange={(e) => updateLead(selectedLead.id, { address: e.target.value, street_address: e.target.value }, true)}
-                          placeholder="Enter address"
-                          className="text-right bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-purple-500/50 max-w-[60%]"
-                        />
-                      </div>
+                      {selectedLead.email && (
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-400">Email:</span>
+                          <a href={`mailto:${selectedLead.email}`} className="text-blue-400 hover:text-blue-300 underline">{selectedLead.email}</a>
+                        </div>
+                      )}
+                      {selectedLead.phone && (
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-400">Phone:</span>
+                          <a href={`tel:${selectedLead.phone}`} className="text-blue-400 hover:text-blue-300 underline">{selectedLead.phone}</a>
+                        </div>
+                      )}
                       {selectedLead.ip_address && (
                         <div className="flex justify-between items-center">
                           <span className="text-slate-400">IP Address:</span>
