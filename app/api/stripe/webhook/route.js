@@ -1,5 +1,6 @@
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
+import { sendLeadPurchaseConfirmation } from '@/lib/email';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const supabase = createClient(
@@ -26,11 +27,18 @@ export async function POST(request) {
     const { leadId, userId, teamId, price } = session.metadata;
 
     try {
-      // Get lead details for notification
+      // Get lead details for notification and email
       const { data: lead } = await supabase
         .from('leads')
-        .select('property_county, property_state, acres')
+        .select('property_county, property_state, acres, full_name, email, phone, street_address')
         .eq('id', leadId)
+        .single();
+
+      // Get user details for email
+      const { data: user } = await supabase
+        .from('users')
+        .select('email, full_name')
+        .eq('id', userId)
         .single();
 
       // Record the purchase
@@ -94,6 +102,27 @@ export async function POST(request) {
           console.error('❌ Failed to create notification:', notifError);
         } else {
           console.log('✅ Notification created for purchase');
+        }
+
+        // Send purchase confirmation email
+        if (user && user.email) {
+          try {
+            const location = `${lead.property_county || 'Unknown'}, ${lead.property_state || 'Unknown'}`;
+            await sendLeadPurchaseConfirmation({
+              toEmail: user.email,
+              toName: user.full_name || 'there',
+              leadName: lead.full_name || 'Property Owner',
+              location,
+              acres: lead.acres || 'N/A',
+              price,
+              email: lead.email || 'N/A',
+              phone: lead.phone || 'N/A',
+              address: lead.street_address || 'N/A'
+            });
+            console.log('✅ Purchase confirmation email sent');
+          } catch (emailError) {
+            console.error('❌ Failed to send purchase email:', emailError);
+          }
         }
       }
 
