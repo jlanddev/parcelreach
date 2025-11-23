@@ -161,26 +161,13 @@ export default function LandLeadsAdminPage() {
           return;
         }
 
-        // Create team_lead_data record with ALL lead fields for complete isolation
+        // Create team_lead_data record (only use columns that exist in base schema)
         const { error: teamDataError } = await supabase
           .from('team_lead_data')
           .insert([{
             team_id: assignment.team_id,
             lead_id: leadId,
-            status: 'new',
-            full_name: leadData?.fullname || leadData?.full_name || leadData?.name,
-            email: leadData?.email,
-            phone: leadData?.phone,
-            street_address: leadData?.address || leadData?.street_address,
-            city: leadData?.city,
-            property_state: leadData?.state || leadData?.property_state,
-            property_county: leadData?.county || leadData?.property_county,
-            zip: leadData?.zip,
-            acres: leadData?.acres || leadData?.acreage,
-            parcel_id: leadData?.parcelid || leadData?.parcel_id,
-            dealtype: leadData?.dealtype,
-            notes: leadData?.notes,
-            projected_revenue: leadData?.projectedrevenue || leadData?.projected_revenue
+            status: 'new'
           }]);
 
         // Ignore duplicate errors (team already has this lead)
