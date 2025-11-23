@@ -55,7 +55,8 @@ export default function LandLeadsAdminPage() {
     const checkAdminAccess = async () => {
       const { data: { user } } = await supabase.auth.getUser();
 
-      if (!user || (user.email !== 'jordan@havenground.com' && user.email !== 'jordan@landreach.co')) {
+      const adminEmails = ['admin@parcelreach.ai', 'jordan@havenground.com', 'jordan@landreach.co'];
+      if (!user || !adminEmails.includes(user.email)) {
         console.log('❌ Access denied - not an admin');
         router.push('/dashboard');
         return;

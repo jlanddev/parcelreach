@@ -127,7 +127,7 @@ export default function DashboardPage() {
       }
 
       // Check if user is admin
-      const isAdmin = user.email === 'jordan@havenground.com' || user.email === 'jordan@landreach.co';
+      const isAdmin = user.email === 'admin@parcelreach.ai' || user.email === 'jordan@havenground.com' || user.email === 'jordan@landreach.co';
 
       // Check if admin is viewing a specific organization
       const adminViewingOrg = typeof window !== 'undefined' ? sessionStorage.getItem('admin_viewing_org') : null;
