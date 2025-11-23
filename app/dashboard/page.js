@@ -359,7 +359,20 @@ export default function DashboardPage() {
             closing_date,
             earnest_money,
             down_payment,
-            custom_data
+            custom_data,
+            full_name,
+            email,
+            phone,
+            street_address,
+            city,
+            property_state,
+            property_county,
+            zip,
+            acres,
+            parcel_id,
+            dealtype,
+            notes,
+            projected_revenue
           )
         `)
         .in('id', assignedLeadIds.length > 0 ? assignedLeadIds : ['00000000-0000-0000-0000-000000000000'])
@@ -374,7 +387,7 @@ export default function DashboardPage() {
 
       console.log('✅ Fetched', data?.length, 'leads with team data');
 
-      // For leads without team_lead_data, create it
+      // For leads without team_lead_data, create it with ALL lead data
       for (const lead of data || []) {
         if (!lead.team_data || lead.team_data.length === 0) {
           const { error: insertError } = await supabase
@@ -383,7 +396,20 @@ export default function DashboardPage() {
               team_id: teamId,
               lead_id: lead.id,
               status: lead.status || 'new',
-              offer_price: lead.offerprice
+              offer_price: lead.offerprice,
+              full_name: lead.fullname,
+              email: lead.email,
+              phone: lead.phone,
+              street_address: lead.address,
+              city: lead.city,
+              property_state: lead.state,
+              property_county: lead.county,
+              zip: lead.zip,
+              acres: lead.acres,
+              parcel_id: lead.parcelid,
+              dealtype: lead.dealtype,
+              notes: lead.notes,
+              projected_revenue: lead.projectedrevenue
             }]);
 
           if (insertError && !insertError.message.includes('duplicate')) {
@@ -393,11 +419,12 @@ export default function DashboardPage() {
       }
 
       // Normalize: merge team_data into lead object
+      // ALL fields come from team_lead_data for complete isolation
       const normalizedLeads = (data || []).map(lead => {
         const teamData = Array.isArray(lead.team_data) ? lead.team_data[0] : lead.team_data;
         return {
           ...lead,
-          // Use team-specific data if available, fallback to lead data
+          // Team-specific data (status, offers, contracts)
           status: teamData?.status || lead.status || 'new',
           offerPrice: teamData?.offer_price || lead.offerprice,
           offerprice: teamData?.offer_price || lead.offerprice,
@@ -407,9 +434,30 @@ export default function DashboardPage() {
           closingDate: teamData?.closing_date,
           earnestMoney: teamData?.earnest_money,
           downPayment: teamData?.down_payment,
-          // Keep original lead data
-          offerMade: lead.offermade,
-          projectedProfit: lead.projectedrevenue
+          // Property details (team-isolated)
+          fullname: teamData?.full_name || lead.fullname,
+          fullName: teamData?.full_name || lead.fullname,
+          email: teamData?.email || lead.email,
+          phone: teamData?.phone || lead.phone,
+          address: teamData?.street_address || lead.address,
+          streetAddress: teamData?.street_address || lead.address,
+          city: teamData?.city || lead.city,
+          state: teamData?.property_state || lead.state,
+          propertyState: teamData?.property_state || lead.state,
+          county: teamData?.property_county || lead.county,
+          propertyCounty: teamData?.property_county || lead.county,
+          zip: teamData?.zip || lead.zip,
+          acres: teamData?.acres || lead.acres,
+          parcelid: teamData?.parcel_id || lead.parcelid,
+          parcelId: teamData?.parcel_id || lead.parcelid,
+          dealtype: teamData?.dealtype || lead.dealtype,
+          dealType: teamData?.dealtype || lead.dealtype,
+          notes: teamData?.notes || lead.notes,
+          projectedrevenue: teamData?.projected_revenue || lead.projectedrevenue,
+          projectedRevenue: teamData?.projected_revenue || lead.projectedrevenue,
+          projectedProfit: teamData?.projected_revenue || lead.projectedrevenue,
+          // Keep offerMade from lead (not team-specific)
+          offerMade: lead.offermade
         };
       });
       setLeads(normalizedLeads);
@@ -552,7 +600,13 @@ export default function DashboardPage() {
     }
 
     // Separate team-specific updates from lead updates
-    const teamFields = ['status', 'offerprice', 'offer_price', 'contractsigned', 'contract_signed_date', 'contract_status'];
+    // ALL editable fields are team-specific for complete isolation
+    const teamFields = [
+      'status', 'offerprice', 'offer_price', 'contractsigned', 'contract_signed_date', 'contract_status',
+      'fullname', 'full_name', 'email', 'phone',
+      'address', 'street_address', 'city', 'state', 'property_state', 'county', 'property_county', 'zip',
+      'acres', 'parcelid', 'parcel_id', 'dealtype', 'notes', 'projectedrevenue', 'projected_revenue'
+    ];
     const teamUpdates = {};
     const leadUpdates = {};
 
@@ -561,6 +615,12 @@ export default function DashboardPage() {
         // Map to team_lead_data column names
         if (key === 'offerprice') teamUpdates.offer_price = updates[key];
         else if (key === 'contractsigned') teamUpdates.contract_signed_date = updates[key];
+        else if (key === 'fullname') teamUpdates.full_name = updates[key];
+        else if (key === 'address') teamUpdates.street_address = updates[key];
+        else if (key === 'state') teamUpdates.property_state = updates[key];
+        else if (key === 'county') teamUpdates.property_county = updates[key];
+        else if (key === 'parcelid') teamUpdates.parcel_id = updates[key];
+        else if (key === 'projectedrevenue') teamUpdates.projected_revenue = updates[key];
         else teamUpdates[key] = updates[key];
       } else {
         leadUpdates[key] = updates[key];
