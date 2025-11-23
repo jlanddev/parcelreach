@@ -17,10 +17,7 @@ export default function SignaturePage() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    loadSignatureRequest();
-  }, [token]);
-
-  const loadSignatureRequest = async () => {
+    const loadSignatureRequest = async () => {
     try {
       console.log('Loading signature request for token:', token);
       console.log('Supabase URL:', process.env.NEXT_PUBLIC_SUPABASE_URL);
@@ -77,7 +74,10 @@ export default function SignaturePage() {
     } finally {
       setLoading(false);
     }
-  };
+    };
+
+    loadSignatureRequest();
+  }, [token]);
 
   const clearSignature = () => {
     sigPad.current.clear();
