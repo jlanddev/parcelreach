@@ -15,6 +15,15 @@ export default function SignaturePage() {
   const [error, setError] = useState(null);
   const [signed, setSigned] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  // Check if client-side JS is running
+  useEffect(() => {
+    console.log('Component mounted on client');
+    setMounted(true);
+    setError('CLIENT JS IS RUNNING - If you see this, JavaScript works!');
+    setTimeout(() => setError(null), 2000);
+  }, []);
 
   useEffect(() => {
     const loadSignatureRequest = async () => {
