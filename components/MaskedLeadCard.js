@@ -47,21 +47,35 @@ export default function MaskedLeadCard({ lead, onPurchase }) {
           </button>
         </div>
 
-        {/* Right Column - Blurred Map Preview */}
+        {/* Right Column - Premium Blurred Map Preview */}
         <div className="w-20 flex-shrink-0">
-          <div className="relative border border-green-500/40 rounded overflow-hidden h-full">
+          <div className="relative border border-green-500/40 rounded overflow-hidden h-full bg-gradient-to-br from-slate-800 to-slate-900">
             {lead.latitude && lead.longitude ? (
               <>
                 <img
                   src={`https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/${lead.longitude},${lead.latitude},10,0/80x80@2x?logo=false&attribution=false&access_token=${process.env.NEXT_PUBLIC_MAPBOX_TOKEN}`}
                   alt="Approximate area"
-                  className="absolute inset-0 w-full h-full object-cover blur-sm"
+                  className="absolute inset-0 w-full h-full object-cover"
+                  style={{
+                    filter: 'blur(12px) brightness(0.7)',
+                    transform: 'scale(1.1)'
+                  }}
                 />
-                {/* Lock Icon Overlay */}
-                <div className="absolute inset-0 flex items-center justify-center bg-black/40">
-                  <svg className="w-8 h-8 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                  </svg>
+                {/* Premium gradient overlay */}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent" />
+                <div className="absolute inset-0 bg-gradient-to-br from-green-500/10 to-blue-500/10" />
+
+                {/* Glass morphism effect */}
+                <div className="absolute inset-0 backdrop-blur-sm bg-white/5" />
+
+                {/* Lock Icon with glow */}
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="relative">
+                    <div className="absolute inset-0 bg-green-400/20 blur-xl rounded-full" />
+                    <svg className="w-8 h-8 text-green-400 relative drop-shadow-lg" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    </svg>
+                  </div>
                 </div>
               </>
             ) : (
