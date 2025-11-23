@@ -34,7 +34,7 @@ export async function POST(request) {
         .single();
 
       // Record the purchase
-      const { error } = await supabase
+      const { error: purchaseError } = await supabase
         .from('lead_purchases')
         .insert([{
           lead_id: leadId,
@@ -45,9 +45,36 @@ export async function POST(request) {
           purchased_at: new Date().toISOString()
         }]);
 
-      if (error) {
-        console.error('Failed to record purchase:', error);
+      if (purchaseError) {
+        console.error('Failed to record purchase:', purchaseError);
         return Response.json({ error: 'Failed to record purchase' }, { status: 500 });
+      }
+
+      // Assign the purchased lead to the buyer's team
+      const { error: assignmentError } = await supabase
+        .from('lead_assignments')
+        .insert([{
+          lead_id: leadId,
+          team_id: teamId,
+          assigned_at: new Date().toISOString()
+        }]);
+
+      if (assignmentError) {
+        console.error('Failed to assign purchased lead:', assignmentError);
+      }
+
+      // Create team_lead_data for the purchased lead
+      const { error: teamDataError } = await supabase
+        .from('team_lead_data')
+        .insert([{
+          lead_id: leadId,
+          team_id: teamId,
+          status: 'new',
+          created_at: new Date().toISOString()
+        }]);
+
+      if (teamDataError) {
+        console.error('Failed to create team lead data:', teamDataError);
       }
 
       // Create notification for the purchase
