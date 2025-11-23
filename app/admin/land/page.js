@@ -1132,7 +1132,21 @@ export default function LandLeadsAdminPage() {
                     {/* Header */}
                     <div className="flex items-start justify-between mb-4">
                       <div className="flex-1">
-                        <h3 className="text-white font-semibold text-lg mb-1">{lead.name}</h3>
+                        <input
+                          type="text"
+                          value={lead.name || lead.full_name || ''}
+                          onChange={async (e) => {
+                            const { error } = await supabase
+                              .from('leads')
+                              .update({ name: e.target.value, full_name: e.target.value })
+                              .eq('id', lead.id);
+                            if (!error) {
+                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, name: e.target.value, full_name: e.target.value} : l));
+                            }
+                          }}
+                          className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-white font-semibold text-lg focus:outline-none focus:border-blue-500/50 mb-1"
+                          placeholder="Owner name"
+                        />
                         {lead.form_data?.position && (
                           <span className="inline-block px-2 py-0.5 bg-blue-500/20 text-blue-400 text-xs font-medium rounded capitalize">
                             {lead.form_data.position}
@@ -1145,22 +1159,90 @@ export default function LandLeadsAdminPage() {
                     </div>
 
                     {/* Property Location */}
-                    <div className="space-y-1 mb-3 pb-3 border-b border-slate-700/50">
+                    <div className="space-y-2 mb-3 pb-3 border-b border-slate-700/50">
                       <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Property Location</div>
-                      {lead.form_data?.streetAddress && (
-                        <div className="text-sm text-slate-300">{lead.form_data.streetAddress}</div>
-                      )}
-                      <div className="flex gap-2 text-sm text-slate-300">
-                        {lead.form_data?.propertyCounty && (
-                          <span>{lead.form_data.propertyCounty} County</span>
-                        )}
-                        {lead.form_data?.propertyState && (
-                          <span className="text-slate-400">• {lead.form_data.propertyState}</span>
-                        )}
+                      <input
+                        type="text"
+                        value={lead.form_data?.streetAddress || lead.street_address || lead.address || ''}
+                        onChange={async (e) => {
+                          const updatedFormData = { ...lead.form_data, streetAddress: e.target.value };
+                          const { error } = await supabase
+                            .from('leads')
+                            .update({
+                              form_data: updatedFormData,
+                              street_address: e.target.value,
+                              address: e.target.value
+                            })
+                            .eq('id', lead.id);
+                          if (!error) {
+                            setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, street_address: e.target.value, address: e.target.value} : l));
+                          }
+                        }}
+                        className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50"
+                        placeholder="Street address"
+                      />
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={lead.form_data?.propertyCounty || lead.property_county || lead.county || ''}
+                          onChange={async (e) => {
+                            const updatedFormData = { ...lead.form_data, propertyCounty: e.target.value };
+                            const { error } = await supabase
+                              .from('leads')
+                              .update({
+                                form_data: updatedFormData,
+                                property_county: e.target.value,
+                                county: e.target.value
+                              })
+                              .eq('id', lead.id);
+                            if (!error) {
+                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, property_county: e.target.value, county: e.target.value} : l));
+                            }
+                          }}
+                          className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50"
+                          placeholder="County"
+                        />
+                        <input
+                          type="text"
+                          value={lead.form_data?.propertyState || lead.property_state || lead.state || ''}
+                          onChange={async (e) => {
+                            const updatedFormData = { ...lead.form_data, propertyState: e.target.value };
+                            const { error } = await supabase
+                              .from('leads')
+                              .update({
+                                form_data: updatedFormData,
+                                property_state: e.target.value,
+                                state: e.target.value
+                              })
+                              .eq('id', lead.id);
+                            if (!error) {
+                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, property_state: e.target.value, state: e.target.value} : l));
+                            }
+                          }}
+                          className="w-20 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50"
+                          placeholder="State"
+                        />
                       </div>
-                      {lead.form_data?.acres && (
-                        <div className="text-sm font-semibold text-orange-400">{lead.form_data.acres}</div>
-                      )}
+                      <input
+                        type="text"
+                        value={lead.form_data?.acres || lead.acres || lead.acreage || ''}
+                        onChange={async (e) => {
+                          const updatedFormData = { ...lead.form_data, acres: e.target.value };
+                          const { error } = await supabase
+                            .from('leads')
+                            .update({
+                              form_data: updatedFormData,
+                              acres: parseFloat(e.target.value) || null,
+                              acreage: parseFloat(e.target.value) || null
+                            })
+                            .eq('id', lead.id);
+                          if (!error) {
+                            setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, acres: parseFloat(e.target.value) || null, acreage: parseFloat(e.target.value) || null} : l));
+                          }
+                        }}
+                        className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm font-semibold text-orange-400 focus:outline-none focus:border-blue-500/50"
+                        placeholder="Acres"
+                      />
                     </div>
 
                     {/* Property Details */}
@@ -1202,22 +1284,46 @@ export default function LandLeadsAdminPage() {
 
                     {/* Contact Info */}
                     <div className="space-y-2 text-sm mb-3">
-                      {lead.email && (
-                        <div className="flex items-center gap-2 text-slate-300 truncate">
-                          <svg className="w-4 h-4 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                          </svg>
-                          <span className="truncate">{lead.email}</span>
-                        </div>
-                      )}
-                      {lead.phone && (
-                        <div className="flex items-center gap-2 text-slate-300">
-                          <svg className="w-4 h-4 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-                          </svg>
-                          {lead.phone}
-                        </div>
-                      )}
+                      <div className="flex items-center gap-2">
+                        <svg className="w-4 h-4 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                        </svg>
+                        <input
+                          type="email"
+                          value={lead.email || lead.owner_email || ''}
+                          onChange={async (e) => {
+                            const { error } = await supabase
+                              .from('leads')
+                              .update({ email: e.target.value, owner_email: e.target.value })
+                              .eq('id', lead.id);
+                            if (!error) {
+                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, email: e.target.value, owner_email: e.target.value} : l));
+                            }
+                          }}
+                          className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-slate-300 focus:outline-none focus:border-blue-500/50"
+                          placeholder="Email"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <svg className="w-4 h-4 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                        </svg>
+                        <input
+                          type="tel"
+                          value={lead.phone || lead.owner_phone || ''}
+                          onChange={async (e) => {
+                            const { error } = await supabase
+                              .from('leads')
+                              .update({ phone: e.target.value, owner_phone: e.target.value })
+                              .eq('id', lead.id);
+                            if (!error) {
+                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, phone: e.target.value, owner_phone: e.target.value} : l));
+                            }
+                          }}
+                          className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-slate-300 focus:outline-none focus:border-blue-500/50"
+                          placeholder="Phone"
+                        />
+                      </div>
                       {lead.ip_address && (
                         <div className="flex items-center gap-2 text-slate-400 text-xs">
                           <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
