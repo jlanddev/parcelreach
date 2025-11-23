@@ -29,7 +29,7 @@ export async function GET() {
 
     if (error) throw error;
 
-    const signatureUrl = `${process.env.NEXT_PUBLIC_SITE_URL || 'https://parcelreach.ai'}/sign/${testToken}`;
+    const signatureUrl = `https://parcelreach.ai/sign/${testToken}`;
 
     // Fetch the rendered page
     const response = await fetch(signatureUrl);

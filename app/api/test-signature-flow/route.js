@@ -47,7 +47,7 @@ export async function GET() {
 
     // TEST 2: Fetch via API route
     try {
-      const apiResponse = await fetch(`${process.env.NEXT_PUBLIC_SITE_URL || 'https://parcelreach.ai'}/api/signature-request/${testToken}`);
+      const apiResponse = await fetch(`https://parcelreach.ai/api/signature-request/${testToken}`);
       const apiData = await apiResponse.json();
 
       if (!apiResponse.ok) {
@@ -70,7 +70,7 @@ export async function GET() {
     const testSignature = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 
     try {
-      const submitResponse = await fetch(`${process.env.NEXT_PUBLIC_SITE_URL || 'https://parcelreach.ai'}/api/signature-request/${testToken}/submit`, {
+      const submitResponse = await fetch(`https://parcelreach.ai/api/signature-request/${testToken}/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ signatureData: testSignature })
@@ -109,7 +109,7 @@ export async function GET() {
 
     // TEST 5: Verify signed request returns correctly
     try {
-      const signedResponse = await fetch(`${process.env.NEXT_PUBLIC_SITE_URL || 'https://parcelreach.ai'}/api/signature-request/${testToken}`);
+      const signedResponse = await fetch(`https://parcelreach.ai/api/signature-request/${testToken}`);
       const signedData = await signedResponse.json();
 
       if (!signedResponse.ok) {

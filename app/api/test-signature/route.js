@@ -102,8 +102,7 @@ export async function GET() {
       });
 
       // Test 6: Generate Signature URL
-      const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
-      const signatureUrl = `${baseUrl}/sign/${testToken}`;
+      const signatureUrl = `https://parcelreach.ai/sign/${testToken}`;
 
       addTest('URL Generation', true, 'Generated signature URL', { url: signatureUrl });
 

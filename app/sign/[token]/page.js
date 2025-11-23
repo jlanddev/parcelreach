@@ -14,17 +14,31 @@ export default function SignaturePage() {
   const [error, setError] = useState(null);
   const [signed, setSigned] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [debugInfo, setDebugInfo] = useState([]);
+
+  const addDebug = (msg) => {
+    setDebugInfo(prev => [...prev, `${new Date().toISOString().split('T')[1].split('.')[0]} - ${msg}`]);
+  };
 
   useEffect(() => {
+    addDebug('useEffect started');
+    addDebug(`Token from URL: ${token}`);
+
     const loadSignatureRequest = async () => {
       try {
         if (!token) {
           throw new Error('No token provided');
         }
 
+        const apiUrl = `/api/signature-request/${token}`;
+        addDebug(`Fetching: ${apiUrl}`);
+
         // Fetch signature request from API route
-        const response = await fetch(`/api/signature-request/${token}`);
+        const response = await fetch(apiUrl);
+        addDebug(`Response status: ${response.status}`);
+
         const result = await response.json();
+        addDebug(`Response received: ${JSON.stringify(result).substring(0, 100)}...`);
 
         if (!response.ok) {
           throw new Error(result.error || 'Failed to load signature request');
@@ -33,14 +47,18 @@ export default function SignaturePage() {
         const data = result.data;
 
         if (data.status === 'signed') {
+          addDebug('Status is signed, showing signed confirmation');
           setSigned(true);
         }
 
+        addDebug('Setting signature request data');
         setSigRequest(data);
       } catch (err) {
         console.error('Error loading signature request:', err);
+        addDebug(`ERROR: ${err.message}`);
         setError(err.message || 'Failed to load signature request');
       } finally {
+        addDebug('Setting loading to false');
         setLoading(false);
       }
     };

@@ -57,7 +57,7 @@ export async function POST(request) {
     }
 
     // Create signature link
-    const signatureUrl = `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/sign/${token}`;
+    const signatureUrl = `https://parcelreach.ai/sign/${token}`;
 
     // Send email to seller
     const msg = {
