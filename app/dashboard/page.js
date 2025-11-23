@@ -470,16 +470,15 @@ export default function DashboardPage() {
       });
       setLeads(normalizedLeads);
 
-        // Auto-assign unassigned leads to this team
-        const unassignedLeads = data?.filter(l => !l.team_id) || [];
-        if (unassignedLeads.length > 0) {
-          console.log(`Auto-assigning ${unassignedLeads.length} leads to team ${teamId}`);
-          for (const lead of unassignedLeads) {
-            await supabase
-              .from('leads')
-              .update({ team_id: teamId })
-              .eq('id', lead.id);
-          }
+      // Auto-assign unassigned leads to this team
+      const unassignedLeads = data?.filter(l => !l.team_id) || [];
+      if (unassignedLeads.length > 0) {
+        console.log(`Auto-assigning ${unassignedLeads.length} leads to team ${teamId}`);
+        for (const lead of unassignedLeads) {
+          await supabase
+            .from('leads')
+            .update({ team_id: teamId })
+            .eq('id', lead.id);
         }
       }
     } catch (error) {
