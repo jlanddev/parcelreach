@@ -126,15 +126,7 @@ export async function GET(request) {
       .insert([{
         team_id: testTeamId,
         lead_id: testLeadId,
-        status: 'new',
-        full_name: lead.full_name,
-        email: lead.email,
-        phone: lead.phone,
-        street_address: lead.address,
-        city: lead.city,
-        property_state: lead.property_state,
-        property_county: lead.property_county,
-        acres: lead.acres
+        status: 'new'
       }]);
 
     if (teamDataError && !teamDataError.message.includes('duplicate')) {
