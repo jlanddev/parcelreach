@@ -2455,60 +2455,113 @@ export default function DashboardPage() {
                       const purchasePrice = selectedLead.purchase_price || selectedLead.offerprice || 0;
                       const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
-                      const paText = `REAL ESTATE PURCHASE AGREEMENT
+                      const sellerName = selectedLead.full_name || selectedLead.fullname || selectedLead.fullName || '[Seller Name]';
+                      const propertyAddress = selectedLead.street_address || selectedLead.address || '[Property Address]';
+                      const propertyCity = selectedLead.city || '[City]';
+                      const propertyState = selectedLead.property_state || selectedLead.state || 'OK';
+                      const propertyCounty = selectedLead.property_county || selectedLead.county || '[County]';
+                      const propertyZip = selectedLead.zip || '[ZIP]';
+                      const parcelNumber = selectedLead.parcel_id || selectedLead.parcelid || selectedLead.parcelId || '[Parcel Number]';
+                      const acreage = selectedLead.acres || '[Acreage]';
+                      const offerAmount = purchasePrice > 0 ? `$${purchasePrice.toLocaleString()}` : '[Offer Amount]';
 
-This Purchase Agreement ("Agreement") is entered into on ${today}, by and between:
+                      const paText = `
+<style>
+  .pa-container { font-family: Arial, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto; }
+  .pa-title { text-align: center; font-weight: bold; font-size: 18px; margin-bottom: 20px; }
+  .pa-section { margin-bottom: 15px; }
+  .pa-section-title { font-weight: bold; margin-bottom: 5px; }
+  .pa-indent { margin-left: 30px; }
+  .pa-signature-line { border-bottom: 1px solid #000; width: 300px; display: inline-block; margin: 0 20px; }
+  .pa-small-line { border-bottom: 1px solid #000; width: 150px; display: inline-block; }
+  .pa-large-line { border-bottom: 1px solid #000; width: 600px; display: inline-block; }
+</style>
+<div class="pa-container">
+  <div class="pa-title">PURCHASE AND SALE AGREEMENT</div>
 
-SELLER: ${selectedLead.full_name || selectedLead.fullname || selectedLead.fullName || '[Seller Name]'}
-Address: ${selectedLead.street_address || selectedLead.address || '[Seller Address]'}
-         ${selectedLead.city || '[City]'}, ${selectedLead.property_state || selectedLead.state || '[State]'} ${selectedLead.zip || '[ZIP]'}
-Email: ${selectedLead.email || '[Email]'}
-Phone: ${selectedLead.phone || '[Phone]'}
+  <div class="pa-section">
+    <strong>SELLER:</strong> ${sellerName}<br>
+    <strong>BUYER:</strong> ${selectedBuyerEntity || '[Buyer Entity]'}<br>
+    PO BOX 188, Bluff Dale, TX. 76433
+  </div>
 
-BUYER: ${selectedBuyerEntity}
+  <div class="pa-section">
+    This is a contract for the purchase and sale of real estate (Property) located in ${propertyCounty} county, ${propertyState}.<br>
+    The Buyer and Seller agree to the following terms:
+  </div>
 
-PROPERTY DESCRIPTION:
-The property subject to this Agreement is located at:
-${selectedLead.street_address || selectedLead.address || '[Property Address]'}
-${selectedLead.city || '[City]'}, ${selectedLead.property_county || selectedLead.county || '[County]'} County, ${selectedLead.property_state || selectedLead.state || '[State]'} ${selectedLead.zip || '[ZIP]'}
+  <div class="pa-section">
+    <strong>1. PROPERTY DESCRIPTION:</strong><br>
+    <div class="pa-indent">
+      <strong>Parcel Number:</strong> ${parcelNumber}<br>
+      <strong>Legal Description:</strong> ${propertyAddress}, ${propertyCity}, ${propertyCounty} County, ${propertyState}<br>
+      <strong>Acreage:</strong> ${acreage} acres
+    </div>
+  </div>
 
-Legal Description: ${selectedLead.parcel_id || selectedLead.parcelid || selectedLead.parcelId ? 'Parcel ID: ' + (selectedLead.parcel_id || selectedLead.parcelid || selectedLead.parcelId) : '[Legal Description]'}
-Total Acreage: ${selectedLead.acres || '[Acreage]'} acres
+  <div class="pa-section">
+    <strong>2. Offer Amounts:</strong> Buyer will pay <strong>${offerAmount} total</strong> for the properties
+  </div>
 
-PURCHASE PRICE:
-The total purchase price for the property is $${purchasePrice.toLocaleString()} (USD).
+  <div class="pa-section">
+    <strong>3. PAYMENT:</strong> Buyer will pay the purchase price in cash or utilizing another funding partner.
+  </div>
 
-PAYMENT TERMS:
-- Earnest Money Deposit: $${selectedLead.earnest_money?.toLocaleString() || '[Amount]'}
-- Down Payment: $${selectedLead.down_payment?.toLocaleString() || '[Amount]'}
-- Balance Due at Closing: $${(purchasePrice - (selectedLead.earnest_money || 0) - (selectedLead.down_payment || 0)).toLocaleString()}
+  <div class="pa-section">
+    <strong>4. TITLE AND CONVEYANCE:</strong> Seller will transfer marketable title to the Property by Warranty Deed. Seller will clear all liens and encumbrances from title. Buyer will clear unpaid taxes and current year's proration's unless otherwise noted.
+  </div>
 
-CLOSING DATE:
-The closing shall occur on or before ${selectedLead.closingDate ? new Date(selectedLead.closingDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : '[Closing Date]'}.
+  <div class="pa-section">
+    <strong>5. CLOSING:</strong><br>
+    <div class="pa-indent">
+      a) Buyer will pay for any escrow fees, attorney fees, title insurance, transfer taxes, and recording fees for the Property.<br>
+      b) Seller will pay for any liens or judgments against the Property.<br>
+      c) This transaction will be closed by a reputable notary public, title company or attorney, as determined by buyer.<br>
+      d) A survey will be needed prior to closing to ensure access and the location.
+    </div>
+  </div>
 
-TITLE:
-Seller agrees to convey marketable title to the property, free and clear of all liens and encumbrances, except for those disclosed and accepted by Buyer.
+  <div class="pa-section">
+    <strong>6. CLOSING DATE:</strong> Deed and possession will be delivered to Buyer on or before ${selectedLead.closingDate ? new Date(selectedLead.closingDate).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' }) : '[Closing Date]'}, with time being of the essence
+  </div>
 
-INSPECTIONS:
-Buyer shall have [___] days from the effective date of this Agreement to conduct inspections of the property.
+  <div class="pa-section">
+    <strong>7. CANCELLATION:</strong> Buyer retains the right to terminate this agreement for any reason.
+  </div>
 
-DEFAULT:
-If either party defaults on this Agreement, the non-defaulting party shall be entitled to all remedies available at law or in equity.
+  <div class="pa-section">
+    <strong>8. DISCLOSURE:</strong> Each party represents itself. Buyer represents itself exclusively and Seller represents itself exclusively. Neither party has reviewed documents or negotiated in the best interests of the other. Buyer agrees and both parties are advised and agrees to consult with licensed real estate professionals, like attorneys, Realtors, or appraisers, as necessary.
+  </div>
 
-ENTIRE AGREEMENT:
-This Agreement constitutes the entire agreement between the parties and supersedes all prior negotiations, representations, or agreements.
+  <div class="pa-section">
+    <strong>9. ASSIGNMENT:</strong> Buyer has an unqualified right to assign its rights under this contract to a third party. No notice to the Seller of an assignment is necessary. Such an assignment will create a novation and release the original Buyer from this contract and substitute the assignee in its place. Investor or contractor may inspect property prior to agreed upon closing date.
+  </div>
 
-SIGNATURES:
+  <div class="pa-section">
+    <strong>10. BINDING AGREEMENT:</strong> This agreement is binding on the heirs, administrators, executors, successors, personal representatives and assigns of Buyer and Seller and supersedes all other agreements, written or oral, regarding the subject matter hereof.
+  </div>
 
-SELLER: _____________________________ Date: _____________
-        ${selectedLead.fullname || '[Seller Name]'}
+  <div class="pa-section">
+    <strong>11. CONTINGENCY:</strong> Property has maintained legal road access and meets Buyer's purchasing requirements.
+  </div>
 
-BUYER:  _____________________________ Date: _____________
-        ${selectedBuyerEntity}
+  <div class="pa-section">
+    <strong>12. DEADLINE FOR ACCEPTANCE:</strong> This agreement is submitted to the Seller as an offer to purchase the Property under the terms listed above. This agreement will only be valid if Seller signs
+  </div>
 
+  <div style="margin-top: 40px; margin-bottom: 20px;">
+    this agreement and returns to Buyer via mail, fax or email by <strong>08-31-25 at 11:59 PM CST</strong>. If Buyer does not receive the executed agreement by that date and time, this offer will automatically expire.
+  </div>
 
-Generated with ParcelReach AI on ${today}
-`;
+  <div style="margin-top: 60px;">
+    <span class="pa-signature-line"></span> &nbsp;&nbsp;&nbsp; <span class="pa-small-line"></span> &nbsp;&nbsp;&nbsp; <span class="pa-signature-line"></span><br>
+    Seller: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Date: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Buyer:<br><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Date:<br><br>
+    Phone and Email :<span class="pa-large-line"></span><br><br>
+    Agreed Sales Price :<span class="pa-large-line"></span>
+  </div>
+</div>`;
+
 
                       setGeneratedPA(paText);
                     }}
@@ -2522,30 +2575,31 @@ Generated with ParcelReach AI on ${today}
             ) : (
               // Show generated PA
               <div className="space-y-4">
-                <div className="bg-white text-black p-6 rounded-lg border border-slate-300 max-h-[500px] overflow-y-auto">
-                  <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed">{generatedPA}</pre>
+                <div id="pa-document" className="bg-white text-black p-8 rounded-lg border border-slate-300 max-h-[500px] overflow-y-auto">
+                  <div dangerouslySetInnerHTML={{ __html: generatedPA }} />
                 </div>
 
                 <div className="flex gap-3">
                   <button
                     onClick={() => {
-                      navigator.clipboard.writeText(generatedPA);
-                      alert('Purchase Agreement copied to clipboard!');
+                      window.print();
                     }}
                     className="flex-1 px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-400 transition-colors font-semibold flex items-center justify-center gap-2"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
                     </svg>
-                    Copy to Clipboard
+                    Print / Save as PDF
                   </button>
                   <button
                     onClick={() => {
-                      const blob = new Blob([generatedPA], { type: 'text/plain' });
+                      const element = document.getElementById('pa-document');
+                      const htmlContent = element.innerHTML;
+                      const blob = new Blob([htmlContent], { type: 'text/html' });
                       const url = URL.createObjectURL(blob);
                       const a = document.createElement('a');
                       a.href = url;
-                      a.download = `PA_${selectedLead.fullname || 'Property'}_${new Date().toISOString().split('T')[0]}.txt`;
+                      a.download = `PA_${selectedLead.full_name || selectedLead.fullname || 'Property'}_${new Date().toISOString().split('T')[0]}.html`;
                       a.click();
                       URL.revokeObjectURL(url);
                     }}
@@ -2554,7 +2608,7 @@ Generated with ParcelReach AI on ${today}
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                     </svg>
-                    Download
+                    Download HTML
                   </button>
                   <button
                     onClick={() => {
