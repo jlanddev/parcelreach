@@ -75,6 +75,12 @@ export default function DashboardPage() {
   const [accountOpen, setAccountOpen] = useState(false);
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
+  const [paModalOpen, setPaModalOpen] = useState(false);
+  const [generatedPA, setGeneratedPA] = useState('');
+  const [accountTab, setAccountTab] = useState('general');
+  const [legalEntities, setLegalEntities] = useState([]);
+  const [newEntity, setNewEntity] = useState('');
+  const [selectedBuyerEntity, setSelectedBuyerEntity] = useState('');
   const [notificationToast, setNotificationToast] = useState({ show: false, message: '', type: 'success' });
   const [zoomToLead, setZoomToLead] = useState(null);
   const [clickTimeout, setClickTimeout] = useState(null);
@@ -151,6 +157,7 @@ export default function DashboardPage() {
         console.log('📊 Admin team loaded:', team);
         if (team) {
           setCurrentTeam(team);
+          setLegalEntities(team.legal_entities || []);
           loadTeamMembers(team.id);
           fetchLeads(team.id);
         }
@@ -166,6 +173,7 @@ export default function DashboardPage() {
           console.log('🔍 DEBUG: Setting currentTeam to:', teams[0].teams);
           console.log('🔍 DEBUG: Team ID:', teams[0].teams?.id);
           setCurrentTeam(teams[0].teams);
+          setLegalEntities(teams[0].teams?.legal_entities || []);
           loadTeamMembers(teams[0].team_id);
           fetchLeads(teams[0].team_id);
         } else {
@@ -605,7 +613,9 @@ export default function DashboardPage() {
       'status', 'offerprice', 'offer_price', 'contractsigned', 'contract_signed_date', 'contract_status',
       'fullname', 'full_name', 'email', 'phone',
       'address', 'street_address', 'city', 'state', 'property_state', 'county', 'property_county', 'zip',
-      'acres', 'parcelid', 'parcel_id', 'dealtype', 'notes', 'projectedrevenue', 'projected_revenue'
+      'acres', 'parcelid', 'parcel_id', 'dealtype', 'notes', 'projectedrevenue', 'projected_revenue',
+      'purchase_price', 'comp1_acres', 'comp1_price', 'comp2_acres', 'comp2_price', 'comp3_acres', 'comp3_price',
+      'financing_costs', 'closing_costs', 'misc_costs'
     ];
     const teamUpdates = {};
     const leadUpdates = {};
@@ -1293,6 +1303,16 @@ export default function DashboardPage() {
                           className="text-right bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-blue-500/50"
                         />
                       </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">State:</span>
+                        <input
+                          type="text"
+                          value={selectedLead.state || ''}
+                          onChange={(e) => updateLead(selectedLead.id, { state: e.target.value }, true)}
+                          placeholder="Enter state"
+                          className="text-right bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-blue-500/50"
+                        />
+                      </div>
                     </div>
                   </div>
 
@@ -1433,6 +1453,196 @@ export default function DashboardPage() {
                       placeholder="Enter projected revenue"
                       className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-green-500/50 focus:ring-1 focus:ring-green-500/50"
                     />
+                  </div>
+
+                  {/* Deal Underwriting Calculator */}
+                  <div className="bg-gradient-to-br from-slate-800/50 to-purple-900/20 rounded-lg p-4 border border-purple-500/30">
+                    <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
+                      <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                      </svg>
+                      Deal Underwriting
+                    </h3>
+                    <div className="space-y-3 text-sm">
+                      {/* Purchase Price */}
+                      <div>
+                        <label className="text-slate-300 block mb-1 font-medium">Purchase Price</label>
+                        <input
+                          type="number"
+                          value={selectedLead.purchase_price || ''}
+                          onChange={(e) => updateLead(selectedLead.id, { purchase_price: Number(e.target.value) }, true)}
+                          placeholder="$0"
+                          className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-3 py-2 text-white focus:outline-none focus:border-purple-500/50"
+                        />
+                        {selectedLead.purchase_price && selectedLead.acres && (
+                          <div className="mt-1 text-purple-300 font-semibold">
+                            ${(selectedLead.purchase_price / selectedLead.acres).toFixed(2)} per acre
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Comps Section */}
+                      <div className="border-t border-slate-700/50 pt-3">
+                        <label className="text-slate-300 block mb-2 font-medium">Comparable Properties</label>
+
+                        {/* Comp 1 */}
+                        <div className="bg-slate-900/30 rounded p-2 mb-2">
+                          <div className="text-xs text-slate-400 mb-1">Comp #1</div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input
+                              type="number"
+                              placeholder="Acres"
+                              value={selectedLead.comp1_acres || ''}
+                              onChange={(e) => updateLead(selectedLead.id, { comp1_acres: Number(e.target.value) }, true)}
+                              className="bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-purple-500/50"
+                            />
+                            <input
+                              type="number"
+                              placeholder="Price"
+                              value={selectedLead.comp1_price || ''}
+                              onChange={(e) => updateLead(selectedLead.id, { comp1_price: Number(e.target.value) }, true)}
+                              className="bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-purple-500/50"
+                            />
+                          </div>
+                          {selectedLead.comp1_acres && selectedLead.comp1_price && (
+                            <div className="text-xs text-purple-300 mt-1">
+                              ${(selectedLead.comp1_price / selectedLead.comp1_acres).toFixed(2)}/acre
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Comp 2 */}
+                        <div className="bg-slate-900/30 rounded p-2 mb-2">
+                          <div className="text-xs text-slate-400 mb-1">Comp #2</div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input
+                              type="number"
+                              placeholder="Acres"
+                              value={selectedLead.comp2_acres || ''}
+                              onChange={(e) => updateLead(selectedLead.id, { comp2_acres: Number(e.target.value) }, true)}
+                              className="bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-purple-500/50"
+                            />
+                            <input
+                              type="number"
+                              placeholder="Price"
+                              value={selectedLead.comp2_price || ''}
+                              onChange={(e) => updateLead(selectedLead.id, { comp2_price: Number(e.target.value) }, true)}
+                              className="bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-purple-500/50"
+                            />
+                          </div>
+                          {selectedLead.comp2_acres && selectedLead.comp2_price && (
+                            <div className="text-xs text-purple-300 mt-1">
+                              ${(selectedLead.comp2_price / selectedLead.comp2_acres).toFixed(2)}/acre
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Comp 3 */}
+                        <div className="bg-slate-900/30 rounded p-2">
+                          <div className="text-xs text-slate-400 mb-1">Comp #3</div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input
+                              type="number"
+                              placeholder="Acres"
+                              value={selectedLead.comp3_acres || ''}
+                              onChange={(e) => updateLead(selectedLead.id, { comp3_acres: Number(e.target.value) }, true)}
+                              className="bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-purple-500/50"
+                            />
+                            <input
+                              type="number"
+                              placeholder="Price"
+                              value={selectedLead.comp3_price || ''}
+                              onChange={(e) => updateLead(selectedLead.id, { comp3_price: Number(e.target.value) }, true)}
+                              className="bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-purple-500/50"
+                            />
+                          </div>
+                          {selectedLead.comp3_acres && selectedLead.comp3_price && (
+                            <div className="text-xs text-purple-300 mt-1">
+                              ${(selectedLead.comp3_price / selectedLead.comp3_acres).toFixed(2)}/acre
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Costs Section */}
+                      <div className="border-t border-slate-700/50 pt-3 space-y-2">
+                        <div>
+                          <label className="text-slate-400 text-xs block mb-1">Financing Costs</label>
+                          <input
+                            type="number"
+                            value={selectedLead.financing_costs || ''}
+                            onChange={(e) => updateLead(selectedLead.id, { financing_costs: Number(e.target.value) }, true)}
+                            placeholder="$0"
+                            className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-purple-500/50"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-slate-400 text-xs block mb-1">Closing Costs</label>
+                          <input
+                            type="number"
+                            value={selectedLead.closing_costs || ''}
+                            onChange={(e) => updateLead(selectedLead.id, { closing_costs: Number(e.target.value) }, true)}
+                            placeholder="$0"
+                            className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-purple-500/50"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-slate-400 text-xs block mb-1">Miscellaneous Costs</label>
+                          <input
+                            type="number"
+                            value={selectedLead.misc_costs || ''}
+                            onChange={(e) => updateLead(selectedLead.id, { misc_costs: Number(e.target.value) }, true)}
+                            placeholder="$0"
+                            className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-purple-500/50"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Deal Summary */}
+                      {selectedLead.purchase_price && selectedLead.acres && (
+                        <div className="border-t border-purple-500/30 pt-3 bg-purple-900/20 rounded p-3 -mx-1">
+                          <div className="flex justify-between text-sm mb-1">
+                            <span className="text-slate-300">Total Investment:</span>
+                            <span className="text-white font-semibold">
+                              ${(selectedLead.purchase_price + (selectedLead.financing_costs || 0) + (selectedLead.closing_costs || 0) + (selectedLead.misc_costs || 0)).toLocaleString()}
+                            </span>
+                          </div>
+                          {selectedLead.projectedrevenue && (
+                            <>
+                              <div className="flex justify-between text-sm mb-1">
+                                <span className="text-slate-300">Projected Revenue:</span>
+                                <span className="text-green-400 font-semibold">${selectedLead.projectedrevenue.toLocaleString()}</span>
+                              </div>
+                              <div className="flex justify-between text-sm border-t border-purple-500/20 pt-2 mt-2">
+                                <span className="text-slate-200 font-medium">Deal Return:</span>
+                                <span className={`font-bold ${(selectedLead.projectedrevenue - (selectedLead.purchase_price + (selectedLead.financing_costs || 0) + (selectedLead.closing_costs || 0) + (selectedLead.misc_costs || 0))) > 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                  ${(selectedLead.projectedrevenue - (selectedLead.purchase_price + (selectedLead.financing_costs || 0) + (selectedLead.closing_costs || 0) + (selectedLead.misc_costs || 0))).toLocaleString()}
+                                </span>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Generate PA Button */}
+                      <button
+                        onClick={() => {
+                          // Check if they have legal entities
+                          if (!legalEntities || legalEntities.length === 0) {
+                            alert('Please add legal entities in Account Settings → Legal Entities tab first.');
+                            return;
+                          }
+                          // Open PA modal to select LLC
+                          setPaModalOpen(true);
+                        }}
+                        className="w-full bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-lg font-semibold transition-colors mt-3 flex items-center justify-center gap-2"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        Generate Purchase Agreement
+                      </button>
+                    </div>
                   </div>
 
                   {/* Status Tags */}
@@ -1833,6 +2043,32 @@ export default function DashboardPage() {
               </button>
             </div>
 
+            {/* Tabs */}
+            <div className="flex gap-2 mb-6 border-b border-slate-700/50">
+              <button
+                onClick={() => setAccountTab('general')}
+                className={`px-4 py-2 font-semibold transition-colors border-b-2 ${
+                  accountTab === 'general'
+                    ? 'text-blue-400 border-blue-400'
+                    : 'text-slate-400 border-transparent hover:text-white'
+                }`}
+              >
+                General
+              </button>
+              <button
+                onClick={() => setAccountTab('legal')}
+                className={`px-4 py-2 font-semibold transition-colors border-b-2 ${
+                  accountTab === 'legal'
+                    ? 'text-blue-400 border-blue-400'
+                    : 'text-slate-400 border-transparent hover:text-white'
+                }`}
+              >
+                Legal Entities
+              </button>
+            </div>
+
+            {/* General Tab */}
+            {accountTab === 'general' && (
             <div className="space-y-6">
               {/* Organization Name */}
               <div>
@@ -1965,6 +2201,98 @@ export default function DashboardPage() {
                 </button>
               </div>
             </div>
+            )}
+
+            {/* Legal Entities Tab */}
+            {accountTab === 'legal' && (
+            <div className="space-y-6">
+              <div>
+                <label className="block text-sm font-semibold text-white mb-2">Legal Entities / LLCs</label>
+                <p className="text-slate-400 text-sm mb-4">Add the legal entities you use for purchasing properties. These will be available when generating purchase agreements.</p>
+
+                {/* List of entities */}
+                <div className="space-y-2 mb-3">
+                  {legalEntities.map((entity, index) => (
+                    <div key={index} className="flex items-center justify-between bg-slate-900/50 border border-slate-700/50 rounded-lg px-4 py-3">
+                      <span className="text-white">{entity}</span>
+                      <button
+                        onClick={() => {
+                          setLegalEntities(legalEntities.filter((_, i) => i !== index));
+                        }}
+                        className="text-red-400 hover:text-red-300 text-sm"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                  {legalEntities.length === 0 && (
+                    <div className="text-slate-400 text-sm text-center py-4 bg-slate-900/30 rounded-lg border border-slate-700/50">
+                      No legal entities added yet
+                    </div>
+                  )}
+                </div>
+
+                {/* Add new entity */}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newEntity}
+                    onChange={(e) => setNewEntity(e.target.value)}
+                    placeholder="Enter LLC name (e.g., ABC Land Holdings LLC)"
+                    className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50"
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter' && newEntity.trim()) {
+                        setLegalEntities([...legalEntities, newEntity.trim()]);
+                        setNewEntity('');
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={() => {
+                      if (newEntity.trim()) {
+                        setLegalEntities([...legalEntities, newEntity.trim()]);
+                        setNewEntity('');
+                      }
+                    }}
+                    className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-400 transition-colors text-sm font-semibold"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+
+              {/* Save button */}
+              <div className="flex gap-3 pt-4 border-t border-slate-700/50">
+                <button
+                  onClick={async () => {
+                    // Save legal entities to database
+                    if (currentTeam?.id) {
+                      try {
+                        const { error } = await supabase
+                          .from('teams')
+                          .update({ legal_entities: legalEntities })
+                          .eq('id', currentTeam.id);
+
+                        if (error) {
+                          console.error('Error updating legal entities:', error);
+                          alert('Failed to update legal entities. Please try again.');
+                        } else {
+                          alert('Legal entities updated successfully!');
+                          setAccountOpen(false);
+                        }
+                      } catch (error) {
+                        console.error('Error updating legal entities:', error);
+                        alert('Failed to update legal entities. Please try again.');
+                      }
+                    }
+                  }}
+                  className="flex-1 px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-400 transition-colors font-semibold"
+                >
+                  Save Legal Entities
+                </button>
+              </div>
+            </div>
+            )}
           </div>
         </div>
       )}
@@ -2059,6 +2387,200 @@ export default function DashboardPage() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Purchase Agreement Generator Modal */}
+      {paModalOpen && selectedLead && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setPaModalOpen(false)}>
+          <div className="bg-gradient-to-b from-slate-800 to-slate-900 rounded-xl shadow-2xl max-w-3xl w-full border border-slate-700/50 p-6 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-bold text-white">Generate Purchase Agreement</h2>
+              <button
+                onClick={() => setPaModalOpen(false)}
+                className="p-2 hover:bg-slate-700/50 rounded-lg transition-colors"
+              >
+                <svg className="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {!generatedPA ? (
+              // LLC Selector
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-semibold text-white mb-2">Select Buyer Entity (LLC)</label>
+                  <select
+                    value={selectedBuyerEntity}
+                    onChange={(e) => setSelectedBuyerEntity(e.target.value)}
+                    className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50"
+                  >
+                    <option value="">-- Select an LLC --</option>
+                    {legalEntities.map((entity, index) => (
+                      <option key={index} value={entity}>{entity}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="bg-purple-900/20 border border-purple-500/30 rounded-lg p-4">
+                  <h3 className="text-white font-semibold mb-2">Property Details</h3>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <span className="text-slate-400">Seller:</span>
+                      <span className="ml-2 text-white">{selectedLead.fullname || 'N/A'}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400">Acres:</span>
+                      <span className="ml-2 text-white">{selectedLead.acres || 'N/A'}</span>
+                    </div>
+                    <div className="col-span-2">
+                      <span className="text-slate-400">Address:</span>
+                      <span className="ml-2 text-white">{selectedLead.address}, {selectedLead.city}, {selectedLead.state}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400">County:</span>
+                      <span className="ml-2 text-white">{selectedLead.county}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400">Purchase Price:</span>
+                      <span className="ml-2 text-green-400 font-semibold">${selectedLead.purchase_price?.toLocaleString() || selectedLead.offerprice?.toLocaleString() || 'N/A'}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex gap-3 pt-4">
+                  <button
+                    onClick={() => setPaModalOpen(false)}
+                    className="flex-1 px-6 py-3 bg-slate-700 text-white rounded-lg hover:bg-slate-600 transition-colors font-semibold"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!selectedBuyerEntity) {
+                        alert('Please select a buyer entity (LLC)');
+                        return;
+                      }
+
+                      // Generate PA text
+                      const purchasePrice = selectedLead.purchase_price || selectedLead.offerprice || 0;
+                      const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+
+                      const paText = `REAL ESTATE PURCHASE AGREEMENT
+
+This Purchase Agreement ("Agreement") is entered into on ${today}, by and between:
+
+SELLER: ${selectedLead.fullname || '[Seller Name]'}
+Address: ${selectedLead.address || '[Seller Address]'}
+         ${selectedLead.city || '[City]'}, ${selectedLead.state || '[State]'} ${selectedLead.zip || '[ZIP]'}
+Email: ${selectedLead.email || '[Email]'}
+Phone: ${selectedLead.phone || '[Phone]'}
+
+BUYER: ${selectedBuyerEntity}
+
+PROPERTY DESCRIPTION:
+The property subject to this Agreement is located at:
+${selectedLead.address || '[Property Address]'}
+${selectedLead.city || '[City]'}, ${selectedLead.county || '[County]'} County, ${selectedLead.state || '[State]'} ${selectedLead.zip || '[ZIP]'}
+
+Legal Description: ${selectedLead.parcelid ? 'Parcel ID: ' + selectedLead.parcelid : '[Legal Description]'}
+Total Acreage: ${selectedLead.acres || '[Acreage]'} acres
+
+PURCHASE PRICE:
+The total purchase price for the property is $${purchasePrice.toLocaleString()} (USD).
+
+PAYMENT TERMS:
+- Earnest Money Deposit: $${selectedLead.earnest_money?.toLocaleString() || '[Amount]'}
+- Down Payment: $${selectedLead.down_payment?.toLocaleString() || '[Amount]'}
+- Balance Due at Closing: $${(purchasePrice - (selectedLead.earnest_money || 0) - (selectedLead.down_payment || 0)).toLocaleString()}
+
+CLOSING DATE:
+The closing shall occur on or before ${selectedLead.closingDate ? new Date(selectedLead.closingDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : '[Closing Date]'}.
+
+TITLE:
+Seller agrees to convey marketable title to the property, free and clear of all liens and encumbrances, except for those disclosed and accepted by Buyer.
+
+INSPECTIONS:
+Buyer shall have [___] days from the effective date of this Agreement to conduct inspections of the property.
+
+DEFAULT:
+If either party defaults on this Agreement, the non-defaulting party shall be entitled to all remedies available at law or in equity.
+
+ENTIRE AGREEMENT:
+This Agreement constitutes the entire agreement between the parties and supersedes all prior negotiations, representations, or agreements.
+
+SIGNATURES:
+
+SELLER: _____________________________ Date: _____________
+        ${selectedLead.fullname || '[Seller Name]'}
+
+BUYER:  _____________________________ Date: _____________
+        ${selectedBuyerEntity}
+
+
+Generated with ParcelReach AI on ${today}
+`;
+
+                      setGeneratedPA(paText);
+                    }}
+                    className="flex-1 px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-500 transition-colors font-semibold disabled:opacity-50"
+                    disabled={!selectedBuyerEntity}
+                  >
+                    Generate Agreement
+                  </button>
+                </div>
+              </div>
+            ) : (
+              // Show generated PA
+              <div className="space-y-4">
+                <div className="bg-white text-black p-6 rounded-lg border border-slate-300 max-h-[500px] overflow-y-auto">
+                  <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed">{generatedPA}</pre>
+                </div>
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(generatedPA);
+                      alert('Purchase Agreement copied to clipboard!');
+                    }}
+                    className="flex-1 px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-400 transition-colors font-semibold flex items-center justify-center gap-2"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                    Copy to Clipboard
+                  </button>
+                  <button
+                    onClick={() => {
+                      const blob = new Blob([generatedPA], { type: 'text/plain' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `PA_${selectedLead.fullname || 'Property'}_${new Date().toISOString().split('T')[0]}.txt`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                    className="flex-1 px-6 py-3 bg-green-500 text-white rounded-lg hover:bg-green-400 transition-colors font-semibold flex items-center justify-center gap-2"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    Download
+                  </button>
+                  <button
+                    onClick={() => {
+                      setGeneratedPA('');
+                      setSelectedBuyerEntity('');
+                    }}
+                    className="px-6 py-3 bg-slate-700 text-white rounded-lg hover:bg-slate-600 transition-colors font-semibold"
+                  >
+                    New PA
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
