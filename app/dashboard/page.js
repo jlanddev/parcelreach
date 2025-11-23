@@ -106,6 +106,10 @@ export default function DashboardPage() {
   // Delete confirmation modal
   const [leadToDelete, setLeadToDelete] = useState(null);
 
+  // Purchase success modal
+  const [purchaseSuccessModal, setPurchaseSuccessModal] = useState(false);
+  const [purchasedLeadId, setPurchasedLeadId] = useState(null);
+
   // Helper function to show toasts
   const showToast = (message, type = 'success') => {
     setNotificationToast({ show: true, message, type });
@@ -248,6 +252,28 @@ export default function DashboardPage() {
       setOrganizationName(currentTeam.name);
     }
   }, [currentTeam, accountOpen]);
+
+  // Check for purchase success
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const purchaseStatus = urlParams.get('purchase');
+    const leadId = urlParams.get('lead_id');
+
+    if (purchaseStatus === 'success' && leadId) {
+      setPurchasedLeadId(leadId);
+      setPurchaseSuccessModal(true);
+
+      // Clean up URL
+      window.history.replaceState({}, '', '/dashboard');
+
+      // Reload leads after a brief delay to allow webhook to process
+      setTimeout(() => {
+        fetchLeads();
+      }, 2000);
+    }
+  }, []);
 
   // Load logo position and size from localStorage
   useEffect(() => {
@@ -3243,6 +3269,47 @@ export default function DashboardPage() {
           message={notificationToast.message}
           onClose={() => setNotificationToast({ show: false, message: '', type: 'success' })}
         />
+      )}
+
+      {/* Purchase Success Modal */}
+      {purchaseSuccessModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl shadow-2xl max-w-lg w-full border border-green-500/30 overflow-hidden">
+            {/* Success Header */}
+            <div className="bg-gradient-to-r from-green-600 to-green-500 p-6 text-center">
+              <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <h2 className="text-2xl font-bold text-white">Purchase Successful!</h2>
+            </div>
+
+            {/* Content */}
+            <div className="p-8 text-center">
+              <p className="text-lg text-slate-300 mb-6">
+                Your lead purchase was successful. You can now view all details in your team dashboard.
+              </p>
+
+              <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 mb-6">
+                <p className="text-green-400 text-sm">
+                  The lead information has been unlocked and is now available in your dashboard.
+                </p>
+              </div>
+
+              <button
+                onClick={() => {
+                  setPurchaseSuccessModal(false);
+                  // Refresh leads to show unlocked lead
+                  fetchLeads();
+                }}
+                className="w-full px-6 py-3 bg-gradient-to-r from-green-600 to-green-500 text-white rounded-lg font-semibold hover:from-green-500 hover:to-green-400 transition-all shadow-lg"
+              >
+                View Your Leads
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

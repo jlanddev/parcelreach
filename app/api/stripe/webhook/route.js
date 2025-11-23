@@ -26,6 +26,13 @@ export async function POST(request) {
     const { leadId, userId, teamId, price } = session.metadata;
 
     try {
+      // Get lead details for notification
+      const { data: lead } = await supabase
+        .from('leads')
+        .select('property_county, property_state, acres')
+        .eq('id', leadId)
+        .single();
+
       // Record the purchase
       const { error } = await supabase
         .from('lead_purchases')
@@ -41,6 +48,21 @@ export async function POST(request) {
       if (error) {
         console.error('Failed to record purchase:', error);
         return Response.json({ error: 'Failed to record purchase' }, { status: 500 });
+      }
+
+      // Create notification for the purchase
+      if (lead) {
+        await supabase
+          .from('notifications')
+          .insert([{
+            team_id: teamId,
+            user_id: userId,
+            title: 'Lead Purchased',
+            message: `You purchased a lead: ${lead.acres || 'N/A'} acres in ${lead.property_county}, ${lead.property_state} for $${price}`,
+            type: 'purchase',
+            read: false,
+            created_at: new Date().toISOString()
+          }]);
       }
 
       console.log(`✅ Lead ${leadId} purchased by user ${userId} for $${price}`);
