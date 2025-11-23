@@ -82,13 +82,12 @@ export async function POST(request) {
         const { error: notifError } = await supabase
           .from('notifications')
           .insert([{
-            team_id: teamId,
             user_id: userId,
+            lead_id: leadId,
             title: 'Lead Purchased',
             message: `You purchased a lead: ${lead.acres || 'N/A'} acres in ${lead.property_county}, ${lead.property_state} for $${price}`,
-            type: 'purchase',
-            read: false,
-            created_at: new Date().toISOString()
+            type: 'lead_assigned',
+            read: false
           }]);
 
         if (notifError) {
