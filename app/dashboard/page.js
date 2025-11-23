@@ -404,12 +404,13 @@ export default function DashboardPage() {
       console.log('📋 DEBUG: Assigned lead IDs:', assignedLeadIds);
 
       // Fetch the actual leads with team-specific data
-      // Note: Only select columns that exist in team_lead_data table
+      // Use LEFT join so leads without team_lead_data still show
       const { data, error } = await supabase
         .from('leads')
         .select(`
           *,
-          team_data:team_lead_data!inner(
+          team_data:team_lead_data(
+            team_id,
             status,
             offer_price,
             contract_status,
@@ -422,7 +423,6 @@ export default function DashboardPage() {
           )
         `)
         .in('id', assignedLeadIds.length > 0 ? assignedLeadIds : ['00000000-0000-0000-0000-000000000000'])
-        .eq('team_lead_data.team_id', teamId)
         .order('created_at', { ascending: false});
 
       if (error) {
@@ -465,9 +465,15 @@ export default function DashboardPage() {
       }
 
       // Normalize: merge team_data into lead object
-      // ALL fields come from team_lead_data for complete isolation
+      // Filter team_data to only this team's data
       const normalizedLeads = (data || []).map(lead => {
-        const teamData = Array.isArray(lead.team_data) ? lead.team_data[0] : lead.team_data;
+        // Find team_data for THIS team only
+        let teamData = null;
+        if (Array.isArray(lead.team_data)) {
+          teamData = lead.team_data.find(td => td.team_id === teamId);
+        } else if (lead.team_data?.team_id === teamId) {
+          teamData = lead.team_data;
+        }
         return {
           ...lead,
           // Team-specific data (status, offers, contracts)
