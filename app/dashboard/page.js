@@ -2459,9 +2459,9 @@ export default function DashboardPage() {
 
 This Purchase Agreement ("Agreement") is entered into on ${today}, by and between:
 
-SELLER: ${selectedLead.fullname || '[Seller Name]'}
-Address: ${selectedLead.address || '[Seller Address]'}
-         ${selectedLead.city || '[City]'}, ${selectedLead.state || '[State]'} ${selectedLead.zip || '[ZIP]'}
+SELLER: ${selectedLead.full_name || selectedLead.fullname || selectedLead.fullName || '[Seller Name]'}
+Address: ${selectedLead.street_address || selectedLead.address || '[Seller Address]'}
+         ${selectedLead.city || '[City]'}, ${selectedLead.property_state || selectedLead.state || '[State]'} ${selectedLead.zip || '[ZIP]'}
 Email: ${selectedLead.email || '[Email]'}
 Phone: ${selectedLead.phone || '[Phone]'}
 
@@ -2469,10 +2469,10 @@ BUYER: ${selectedBuyerEntity}
 
 PROPERTY DESCRIPTION:
 The property subject to this Agreement is located at:
-${selectedLead.address || '[Property Address]'}
-${selectedLead.city || '[City]'}, ${selectedLead.county || '[County]'} County, ${selectedLead.state || '[State]'} ${selectedLead.zip || '[ZIP]'}
+${selectedLead.street_address || selectedLead.address || '[Property Address]'}
+${selectedLead.city || '[City]'}, ${selectedLead.property_county || selectedLead.county || '[County]'} County, ${selectedLead.property_state || selectedLead.state || '[State]'} ${selectedLead.zip || '[ZIP]'}
 
-Legal Description: ${selectedLead.parcelid ? 'Parcel ID: ' + selectedLead.parcelid : '[Legal Description]'}
+Legal Description: ${selectedLead.parcel_id || selectedLead.parcelid || selectedLead.parcelId ? 'Parcel ID: ' + (selectedLead.parcel_id || selectedLead.parcelid || selectedLead.parcelId) : '[Legal Description]'}
 Total Acreage: ${selectedLead.acres || '[Acreage]'} acres
 
 PURCHASE PRICE:
