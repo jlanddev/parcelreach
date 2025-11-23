@@ -132,6 +132,34 @@ export default function LandLeadsAdminPage() {
     try {
       console.log('🔍 Assigning lead:', leadId, 'to teams:', teamIds);
 
+      // Update lead with any edits made in the assignment modal
+      if (selectedLead) {
+        const { error: updateError } = await supabase
+          .from('leads')
+          .update({
+            full_name: selectedLead.full_name || selectedLead.name,
+            name: selectedLead.full_name || selectedLead.name,
+            email: selectedLead.email,
+            phone: selectedLead.phone,
+            street_address: selectedLead.street_address || selectedLead.address,
+            address: selectedLead.street_address || selectedLead.address,
+            property_county: selectedLead.property_county || selectedLead.county,
+            county: selectedLead.property_county || selectedLead.county,
+            property_state: selectedLead.property_state || selectedLead.state,
+            state: selectedLead.property_state || selectedLead.state,
+            zip: selectedLead.zip,
+            acres: parseFloat(selectedLead.acres || selectedLead.acreage) || null,
+            acreage: parseFloat(selectedLead.acres || selectedLead.acreage) || null
+          })
+          .eq('id', leadId);
+
+        if (updateError) {
+          console.error('Failed to update lead:', updateError);
+        } else {
+          console.log('✅ Lead info updated successfully');
+        }
+      }
+
       // Get lead details for notification and team_lead_data creation
       const { data: leadData } = await supabase
         .from('leads')
@@ -1768,11 +1796,90 @@ export default function LandLeadsAdminPage() {
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-xl font-bold mb-4">Assign Lead to Organizations</h3>
-            <div className="mb-6 p-4 bg-slate-900/50 rounded-lg">
-              <p className="font-semibold text-white">{selectedLead.full_name || selectedLead.name}</p>
-              <p className="text-sm text-slate-400 mt-1">
-                {selectedLead.property_county || selectedLead.county}, {selectedLead.property_state || selectedLead.state}
-              </p>
+
+            {/* Editable Lead Info */}
+            <div className="mb-6 p-4 bg-slate-900/50 rounded-lg space-y-3 max-h-96 overflow-y-auto">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Full Name</label>
+                  <input
+                    type="text"
+                    value={selectedLead.full_name || selectedLead.name || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, full_name: e.target.value, name: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Email</label>
+                  <input
+                    type="email"
+                    value={selectedLead.email || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, email: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Phone</label>
+                  <input
+                    type="tel"
+                    value={selectedLead.phone || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, phone: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Acres</label>
+                  <input
+                    type="number"
+                    value={selectedLead.acres || selectedLead.acreage || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, acres: e.target.value, acreage: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1">Address</label>
+                <input
+                  type="text"
+                  value={selectedLead.street_address || selectedLead.address || ''}
+                  onChange={(e) => setSelectedLead({...selectedLead, street_address: e.target.value, address: e.target.value})}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">County</label>
+                  <input
+                    type="text"
+                    value={selectedLead.property_county || selectedLead.county || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, property_county: e.target.value, county: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">State</label>
+                  <input
+                    type="text"
+                    value={selectedLead.property_state || selectedLead.state || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, property_state: e.target.value, state: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Zip</label>
+                  <input
+                    type="text"
+                    value={selectedLead.zip || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, zip: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
             </div>
 
             {/* Price Input for Marketplace Leads */}
