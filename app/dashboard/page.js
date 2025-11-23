@@ -7,6 +7,7 @@ import { createClient } from '@supabase/supabase-js';
 import NotificationsPanel from '@/components/NotificationsPanel';
 import NotificationBell from '@/components/NotificationBell';
 import LeadNotes from '@/components/LeadNotes';
+import Toast from '@/components/Toast';
 
 // Dynamically import map to avoid SSR issues
 const LeadsMap = dynamicImport(() => import('@/components/LeadsMap'), {
@@ -103,6 +104,11 @@ export default function DashboardPage() {
 
   // Delete confirmation modal
   const [leadToDelete, setLeadToDelete] = useState(null);
+
+  // Helper function to show toasts
+  const showToast = (message, type = 'success') => {
+    setNotificationToast({ show: true, message, type });
+  };
 
   // Account settings state
   const [organizationName, setOrganizationName] = useState('');
@@ -2832,13 +2838,13 @@ export default function DashboardPage() {
                           throw new Error(data.error || 'Failed to send PA');
                         }
 
-                        alert(`✅ Purchase Agreement sent to ${sellerEmailToSend}!\n\nThe seller will receive an email with a link to review and sign the agreement.`);
+                        showToast(`✅ Purchase Agreement sent to ${sellerEmailToSend}! The seller will receive an email with a link to review and sign the agreement.`, 'success');
 
                         // Refresh leads to show updated contract status
                         fetchLeads();
                       } catch (error) {
                         console.error('Error sending PA:', error);
-                        alert('Error sending PA: ' + error.message);
+                        showToast('Error sending PA: ' + error.message, 'error');
                       } finally {
                         setSendingPA(false);
                       }
@@ -3098,6 +3104,15 @@ export default function DashboardPage() {
           </svg>
           <span className="text-lg font-semibold">{showSaveToast}</span>
         </div>
+      )}
+
+      {/* Custom Toast Notifications */}
+      {notificationToast.show && (
+        <Toast
+          type={notificationToast.type}
+          message={notificationToast.message}
+          onClose={() => setNotificationToast({ show: false, message: '', type: 'success' })}
+        />
       )}
     </>
   );
