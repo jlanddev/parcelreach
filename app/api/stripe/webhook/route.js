@@ -30,7 +30,7 @@ export async function POST(request) {
       // Get lead details for notification and email
       const { data: lead } = await supabase
         .from('leads')
-        .select('property_county, property_state, county, state, acres, full_name, email, phone, street_address, address')
+        .select('property_county, property_state, county, state, acres, full_name, name, fullname, owner, email, owner_email, phone, owner_phone, street_address, address, property_address')
         .eq('id', leadId)
         .single();
 
@@ -110,17 +110,29 @@ export async function POST(request) {
         // Send purchase confirmation email
         if (user && user.email) {
           try {
-            const location = `${county}, ${state}`;
+            // Use actual county/state values from lead
+            const location = `${county} County, ${state}`;
+
+            // Get owner name from various possible fields
+            const ownerName = lead.full_name || lead.name || lead.fullname || lead.owner || 'Property Owner';
+
+            // Get address from various possible fields
+            const ownerAddress = lead.street_address || lead.address || lead.property_address || 'N/A';
+
+            // Get contact info
+            const ownerEmail = lead.email || lead.owner_email || 'N/A';
+            const ownerPhone = lead.phone || lead.owner_phone || 'N/A';
+
             await sendLeadPurchaseConfirmation({
               toEmail: user.email,
               toName: user.full_name || 'there',
-              leadName: lead.full_name || 'Property Owner',
+              leadName: ownerName,
               location,
               acres: lead.acres || 'N/A',
               price,
-              email: lead.email || 'N/A',
-              phone: lead.phone || 'N/A',
-              address: lead.street_address || lead.address || 'N/A'
+              email: ownerEmail,
+              phone: ownerPhone,
+              address: ownerAddress
             });
             console.log('✅ Purchase confirmation email sent');
           } catch (emailError) {
