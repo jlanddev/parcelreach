@@ -354,6 +354,7 @@ export default function DashboardPage() {
       console.log('📋 DEBUG: Assigned lead IDs:', assignedLeadIds);
 
       // Fetch the actual leads with team-specific data
+      // Note: Only select columns that exist in team_lead_data table
       const { data, error } = await supabase
         .from('leads')
         .select(`
@@ -367,20 +368,7 @@ export default function DashboardPage() {
             closing_date,
             earnest_money,
             down_payment,
-            custom_data,
-            full_name,
-            email,
-            phone,
-            street_address,
-            city,
-            property_state,
-            property_county,
-            zip,
-            acres,
-            parcel_id,
-            dealtype,
-            notes,
-            projected_revenue
+            custom_data
           )
         `)
         .in('id', assignedLeadIds.length > 0 ? assignedLeadIds : ['00000000-0000-0000-0000-000000000000'])
