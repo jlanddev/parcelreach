@@ -426,7 +426,8 @@ export default function LeadsMap({ leads = [], zoomToLead = null, developments =
         }
 
         // If parcel found, use its centroid for accurate marker placement
-        if (parcel && parcel.geometry) {
+        // BUT: If lead is masked (has isMasked flag), DO NOT use parcel geometry - use masked coords instead
+        if (parcel && parcel.geometry && !lead.isMasked) {
           // Calculate centroid based on geometry type
           if (parcel.geometry.type === 'Point') {
             coords = { lng: parcel.geometry.coordinates[0], lat: parcel.geometry.coordinates[1] };
@@ -459,9 +460,12 @@ export default function LeadsMap({ leads = [], zoomToLead = null, developments =
         }
 
         // Collect parcel if available
-        if (parcel) {
+        // BUT: Don't show parcel boundaries for masked leads (reveals exact location)
+        if (parcel && !lead.isMasked) {
           console.log('✅ Adding parcel for', lead?.name, '- Type:', parcel.type, 'Geometry:', parcel.geometry?.type);
           parcelFeatures.push(parcel);
+        } else if (lead.isMasked) {
+          console.log('🔒 Parcel hidden for masked lead:', lead?.name);
         } else {
           console.log('❌ No parcel geometry for', lead?.name);
         }
