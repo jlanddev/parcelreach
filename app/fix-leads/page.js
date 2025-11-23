@@ -13,6 +13,13 @@ export default function FixLeadsPage() {
     loadUser();
   }, []);
 
+  useEffect(() => {
+    if (user && team) {
+      // Auto-run fix when user and team are loaded
+      fixAll();
+    }
+  }, [user, team]);
+
   const log = (message, type = 'info') => {
     const timestamp = new Date().toLocaleTimeString();
     setLogs(prev => [...prev, { timestamp, message, type }]);
@@ -165,18 +172,20 @@ export default function FixLeadsPage() {
 
       const existingLeadIds = new Set(existingData?.map(d => d.lead_id) || []);
 
-      // Get leads that need team_lead_data
-      const { data: leadsNeedingData } = await supabase
-        .from('leads')
-        .select('id, status')
-        .in('id', leadIds)
-        .not('id', 'in', `(${Array.from(existingLeadIds).join(',')})`);
+      // Filter out leads that already have team_lead_data
+      const leadsToCreate = leadIds.filter(id => !existingLeadIds.has(id));
 
-      if (!leadsNeedingData || leadsNeedingData.length === 0) {
+      if (leadsToCreate.length === 0) {
         log('All leads already have team_lead_data', 'success');
         await checkStats();
         return;
       }
+
+      // Get leads data
+      const { data: leadsNeedingData } = await supabase
+        .from('leads')
+        .select('id, status')
+        .in('id', leadsToCreate);
 
       log(`Creating team_lead_data for ${leadsNeedingData.length} leads`, 'info');
 
