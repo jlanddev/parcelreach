@@ -2396,6 +2396,119 @@ export default function DashboardPage() {
               </button>
             </div>
 
+            {/* Contract Status Progress Indicator */}
+            <div className="mb-6 bg-slate-800/50 border border-slate-700 rounded-lg p-6">
+              <h3 className="text-sm font-semibold text-slate-300 mb-4">Contract Status</h3>
+              <div className="relative">
+                {/* Progress Bar Background */}
+                <div className="absolute top-5 left-0 right-0 h-1 bg-slate-700"></div>
+                {/* Progress Bar Fill */}
+                <div
+                  className="absolute top-5 left-0 h-1 bg-gradient-to-r from-purple-500 to-green-500 transition-all duration-500"
+                  style={{
+                    width: selectedLead?.contractStatus === 'signed' ? '100%' :
+                           selectedLead?.contractStatus === 'sent' ? '50%' : '0%'
+                  }}
+                ></div>
+
+                {/* Status Steps */}
+                <div className="relative flex justify-between">
+                  {/* Draft */}
+                  <div className="flex flex-col items-center">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center border-2 transition-all ${
+                      !selectedLead?.contractStatus || selectedLead?.contractStatus === 'draft'
+                        ? 'bg-purple-600 border-purple-400 text-white'
+                        : 'bg-green-500 border-green-400 text-white'
+                    }`}>
+                      {selectedLead?.contractStatus && selectedLead?.contractStatus !== 'draft' ? (
+                        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                      ) : (
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                      )}
+                    </div>
+                    <span className={`mt-2 text-xs font-semibold ${
+                      !selectedLead?.contractStatus || selectedLead?.contractStatus === 'draft'
+                        ? 'text-white'
+                        : 'text-slate-400'
+                    }`}>Draft</span>
+                  </div>
+
+                  {/* Sent */}
+                  <div className="flex flex-col items-center">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center border-2 transition-all ${
+                      selectedLead?.contractStatus === 'sent'
+                        ? 'bg-purple-600 border-purple-400 text-white animate-pulse'
+                        : selectedLead?.contractStatus === 'signed'
+                        ? 'bg-green-500 border-green-400 text-white'
+                        : 'bg-slate-700 border-slate-600 text-slate-400'
+                    }`}>
+                      {selectedLead?.contractStatus === 'signed' ? (
+                        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                      ) : (
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                        </svg>
+                      )}
+                    </div>
+                    <span className={`mt-2 text-xs font-semibold ${
+                      selectedLead?.contractStatus === 'sent'
+                        ? 'text-white'
+                        : 'text-slate-400'
+                    }`}>
+                      {selectedLead?.contractStatus === 'sent' ? 'Waiting for Signature' : 'Sent'}
+                    </span>
+                  </div>
+
+                  {/* Signed */}
+                  <div className="flex flex-col items-center">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center border-2 transition-all ${
+                      selectedLead?.contractStatus === 'signed'
+                        ? 'bg-green-500 border-green-400 text-white'
+                        : 'bg-slate-700 border-slate-600 text-slate-400'
+                    }`}>
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <span className={`mt-2 text-xs font-semibold ${
+                      selectedLead?.contractStatus === 'signed'
+                        ? 'text-white'
+                        : 'text-slate-400'
+                    }`}>Signed</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Status Message */}
+              {selectedLead?.contractStatus === 'sent' && (
+                <div className="mt-4 bg-yellow-900/20 border border-yellow-500/50 rounded-lg p-3">
+                  <p className="text-yellow-200 text-sm flex items-center gap-2">
+                    <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    Waiting for seller signature...
+                  </p>
+                </div>
+              )}
+              {selectedLead?.contractStatus === 'signed' && (
+                <div className="mt-4 bg-green-900/20 border border-green-500/50 rounded-lg p-3">
+                  <p className="text-green-200 text-sm flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    </svg>
+                    Contract signed on {selectedLead?.contractSigned ? new Date(selectedLead.contractSigned).toLocaleDateString() : 'N/A'}
+                  </p>
+                </div>
+              )}
+            </div>
+
             {!generatedPA ? (
               // LLC Selector
               <div className="space-y-4">
