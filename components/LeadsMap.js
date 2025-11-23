@@ -99,9 +99,15 @@ export default function LeadsMap({ leads = [], zoomToLead = null, developments =
     }
   };
 
-  // Get marker color based on lead status
-  const getMarkerColor = (status) => {
-    switch (status) {
+  // Get marker color based on lead status or priced status
+  const getMarkerColor = (lead) => {
+    // Priced leads (for purchase) = GREEN until purchased
+    if (lead.isPriced || lead.isMasked || (lead.price && parseFloat(lead.price) > 0)) {
+      return '#10B981'; // Bright green for priced leads
+    }
+
+    // Regular status colors
+    switch (lead.status) {
       case 'new':
         return '#3B82F6'; // Bright blue
       case 'called':
@@ -484,7 +490,7 @@ export default function LeadsMap({ leads = [], zoomToLead = null, developments =
             cursor: pointer;
           ">
             <div class="lead-marker-circle" style="
-              background: ${getMarkerColor(lead.status)};
+              background: ${getMarkerColor(lead)};
               width: 20px;
               height: 20px;
               border-radius: 50%;

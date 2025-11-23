@@ -344,12 +344,10 @@ export default function DashboardPage() {
 
   // Helper function to mask unpurchased priced leads
   const maskLead = (lead) => {
-    // Offset location by ~50 miles in random direction
-    const offsetMiles = 50;
-    const offsetDegrees = offsetMiles / 69; // 1 degree ≈ 69 miles
-    const randomAngle = Math.random() * 2 * Math.PI;
-    const offsetLat = offsetDegrees * Math.cos(randomAngle);
-    const offsetLon = offsetDegrees * Math.sin(randomAngle);
+    // Use county center instead of offset to avoid misleading direction
+    // Round to 1 decimal place = ~7 mile precision (general county area)
+    const countyLat = lead.latitude ? Math.round(parseFloat(lead.latitude) * 10) / 10 : null;
+    const countyLon = lead.longitude ? Math.round(parseFloat(lead.longitude) * 10) / 10 : null;
 
     return {
       ...lead,
@@ -374,12 +372,13 @@ export default function DashboardPage() {
       parcelid: '████████',
       parcelId: '████████',
 
-      // Offset location
-      latitude: lead.latitude ? parseFloat(lead.latitude) + offsetLat : null,
-      longitude: lead.longitude ? parseFloat(lead.longitude) + offsetLon : null,
+      // General county area (not exact parcel location)
+      latitude: countyLat,
+      longitude: countyLon,
 
       // Add flag to identify masked leads
       isMasked: true,
+      isPriced: true, // Mark as priced for green marker
       originalLeadId: lead.id
     };
   };
