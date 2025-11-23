@@ -3,8 +3,10 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
 export default function AdminPage() {
+  const router = useRouter();
   const [leads, setLeads] = useState([]);
   const [contractors, setContractors] = useState([]);
   const [signups, setSignups] = useState([]);
@@ -12,6 +14,26 @@ export default function AdminPage() {
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
+
+  // Admin access control
+  useEffect(() => {
+    const checkAdminAccess = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+
+      const adminEmails = ['admin@parcelreach.ai', 'jordan@havenground.com', 'jordan@landreach.co'];
+      if (!user) {
+        router.push('/admin/login');
+        return;
+      }
+
+      if (!adminEmails.includes(user.email)) {
+        router.push('/dashboard');
+        return;
+      }
+    };
+
+    checkAdminAccess();
+  }, [router]);
 
   useEffect(() => {
     fetchAllData();

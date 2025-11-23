@@ -56,7 +56,13 @@ export default function LandLeadsAdminPage() {
       const { data: { user } } = await supabase.auth.getUser();
 
       const adminEmails = ['admin@parcelreach.ai', 'jordan@havenground.com', 'jordan@landreach.co'];
-      if (!user || !adminEmails.includes(user.email)) {
+      if (!user) {
+        console.log('❌ Not authenticated - redirecting to admin login');
+        router.push('/admin/login');
+        return;
+      }
+
+      if (!adminEmails.includes(user.email)) {
         console.log('❌ Access denied - not an admin');
         router.push('/dashboard');
         return;
