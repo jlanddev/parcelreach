@@ -14,11 +14,39 @@ export default function FixLeadsPage() {
   }, []);
 
   useEffect(() => {
-    if (user && team) {
-      // Auto-run fix when user and team are loaded
-      fixAll();
+    if (user) {
+      // Auto-run fix when user is loaded
+      runServerFix();
     }
-  }, [user, team]);
+  }, [user]);
+
+  const runServerFix = async () => {
+    if (!user) return;
+
+    log('🚀 Running server-side fix...', 'info');
+
+    try {
+      const response = await fetch('/api/fix-leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: user.email })
+      });
+
+      const data = await response.json();
+
+      if (data.error) {
+        log(`❌ Error: ${data.error}`, 'error');
+      } else {
+        // Show all server logs
+        data.logs?.forEach(msg => log(msg, 'success'));
+      }
+
+      // Refresh stats
+      await checkStats();
+    } catch (error) {
+      log(`❌ Fetch error: ${error.message}`, 'error');
+    }
+  };
 
   const log = (message, type = 'info') => {
     const timestamp = new Date().toLocaleTimeString();
