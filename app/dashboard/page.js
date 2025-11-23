@@ -77,6 +77,7 @@ export default function DashboardPage() {
   const [inviteEmail, setInviteEmail] = useState('');
   const [paModalOpen, setPaModalOpen] = useState(false);
   const [generatedPA, setGeneratedPA] = useState('');
+  const [sendingPA, setSendingPA] = useState(false);
   const [accountTab, setAccountTab] = useState('general');
   const [legalEntities, setLegalEntities] = useState([]);
   const [newEntity, setNewEntity] = useState('');
@@ -2628,6 +2629,62 @@ export default function DashboardPage() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
                     </svg>
                     Print / Save as PDF
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (!selectedLead.email) {
+                        alert('Seller email is required to send for signature');
+                        return;
+                      }
+
+                      setSendingPA(true);
+                      try {
+                        const sellerName = selectedLead.name || selectedLead.fullname || selectedLead.full_name || 'Seller';
+                        const sellerEmail = selectedLead.email;
+                        const sellerPhone = selectedLead.phone || '';
+                        const propertyAddress = `${selectedLead.address || ''}, ${selectedLead.city || ''}, ${selectedLead.state || ''}`.trim();
+                        const purchasePrice = selectedLead.purchase_price || selectedLead.offerprice || 0;
+
+                        const response = await fetch('/api/send-pa', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            leadId: selectedLead.id,
+                            teamId: currentTeam.id,
+                            paHtml: generatedPA,
+                            sellerName,
+                            sellerEmail,
+                            sellerPhone,
+                            buyerEntity: selectedBuyerEntity,
+                            purchasePrice,
+                            propertyAddress
+                          })
+                        });
+
+                        const data = await response.json();
+
+                        if (!response.ok) {
+                          throw new Error(data.error || 'Failed to send PA');
+                        }
+
+                        alert(`✅ Purchase Agreement sent to ${sellerEmail}!\n\nThe seller will receive an email with a link to review and sign the agreement.`);
+
+                        // Refresh leads to show updated contract status
+                        fetchLeads();
+                      } catch (error) {
+                        console.error('Error sending PA:', error);
+                        alert('Error sending PA: ' + error.message);
+                      } finally {
+                        setSendingPA(false);
+                      }
+                    }}
+                    disabled={sendingPA || !selectedLead.email}
+                    className="flex-1 px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-500 transition-colors font-semibold flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                    {sendingPA ? 'Sending...' : 'Send for Signature'}
                   </button>
                   <button
                     onClick={() => {
