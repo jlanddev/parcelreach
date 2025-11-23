@@ -345,36 +345,74 @@ export default function DashboardPage() {
       const assignedLeadIds = assignments?.map(a => a.lead_id) || [];
       console.log('📋 DEBUG: Assigned lead IDs:', assignedLeadIds);
 
-      // Fetch the actual leads
+      // Fetch the actual leads with team-specific data
       const { data, error } = await supabase
         .from('leads')
-        .select('*')
-        .in('id', assignedLeadIds.length > 0 ? assignedLeadIds : ['00000000-0000-0000-0000-000000000000']) // Use dummy UUID if no assignments
+        .select(`
+          *,
+          team_data:team_lead_data!inner(
+            status,
+            offer_price,
+            contract_status,
+            contract_sent_date,
+            contract_signed_date,
+            closing_date,
+            earnest_money,
+            down_payment,
+            custom_data
+          )
+        `)
+        .in('id', assignedLeadIds.length > 0 ? assignedLeadIds : ['00000000-0000-0000-0000-000000000000'])
+        .eq('team_lead_data.team_id', teamId)
         .order('created_at', { ascending: false});
 
       if (error) {
         console.error('Error fetching leads:', error);
-      } else {
-        console.log('✅ DEBUG: Fetched', data?.length, 'leads from database');
-        console.log('📋 DEBUG: All lead names:', data?.map(l => `${l.full_name || l.name} (team_id: ${l.team_id}, dealtype: ${l.dealtype}, status: ${l.status})`));
+        setLeads([]);
+        return;
+      }
 
-        // Check specifically for Jon burns lead
-        const jonBurns = data?.find(l => (l.full_name || l.name)?.toLowerCase().includes('jon burns'));
-        if (jonBurns) {
-          console.log('🎯 DEBUG: FOUND Jon burns lead:', jonBurns);
-        } else {
-          console.log('❌ DEBUG: Jon burns lead NOT in database results');
+      console.log('✅ Fetched', data?.length, 'leads with team data');
+
+      // For leads without team_lead_data, create it
+      for (const lead of data || []) {
+        if (!lead.team_data || lead.team_data.length === 0) {
+          const { error: insertError } = await supabase
+            .from('team_lead_data')
+            .insert([{
+              team_id: teamId,
+              lead_id: lead.id,
+              status: lead.status || 'new',
+              offer_price: lead.offerprice
+            }]);
+
+          if (insertError && !insertError.message.includes('duplicate')) {
+            console.error('Error creating team_lead_data:', insertError);
+          }
         }
+      }
 
-        // Normalize field names: database uses lowercase, but we want both for compatibility
-        const normalizedLeads = (data || []).map(lead => ({
+      // Normalize: merge team_data into lead object
+      const normalizedLeads = (data || []).map(lead => {
+        const teamData = Array.isArray(lead.team_data) ? lead.team_data[0] : lead.team_data;
+        return {
           ...lead,
+          // Use team-specific data if available, fallback to lead data
+          status: teamData?.status || lead.status || 'new',
+          offerPrice: teamData?.offer_price || lead.offerprice,
+          offerprice: teamData?.offer_price || lead.offerprice,
+          contractStatus: teamData?.contract_status,
+          contractSigned: teamData?.contract_signed_date,
+          contractsigned: teamData?.contract_signed_date,
+          closingDate: teamData?.closing_date,
+          earnestMoney: teamData?.earnest_money,
+          downPayment: teamData?.down_payment,
+          // Keep original lead data
           offerMade: lead.offermade,
-          contractSigned: lead.contractsigned,
-          projectedProfit: lead.projectedrevenue,
-          offerPrice: lead.offerprice
-        }));
-        setLeads(normalizedLeads);
+          projectedProfit: lead.projectedrevenue
+        };
+      });
+      setLeads(normalizedLeads);
 
         // Auto-assign unassigned leads to this team
         const unassignedLeads = data?.filter(l => !l.team_id) || [];
@@ -513,35 +551,71 @@ export default function DashboardPage() {
       setSelectedLead({ ...selectedLead, ...normalizedUpdates });
     }
 
-    // Debounce database updates for text inputs - DON'T show toast on auto-save
+    // Separate team-specific updates from lead updates
+    const teamFields = ['status', 'offerprice', 'offer_price', 'contractsigned', 'contract_signed_date', 'contract_status'];
+    const teamUpdates = {};
+    const leadUpdates = {};
+
+    Object.keys(updates).forEach(key => {
+      if (teamFields.includes(key)) {
+        // Map to team_lead_data column names
+        if (key === 'offerprice') teamUpdates.offer_price = updates[key];
+        else if (key === 'contractsigned') teamUpdates.contract_signed_date = updates[key];
+        else teamUpdates[key] = updates[key];
+      } else {
+        leadUpdates[key] = updates[key];
+      }
+    });
+
+    // Debounce database updates for text inputs
     if (debounce) {
       if (saveTimeout) clearTimeout(saveTimeout);
       const timeout = setTimeout(async () => {
         try {
-          const { error } = await supabase
-            .from('leads')
-            .update(updates)
-            .eq('id', leadId);
-          if (error) {
-            console.error('Error updating lead:', error.message);
+          // Update team-specific data
+          if (Object.keys(teamUpdates).length > 0 && currentTeam) {
+            const { error } = await supabase
+              .from('team_lead_data')
+              .update(teamUpdates)
+              .eq('team_id', currentTeam.id)
+              .eq('lead_id', leadId);
+            if (error) console.error('Error updating team data:', error.message);
           }
-          // Silent auto-save, no toast
+
+          // Update shared lead data
+          if (Object.keys(leadUpdates).length > 0) {
+            const { error } = await supabase
+              .from('leads')
+              .update(leadUpdates)
+              .eq('id', leadId);
+            if (error) console.error('Error updating lead:', error.message);
+          }
         } catch (err) {
           console.error('Error:', err.message);
         }
-      }, 1000); // Wait 1 second after typing stops
+      }, 1000);
       setSaveTimeout(timeout);
     } else {
-      // Immediate save for checkboxes, file uploads - DON'T show toast
+      // Immediate save
       try {
-        const { error } = await supabase
-          .from('leads')
-          .update(updates)
-          .eq('id', leadId);
-        if (error) {
-          console.error('Error updating lead:', error.message);
+        // Update team-specific data
+        if (Object.keys(teamUpdates).length > 0 && currentTeam) {
+          const { error } = await supabase
+            .from('team_lead_data')
+            .update(teamUpdates)
+            .eq('team_id', currentTeam.id)
+            .eq('lead_id', leadId);
+          if (error) console.error('Error updating team data:', error.message);
         }
-        // Silent save, no toast
+
+        // Update shared lead data
+        if (Object.keys(leadUpdates).length > 0) {
+          const { error } = await supabase
+            .from('leads')
+            .update(leadUpdates)
+            .eq('id', leadId);
+          if (error) console.error('Error updating lead:', error.message);
+        }
       } catch (err) {
         console.error('Error:', err.message);
       }
