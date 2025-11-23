@@ -1075,8 +1075,38 @@ export default function DashboardPage() {
                   <MaskedLeadCard
                     key={lead.id}
                     lead={lead}
-                    onPurchase={(lead) => {
-                      alert('Purchase flow coming soon!');
+                    onPurchase={async (lead) => {
+                      try {
+                        const { data: { user } } = await supabase.auth.getUser();
+                        if (!user) {
+                          showToast('Please log in to purchase', 'error');
+                          return;
+                        }
+
+                        // Call Stripe checkout API
+                        const response = await fetch('/api/stripe/checkout', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            leadId: lead.originalLeadId || lead.id,
+                            userId: user.id,
+                            teamId: currentTeam.id
+                          })
+                        });
+
+                        const data = await response.json();
+
+                        if (!response.ok) {
+                          showToast(data.error || 'Failed to start checkout', 'error');
+                          return;
+                        }
+
+                        // Redirect to Stripe checkout
+                        window.location.href = data.url;
+                      } catch (error) {
+                        console.error('Purchase error:', error);
+                        showToast('Failed to purchase lead', 'error');
+                      }
                     }}
                   />
                 ) : (
