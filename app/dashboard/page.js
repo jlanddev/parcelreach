@@ -3013,19 +3013,34 @@ export default function DashboardPage() {
               <button
                 onClick={async () => {
                   try {
-                    const { error } = await supabase
-                      .from('leads')
-                      .delete()
-                      .eq('id', leadToDelete.id);
+                    // ONLY remove assignment, NOT the lead itself!
+                    // This preserves the lead in admin dashboard
 
-                    if (error) throw error;
+                    // 1. Remove lead assignment for this team
+                    const { error: assignError } = await supabase
+                      .from('lead_assignments')
+                      .delete()
+                      .eq('lead_id', leadToDelete.id)
+                      .eq('team_id', currentTeam.id);
+
+                    if (assignError) throw assignError;
+
+                    // 2. Remove team-specific data
+                    const { error: dataError } = await supabase
+                      .from('team_lead_data')
+                      .delete()
+                      .eq('lead_id', leadToDelete.id)
+                      .eq('team_id', currentTeam.id);
+
+                    if (dataError) throw dataError;
 
                     // Remove from local state
                     setLeads(leads.filter(l => l.id !== leadToDelete.id));
                     setLeadToDelete(null);
+                    showToast('Lead removed from your dashboard', 'success');
                   } catch (error) {
-                    console.error('Error deleting lead:', error);
-                    showToast('Failed to delete lead. Please try again.', 'error');
+                    console.error('Error removing lead:', error);
+                    showToast('Failed to remove lead. Please try again.', 'error');
                   }
                 }}
                 className="flex-1 px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-500 transition-colors font-semibold"
