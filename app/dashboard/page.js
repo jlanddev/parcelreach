@@ -126,11 +126,20 @@ export default function DashboardPage() {
         }]);
       }
 
+      // Check if user is admin
+      const isAdmin = user.email === 'jordan@havenground.com' || user.email === 'jordan@landreach.co';
+
       // Check if admin is viewing a specific organization
       const adminViewingOrg = typeof window !== 'undefined' ? sessionStorage.getItem('admin_viewing_org') : null;
-      console.log('🔍 Dashboard checking admin_viewing_org:', adminViewingOrg);
+      console.log('🔍 Dashboard checking admin_viewing_org:', adminViewingOrg, 'isAdmin:', isAdmin);
 
-      if (adminViewingOrg) {
+      // Clear admin viewing mode if user is not an admin
+      if (!isAdmin && adminViewingOrg) {
+        console.log('🚫 Clearing admin_viewing_org for non-admin user');
+        sessionStorage.removeItem('admin_viewing_org');
+      }
+
+      if (isAdmin && adminViewingOrg) {
         // Load the specific organization for admin
         console.log('📊 Loading admin organization:', adminViewingOrg);
         const { data: team } = await supabase

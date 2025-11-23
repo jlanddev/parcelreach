@@ -50,6 +50,21 @@ export default function LandLeadsAdminPage() {
   const [creatingLead, setCreatingLead] = useState(false);
   const [locatingParcel, setLocatingParcel] = useState(false);
 
+  // Admin access control
+  useEffect(() => {
+    const checkAdminAccess = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+
+      if (!user || (user.email !== 'jordan@havenground.com' && user.email !== 'jordan@landreach.co')) {
+        console.log('❌ Access denied - not an admin');
+        router.push('/dashboard');
+        return;
+      }
+    };
+
+    checkAdminAccess();
+  }, [router]);
+
   useEffect(() => {
     fetchAllData();
 
