@@ -8,7 +8,7 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
-export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
+export default function LeadNotes({ leadId, currentUserId, teamMembers, teamId }) {
   const [notes, setNotes] = useState([]);
   const [newNote, setNewNote] = useState('');
   const [showMentions, setShowMentions] = useState(false);
@@ -21,6 +21,8 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
   }, [leadId]);
 
   const fetchNotes = async () => {
+    if (!teamId) return;
+
     const { data, error } = await supabase
       .from('lead_notes')
       .select(`
@@ -28,6 +30,7 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
         user:users(full_name, email)
       `)
       .eq('lead_id', leadId)
+      .eq('team_id', teamId)
       .order('created_at', { ascending: false });
 
     if (!error) setNotes(data || []);
@@ -101,6 +104,7 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers }) {
       .insert([{
         lead_id: leadId,
         user_id: currentUserId,
+        team_id: teamId,
         content: newNote,
         mentioned_users: mentionedUsers
       }])

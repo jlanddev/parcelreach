@@ -1400,6 +1400,7 @@ export default function DashboardPage() {
                         leadId={selectedLead.id}
                         currentUserId={currentUser.id}
                         teamMembers={teamMembers}
+                        teamId={currentTeam?.id}
                       />
                     )}
                   </div>
