@@ -144,10 +144,18 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-gradient-to-r from-blue-600 to-blue-500 text-white py-3 rounded-lg font-semibold"
+            className="w-full bg-gradient-to-r from-blue-600 to-blue-500 text-white py-3 rounded-lg font-semibold hover:from-blue-700 hover:to-blue-600 transition-all disabled:opacity-50"
           >
             {loading ? 'Loading...' : mode === 'login' ? 'Sign In' : 'Create Account'}
           </button>
+
+          {mode === 'login' && (
+            <div className="text-center mt-4">
+              <a href="/forgot-password" className="text-sm text-blue-400 hover:text-blue-300 transition-colors">
+                Forgot your password?
+              </a>
+            </div>
+          )}
         </form>
       </div>
     </div>
