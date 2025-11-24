@@ -356,14 +356,23 @@ export default function DashboardPage() {
     const leadIdFromNotif = urlParams.get('lead');
 
     if (leadIdFromNotif) {
+      console.log('🔔 Notification link detected, opening lead:', leadIdFromNotif);
+
       // Find the lead in the loaded leads
       const leadToOpen = leads.find(l => l.id === leadIdFromNotif);
 
       if (leadToOpen) {
+        console.log('✅ Found lead, opening modal:', leadToOpen.name);
         setSelectedLead(leadToOpen);
         setModalOpen(true);
 
-        // Clean up URL
+        // Clean up URL immediately to prevent re-opening
+        window.history.replaceState({}, '', '/dashboard');
+      } else {
+        console.warn('⚠️ Lead not found in current leads list:', leadIdFromNotif);
+        console.log('Available lead IDs:', leads.map(l => l.id));
+
+        // Clean up URL even if lead not found
         window.history.replaceState({}, '', '/dashboard');
       }
     }
