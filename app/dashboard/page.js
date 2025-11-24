@@ -949,17 +949,17 @@ export default function DashboardPage() {
       <div className="h-screen w-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
         <div className="text-center">
           {/* Animated Logo */}
-          <div className="relative mb-8">
-            <div className="w-32 h-32 mx-auto bg-white rounded-2xl flex items-center justify-center shadow-2xl shadow-blue-500/50 p-4">
+          <div className="relative mb-8 flex justify-center">
+            <div className="relative">
               <img
                 src="/parcelreach-logo.png"
                 alt="ParcelReach"
-                className="w-full h-full object-contain"
+                className="w-64 h-auto relative z-10"
               />
-            </div>
-            {/* Spinning orbital ring */}
-            <div className="absolute inset-0 w-40 h-40 mx-auto my-auto left-0 right-0 top-0 bottom-0">
-              <div className="absolute inset-0 border-4 border-transparent border-t-blue-400 border-r-orange-400 rounded-full animate-spin" style={{ animationDuration: '3s' }}></div>
+              {/* Spinning ring around map portion of logo */}
+              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-24 h-24">
+                <div className="absolute inset-0 border-4 border-transparent border-t-blue-400 border-r-orange-400 rounded-full animate-spin" style={{ animationDuration: '3s' }}></div>
+              </div>
             </div>
           </div>
 
