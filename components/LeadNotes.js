@@ -160,7 +160,10 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
           .from('lead-files')
           .upload(filePath, file);
 
-        if (error) throw error;
+        if (error) {
+          console.error('Upload error:', error);
+          throw new Error(`Failed to upload ${file.name}: ${error.message}`);
+        }
 
         // Get public URL
         const { data: { publicUrl } } = supabase.storage
@@ -179,9 +182,13 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
       setAttachments(prev => [...prev, ...uploadedFiles]);
     } catch (error) {
       console.error('Error uploading files:', error);
-      alert('Failed to upload files. Please try again.');
+      alert(`Failed to upload files: ${error.message}\n\nMake sure the 'lead-files' Storage bucket exists in Supabase.`);
     } finally {
       setUploading(false);
+      // Reset file input
+      if (e.target) {
+        e.target.value = '';
+      }
     }
   };
 
@@ -193,26 +200,33 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
     e.preventDefault();
     if (!newNote.trim() && attachments.length === 0) return;
 
-    const mentionedUsers = extractMentions(newNote);
-    console.log('📝 Mentioned users:', mentionedUsers);
-    console.log('📝 Team members:', teamMembers);
+    try {
+      const mentionedUsers = extractMentions(newNote);
+      console.log('📝 Mentioned users:', mentionedUsers);
+      console.log('📝 Team members:', teamMembers);
 
-    const { data, error } = await supabase
-      .from('lead_notes')
-      .insert([{
-        lead_id: leadId,
-        user_id: currentUserId,
-        team_id: teamId,
-        content: newNote,
-        parent_id: replyingTo?.id || null,
-        mentioned_users: mentionedUsers,
-        attachments: attachments
-      }])
-      .select();
+      const { data, error } = await supabase
+        .from('lead_notes')
+        .insert([{
+          lead_id: leadId,
+          user_id: currentUserId,
+          team_id: teamId,
+          content: newNote,
+          parent_id: replyingTo?.id || null,
+          mentioned_users: mentionedUsers,
+          attachments: attachments
+        }])
+        .select();
 
-    console.log('📝 Note created:', data, 'Error:', error);
+      console.log('📝 Note created:', data, 'Error:', error);
 
-    if (!error && mentionedUsers.length > 0) {
+      if (error) {
+        console.error('Failed to create note:', error);
+        alert('Failed to post note. Please try again.');
+        return;
+      }
+
+      if (mentionedUsers.length > 0) {
       // Build lead description for notification
       const leadName = lead?.name || 'Unknown';
       const leadLocation = lead?.county && lead?.state
@@ -238,15 +252,19 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
             sendEmail: true
           })
         });
-        const result = await response.json();
-        console.log('🔔 Notification created:', result);
+          const result = await response.json();
+          console.log('🔔 Notification created:', result);
+        }
       }
-    }
 
-    setNewNote('');
-    setReplyingTo(null);
-    setAttachments([]);
-    fetchNotes();
+      setNewNote('');
+      setReplyingTo(null);
+      setAttachments([]);
+      await fetchNotes();
+    } catch (error) {
+      console.error('Error in handleSubmit:', error);
+      alert('An error occurred. Please try again.');
+    }
   };
 
   const handleDelete = async (noteId) => {
