@@ -54,6 +54,7 @@ export default function DashboardPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [dealTypeFilter, setDealTypeFilter] = useState('all');
   const [isLoading, setIsLoading] = useState(true);
+  const [loadingProgress, setLoadingProgress] = useState(0);
   const [selectedLead, setSelectedLead] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
@@ -927,6 +928,21 @@ export default function DashboardPage() {
     e.target.reset();
   };
 
+  // Animate loading progress
+  useEffect(() => {
+    if (isLoading) {
+      const interval = setInterval(() => {
+        setLoadingProgress((prev) => {
+          if (prev >= 95) return prev; // Stop at 95% until actually loaded
+          return prev + Math.random() * 15;
+        });
+      }, 200);
+      return () => clearInterval(interval);
+    } else {
+      setLoadingProgress(100);
+    }
+  }, [isLoading]);
+
   // Loading Screen
   if (isLoading) {
     return (
@@ -934,25 +950,37 @@ export default function DashboardPage() {
         <div className="text-center">
           {/* Animated Logo */}
           <div className="relative mb-8">
-            <div className="w-24 h-24 mx-auto bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl flex items-center justify-center shadow-2xl shadow-blue-500/50 animate-pulse">
-              <svg className="w-14 h-14 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
+            <div className="w-32 h-32 mx-auto bg-white rounded-2xl flex items-center justify-center shadow-2xl shadow-blue-500/50 p-4">
+              <img
+                src="/parcelreach-logo.png"
+                alt="ParcelReach"
+                className="w-full h-full object-contain"
+              />
             </div>
-            {/* Spinning ring */}
-            <div className="absolute inset-0 w-24 h-24 mx-auto border-4 border-blue-500/30 border-t-blue-400 rounded-2xl animate-spin" style={{ animationDuration: '2s' }}></div>
+            {/* Spinning orbital ring */}
+            <div className="absolute inset-0 w-40 h-40 mx-auto my-auto left-0 right-0 top-0 bottom-0">
+              <div className="absolute inset-0 border-4 border-transparent border-t-blue-400 border-r-orange-400 rounded-full animate-spin" style={{ animationDuration: '3s' }}></div>
+            </div>
           </div>
 
           {/* Title */}
           <h1 className="text-4xl font-bold text-white mb-2">ParcelReach</h1>
           <p className="text-lg text-slate-400 mb-8">Land Lead Intelligence</p>
 
-          {/* Loading bar */}
-          <div className="w-64 h-1.5 bg-slate-700 rounded-full mx-auto overflow-hidden">
-            <div className="h-full bg-gradient-to-r from-blue-500 to-orange-400 rounded-full animate-pulse" style={{ width: '70%', transition: 'width 1s ease-out' }}></div>
+          {/* Loading bar with actual progress */}
+          <div className="w-64 h-2 bg-slate-700 rounded-full mx-auto overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-blue-500 to-orange-400 rounded-full transition-all duration-300 ease-out"
+              style={{ width: `${Math.min(loadingProgress, 100)}%` }}
+            ></div>
           </div>
 
-          <p className="text-sm text-slate-500 mt-4">Initializing 3D terrain mapping...</p>
+          <p className="text-sm text-slate-500 mt-4">
+            {loadingProgress < 30 && "Loading map layers..."}
+            {loadingProgress >= 30 && loadingProgress < 60 && "Initializing 3D terrain..."}
+            {loadingProgress >= 60 && loadingProgress < 90 && "Loading your leads..."}
+            {loadingProgress >= 90 && "Almost ready..."}
+          </p>
         </div>
       </div>
     );
