@@ -348,17 +348,24 @@ export default function DashboardPage() {
     }
   }, []);
 
+  // Store note ID for scrolling
+  const [scrollToNoteId, setScrollToNoteId] = useState(null);
+
   // Auto-open lead from notification link
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
     const urlParams = new URLSearchParams(window.location.search);
     const leadIdFromNotif = urlParams.get('lead');
+    const noteIdFromNotif = urlParams.get('note');
 
     // If no lead parameter, skip
     if (!leadIdFromNotif) return;
 
     console.log('🔔 Notification link detected, opening lead:', leadIdFromNotif);
+    if (noteIdFromNotif) {
+      console.log('📝 Note ID to scroll to:', noteIdFromNotif);
+    }
     console.log('📊 Leads currently loaded:', leads.length);
 
     // If leads haven't loaded yet, wait for them
@@ -377,6 +384,9 @@ export default function DashboardPage() {
       setTimeout(() => {
         setSelectedLead(leadToOpen);
         setModalOpen(true);
+        if (noteIdFromNotif) {
+          setScrollToNoteId(noteIdFromNotif);
+        }
         console.log('✅ Modal opened for:', leadToOpen.name);
       }, 100);
 
@@ -2073,6 +2083,7 @@ export default function DashboardPage() {
                         currentUserName={currentUser.full_name}
                         teamMembers={teamMembers}
                         teamId={currentTeam?.id}
+                        scrollToNoteId={scrollToNoteId}
                       />
                     )}
                   </div>

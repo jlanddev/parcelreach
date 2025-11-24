@@ -8,7 +8,7 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
-export default function LeadNotes({ leadId, lead, currentUserId, currentUserName, teamMembers, teamId }) {
+export default function LeadNotes({ leadId, lead, currentUserId, currentUserName, teamMembers, teamId, scrollToNoteId }) {
   const [notes, setNotes] = useState([]);
   const [newNote, setNewNote] = useState('');
   const [showMentions, setShowMentions] = useState(false);
@@ -20,6 +20,8 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
   const [uploading, setUploading] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [noteViews, setNoteViews] = useState({});
+  const [highlightedNoteId, setHighlightedNoteId] = useState(null);
+  const noteRefs = useState({})[0]; // Store refs for each note
 
   // Track user presence
   useEffect(() => {
@@ -108,6 +110,25 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
   useEffect(() => {
     fetchNotes();
   }, [leadId]);
+
+  // Scroll to specific note when scrollToNoteId is provided
+  useEffect(() => {
+    if (!scrollToNoteId || !notes.length) return;
+
+    // Small delay to ensure DOM is rendered
+    const timer = setTimeout(() => {
+      const targetRef = noteRefs[scrollToNoteId];
+      if (targetRef) {
+        targetRef.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setHighlightedNoteId(scrollToNoteId);
+
+        // Remove highlight after 3 seconds
+        setTimeout(() => setHighlightedNoteId(null), 3000);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [scrollToNoteId, notes]);
 
   const fetchNotes = async () => {
     if (!teamId) return;
@@ -358,7 +379,7 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
         return;
       }
 
-      if (mentionedUsers.length > 0) {
+      if (mentionedUsers.length > 0 && data && data[0]) {
       // Build lead description for notification
       const leadName = lead?.name || 'Unknown';
       const leadLocation = lead?.county && lead?.state
@@ -367,6 +388,9 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
         ? `${lead.city}, ${lead.state}`
         : 'Unknown Location';
       const leadDescription = `${leadName} - ${leadLocation}`;
+
+      // Get the note ID from the created note
+      const noteId = data[0].id;
 
       for (const userId of mentionedUsers) {
         console.log('🔔 Creating notification for user:', userId);
@@ -379,7 +403,7 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
             type: 'mention',
             title: `${currentUserName || 'Someone'} mentioned you in a note`,
             message: `On lead: ${leadDescription}`,
-            link: `/dashboard?lead=${leadId}`,
+            link: `/dashboard?lead=${leadId}&note=${noteId}`,
             notePreview: newNote,
             sendEmail: true
           })
@@ -553,8 +577,16 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
     }) : null;
 
     return (
-      <div key={note.id} className={`${isReply ? 'ml-12 mt-3' : 'mb-6'}`}>
-        <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl overflow-hidden hover:border-slate-600/50 transition-all">
+      <div
+        key={note.id}
+        ref={el => noteRefs[note.id] = el}
+        className={`${isReply ? 'ml-12 mt-3' : 'mb-6'}`}
+      >
+        <div className={`bg-slate-800/50 border rounded-xl overflow-hidden transition-all ${
+          highlightedNoteId === note.id
+            ? 'border-blue-500 shadow-lg shadow-blue-500/20 ring-2 ring-blue-500/30'
+            : 'border-slate-700/50 hover:border-slate-600/50'
+        }`}>
           <div className="p-5">
             {/* Header */}
             <div className="flex items-start justify-between mb-3">
