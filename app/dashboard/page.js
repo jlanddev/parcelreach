@@ -348,6 +348,27 @@ export default function DashboardPage() {
     }
   }, []);
 
+  // Auto-open lead from notification link
+  useEffect(() => {
+    if (typeof window === 'undefined' || !leads.length) return;
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const leadIdFromNotif = urlParams.get('lead');
+
+    if (leadIdFromNotif) {
+      // Find the lead in the loaded leads
+      const leadToOpen = leads.find(l => l.id === leadIdFromNotif);
+
+      if (leadToOpen) {
+        setSelectedLead(leadToOpen);
+        setModalOpen(true);
+
+        // Clean up URL
+        window.history.replaceState({}, '', '/dashboard');
+      }
+    }
+  }, [leads]);
+
   // Load logo position and size from localStorage
   useEffect(() => {
     const savedPosition = localStorage.getItem('logoPosition');
