@@ -60,6 +60,7 @@ export default function DashboardPage() {
   const [currentUser, setCurrentUser] = useState(null);
   const [currentTeam, setCurrentTeam] = useState(null);
   const [teamMembers, setTeamMembers] = useState([]);
+  const [userRole, setUserRole] = useState(null); // owner, executive, or member
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxImage, setLightboxImage] = useState(null);
   const [saveTimeout, setSaveTimeout] = useState(null);
@@ -179,14 +180,16 @@ export default function DashboardPage() {
         // Get user's teams
         const { data: teams } = await supabase
           .from('team_members')
-          .select('team_id, teams(*)')
+          .select('team_id, role, teams(*)')
           .eq('user_id', user.id);
 
         if (teams && teams.length > 0) {
           console.log('🔍 DEBUG: Team data loaded:', teams[0]);
           console.log('🔍 DEBUG: Setting currentTeam to:', teams[0].teams);
           console.log('🔍 DEBUG: Team ID:', teams[0].teams?.id);
+          console.log('🔍 DEBUG: User role:', teams[0].role);
           setCurrentTeam(teams[0].teams);
+          setUserRole(teams[0].role || 'owner'); // Default to owner if not set
           setLegalEntities(teams[0].teams?.legal_entities || []);
           loadTeamMembers(teams[0].team_id);
           fetchLeads(teams[0].team_id);
@@ -1155,6 +1158,7 @@ export default function DashboardPage() {
                   <MaskedLeadCard
                     key={lead.id}
                     lead={lead}
+                    userRole={userRole}
                     onPurchase={async (lead) => {
                       try {
                         const { data: { user } } = await supabase.auth.getUser();

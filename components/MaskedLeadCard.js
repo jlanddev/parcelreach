@@ -1,6 +1,7 @@
 'use client';
 
-export default function MaskedLeadCard({ lead, onPurchase }) {
+export default function MaskedLeadCard({ lead, onPurchase, userRole }) {
+  const canPurchase = userRole === 'owner' || userRole === 'executive';
   return (
     <div className="bg-gradient-to-br from-green-900/20 to-blue-900/20 backdrop-blur-sm border border-green-500/30 rounded-lg p-3 hover:border-green-400/50 transition-all group relative">
       {/* "FOR SALE" Badge */}
@@ -36,15 +37,22 @@ export default function MaskedLeadCard({ lead, onPurchase }) {
           </div>
 
           {/* Purchase Button */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onPurchase(lead);
-            }}
-            className="w-full bg-gradient-to-r from-green-600 to-green-500 hover:from-green-700 hover:to-green-600 text-white font-bold py-2 px-3 rounded-lg text-sm shadow-lg transition-all"
-          >
-            Purchase Lead - ${lead.price}
-          </button>
+          {canPurchase ? (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onPurchase(lead);
+              }}
+              className="w-full bg-gradient-to-r from-green-600 to-green-500 hover:from-green-700 hover:to-green-600 text-white font-bold py-2 px-3 rounded-lg text-sm shadow-lg transition-all"
+            >
+              Purchase Lead - ${lead.price}
+            </button>
+          ) : (
+            <div className="w-full bg-slate-700/50 text-slate-400 font-bold py-2 px-3 rounded-lg text-sm text-center cursor-not-allowed">
+              <div className="text-xs mb-1">Owner/Executive Only</div>
+              <div>${lead.price}</div>
+            </div>
+          )}
         </div>
 
         {/* Right Column - Premium Blurred Map Preview */}
