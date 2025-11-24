@@ -511,9 +511,9 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
   };
 
   return (
-    <div className="flex flex-col h-full min-h-[600px]">
+    <div className="flex flex-col w-full max-w-[750px] h-[650px]">
       {/* Notes List - Scrollable at TOP */}
-      <div className="flex-1 overflow-y-auto space-y-5 pr-2 mb-6">
+      <div className="flex-1 overflow-y-auto space-y-5 pr-2 mb-6" style={{ maxHeight: '65%' }}>
         {notes.length === 0 ? (
           <div className="text-center py-24 bg-slate-800/30 border border-slate-700/50 rounded-xl">
             <svg className="w-20 h-20 text-slate-600 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
