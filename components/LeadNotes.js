@@ -213,7 +213,6 @@ export default function LeadNotes({ leadId, currentUserId, teamMembers, teamId }
                 </div>
                 <div>
                   <div className="font-medium">{member.users.full_name}</div>
-                  <div className="text-slate-400 text-xs">{member.users.email}</div>
                 </div>
               </button>
             ))}
