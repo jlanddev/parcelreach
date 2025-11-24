@@ -39,7 +39,7 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
       .eq('lead_id', leadId)
       .eq('team_id', teamId)
       .is('parent_id', null)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: true });
 
     if (!error) {
       // Fetch likes for all notes
