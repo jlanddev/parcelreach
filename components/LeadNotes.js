@@ -18,6 +18,92 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
   const [expandedNotes, setExpandedNotes] = useState(new Set());
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const [onlineUsers, setOnlineUsers] = useState([]);
+  const [noteViews, setNoteViews] = useState({});
+
+  // Track user presence
+  useEffect(() => {
+    if (!leadId || !currentUserId) return;
+
+    const updatePresence = async () => {
+      await supabase
+        .from('user_presence')
+        .upsert({
+          user_id: currentUserId,
+          lead_id: leadId,
+          last_seen: new Date().toISOString(),
+          status: 'online'
+        });
+    };
+
+    // Update presence immediately
+    updatePresence();
+
+    // Update presence every 30 seconds
+    const interval = setInterval(updatePresence, 30000);
+
+    // Fetch online users
+    const fetchOnlineUsers = async () => {
+      const { data } = await supabase
+        .from('user_presence')
+        .select('user_id, status, users(id, full_name)')
+        .eq('lead_id', leadId)
+        .gte('last_seen', new Date(Date.now() - 10 * 60 * 1000).toISOString()); // Last 10 minutes
+
+      if (data) {
+        setOnlineUsers(data);
+      }
+    };
+
+    fetchOnlineUsers();
+    const onlineInterval = setInterval(fetchOnlineUsers, 10000); // Refresh every 10 seconds
+
+    return () => {
+      clearInterval(interval);
+      clearInterval(onlineInterval);
+      // Mark as offline when leaving
+      supabase
+        .from('user_presence')
+        .update({ status: 'offline' })
+        .eq('user_id', currentUserId)
+        .eq('lead_id', leadId);
+    };
+  }, [leadId, currentUserId]);
+
+  // Mark notes as viewed
+  useEffect(() => {
+    if (!notes.length || !currentUserId) return;
+
+    const markNotesAsViewed = async () => {
+      for (const note of notes) {
+        // Mark parent note as viewed
+        await supabase
+          .from('note_views')
+          .upsert({
+            note_id: note.id,
+            user_id: currentUserId,
+            viewed_at: new Date().toISOString()
+          });
+
+        // Mark replies as viewed
+        if (note.replies) {
+          for (const reply of note.replies) {
+            await supabase
+              .from('note_views')
+              .upsert({
+                note_id: reply.id,
+                user_id: currentUserId,
+                viewed_at: new Date().toISOString()
+              });
+          }
+        }
+      }
+    };
+
+    // Delay marking as viewed by 1 second (user must actually see it)
+    const timeout = setTimeout(markNotesAsViewed, 1000);
+    return () => clearTimeout(timeout);
+  }, [notes, currentUserId]);
 
   useEffect(() => {
     fetchNotes();
@@ -70,6 +156,26 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
         }
         likesByNote[like.note_id].push(like.user_id);
       });
+
+      // Fetch views (read receipts) for all notes
+      const { data: viewsData } = await supabase
+        .from('note_views')
+        .select('note_id, user_id, users(id, full_name)')
+        .in('note_id', allNoteIds);
+
+      // Group views by note_id
+      const viewsByNote = {};
+      viewsData?.forEach(view => {
+        if (!viewsByNote[view.note_id]) {
+          viewsByNote[view.note_id] = [];
+        }
+        viewsByNote[view.note_id].push({
+          user_id: view.user_id,
+          full_name: view.users?.full_name
+        });
+      });
+
+      setNoteViews(viewsByNote);
 
       // Add likes to notes
       const notesWithLikes = data?.map(note => ({
@@ -378,6 +484,25 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
     const hasLiked = note.likes?.includes(currentUserId);
     const likeCount = note.likes?.length || 0;
 
+    // Get online status for this user
+    const userPresence = onlineUsers.find(u => u.user_id === note.user_id);
+    const statusColor = userPresence?.status === 'online' ? 'bg-green-500'
+      : userPresence?.status === 'away' ? 'bg-yellow-500'
+      : 'bg-gray-500';
+
+    // Get views for this note
+    const views = noteViews[note.id] || [];
+    const viewCount = views.length;
+
+    // Check if edited
+    const wasEdited = note.edited_at && note.edited_at !== note.created_at;
+    const editedTime = wasEdited ? new Date(note.edited_at).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit'
+    }) : null;
+
     return (
       <div key={note.id} className={`${isReply ? 'ml-12 mt-3' : 'mb-6'}`}>
         <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl overflow-hidden hover:border-slate-600/50 transition-all">
@@ -385,20 +510,31 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
             {/* Header */}
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-full ${isReply ? 'bg-gradient-to-br from-orange-500 to-red-500' : 'bg-gradient-to-br from-purple-600 to-blue-600'} flex items-center justify-center font-bold text-white shadow-lg text-sm`}>
-                  {getInitials(note.user?.full_name)}
+                <div className="relative">
+                  <div className={`w-10 h-10 rounded-full ${isReply ? 'bg-gradient-to-br from-orange-500 to-red-500' : 'bg-gradient-to-br from-purple-600 to-blue-600'} flex items-center justify-center font-bold text-white shadow-lg text-sm`}>
+                    {getInitials(note.user?.full_name)}
+                  </div>
+                  {/* Online status dot */}
+                  <div className={`absolute bottom-0 right-0 w-3 h-3 ${statusColor} rounded-full border-2 border-slate-800`} />
                 </div>
                 <div>
                   <div className="font-semibold text-white text-sm">
                     {note.user?.full_name || 'Unknown User'}
                   </div>
-                  <div className="text-slate-500 text-xs">
-                    {new Date(note.created_at).toLocaleDateString('en-US', {
-                      month: 'short',
-                      day: 'numeric',
-                      hour: 'numeric',
-                      minute: '2-digit'
-                    })}
+                  <div className="text-slate-500 text-xs flex items-center gap-2">
+                    <span>
+                      {new Date(note.created_at).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: 'numeric',
+                        minute: '2-digit'
+                      })}
+                    </span>
+                    {wasEdited && (
+                      <span className="text-slate-600">
+                        • Edited {editedTime}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -496,6 +632,17 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
                 </svg>
                 Reply
               </button>
+
+              {/* Read receipts */}
+              {viewCount > 0 && (
+                <div className="ml-auto flex items-center gap-1.5 text-slate-500 text-xs" title={views.map(v => v.full_name).join(', ')}>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                  Seen by {viewCount}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -512,6 +659,31 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
 
   return (
     <div className="flex flex-col w-full max-w-[750px] h-[650px]">
+      {/* Currently Viewing Indicator */}
+      {onlineUsers.length > 0 && (
+        <div className="mb-4 px-4 py-2 bg-slate-800/30 border border-slate-700/50 rounded-lg">
+          <div className="flex items-center gap-2 text-sm">
+            <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+              <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
+              <path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" />
+            </svg>
+            <span className="text-slate-400">
+              Currently viewing: {' '}
+              {onlineUsers
+                .filter(u => u.user_id !== currentUserId)
+                .map((u, i, arr) => (
+                  <span key={u.user_id} className="text-white font-medium">
+                    {u.users?.full_name}
+                    {i < arr.length - 1 ? ', ' : ''}
+                  </span>
+                )) ||
+                <span className="text-slate-500">Just you</span>
+              }
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Notes List - Scrollable at TOP */}
       <div className="flex-1 overflow-y-auto space-y-5 pr-2 mb-6" style={{ maxHeight: '65%' }}>
         {notes.length === 0 ? (
