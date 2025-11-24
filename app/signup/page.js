@@ -16,7 +16,8 @@ function SignupContent() {
 
   const [formData, setFormData] = useState({
     organizationName: '',
-    fullName: '',
+    firstName: '',
+    lastName: '',
     email: '',
     password: '',
     confirmPassword: ''
@@ -94,6 +95,9 @@ function SignupContent() {
         throw new Error('Please use a stronger password');
       }
 
+      // Combine first and last name for full_name
+      const fullName = `${formData.firstName.trim()} ${formData.lastName.trim()}`;
+
       // Create Supabase auth user
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: formData.email,
@@ -101,7 +105,9 @@ function SignupContent() {
         options: {
           emailRedirectTo: `${window.location.origin}/dashboard`,
           data: {
-            full_name: formData.fullName,
+            full_name: fullName,
+            first_name: formData.firstName,
+            last_name: formData.lastName,
             organization_name: formData.organizationName
           }
         }
@@ -116,7 +122,9 @@ function SignupContent() {
         .upsert([{
           id: authData.user.id,
           email: formData.email,
-          full_name: formData.fullName,
+          full_name: fullName,
+          first_name: formData.firstName,
+          last_name: formData.lastName,
           created_at: new Date().toISOString()
         }], {
           onConflict: 'id'
@@ -250,15 +258,29 @@ function SignupContent() {
             </div>
           )}
 
-          {/* Full Name */}
+          {/* First Name */}
           <div>
-            <label className="block text-sm font-semibold text-slate-300 mb-2">Your Full Name</label>
+            <label className="block text-sm font-semibold text-slate-300 mb-2">First Name</label>
             <input
               type="text"
               required
-              value={formData.fullName}
-              onChange={(e) => setFormData(prev => ({ ...prev, fullName: e.target.value }))}
+              value={formData.firstName}
+              onChange={(e) => setFormData(prev => ({ ...prev, firstName: e.target.value }))}
               className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white"
+              placeholder="John"
+            />
+          </div>
+
+          {/* Last Name */}
+          <div>
+            <label className="block text-sm font-semibold text-slate-300 mb-2">Last Name</label>
+            <input
+              type="text"
+              required
+              value={formData.lastName}
+              onChange={(e) => setFormData(prev => ({ ...prev, lastName: e.target.value }))}
+              className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white"
+              placeholder="Doe"
             />
           </div>
 

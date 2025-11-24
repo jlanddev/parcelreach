@@ -119,6 +119,9 @@ export default function DashboardPage() {
 
   // Account settings state
   const [organizationName, setOrganizationName] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [phone, setPhone] = useState('');
 
   // Check authentication and load team data
   useEffect(() => {
@@ -276,6 +279,29 @@ export default function DashboardPage() {
       setOrganizationName(currentTeam.name);
     }
   }, [currentTeam, accountOpen]);
+
+  // Load user profile data when modal opens or user changes
+  useEffect(() => {
+    const loadUserProfile = async () => {
+      if (!currentUser?.id) return;
+
+      const { data: profileData } = await supabase
+        .from('users')
+        .select('first_name, last_name, phone')
+        .eq('id', currentUser.id)
+        .single();
+
+      if (profileData) {
+        setFirstName(profileData.first_name || '');
+        setLastName(profileData.last_name || '');
+        setPhone(profileData.phone || '');
+      }
+    };
+
+    if (accountOpen) {
+      loadUserProfile();
+    }
+  }, [currentUser, accountOpen]);
 
   // Check for purchase success
   useEffect(() => {
@@ -2302,6 +2328,89 @@ export default function DashboardPage() {
             {/* General Tab */}
             {accountTab === 'general' && (
             <div className="space-y-6">
+              {/* Profile Section */}
+              <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
+                <h3 className="text-lg font-bold text-white mb-4">Personal Profile</h3>
+
+                <div className="space-y-4">
+                  {/* First Name */}
+                  <div>
+                    <label className="block text-sm font-semibold text-white mb-2">First Name</label>
+                    <input
+                      type="text"
+                      value={firstName}
+                      onChange={(e) => setFirstName(e.target.value)}
+                      placeholder="John"
+                      className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50"
+                    />
+                  </div>
+
+                  {/* Last Name */}
+                  <div>
+                    <label className="block text-sm font-semibold text-white mb-2">Last Name</label>
+                    <input
+                      type="text"
+                      value={lastName}
+                      onChange={(e) => setLastName(e.target.value)}
+                      placeholder="Doe"
+                      className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50"
+                    />
+                  </div>
+
+                  {/* Phone */}
+                  <div>
+                    <label className="block text-sm font-semibold text-white mb-2">Phone Number (Optional)</label>
+                    <input
+                      type="tel"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="(555) 123-4567"
+                      className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50"
+                    />
+                  </div>
+
+                  {/* Save Profile Button */}
+                  <button
+                    onClick={async () => {
+                      try {
+                        const fullName = `${firstName.trim()} ${lastName.trim()}`;
+
+                        const { error } = await supabase
+                          .from('users')
+                          .update({
+                            first_name: firstName,
+                            last_name: lastName,
+                            full_name: fullName,
+                            phone: phone || null
+                          })
+                          .eq('id', currentUser.id);
+
+                        if (error) throw error;
+
+                        // Update currentUser in state to reflect changes
+                        setCurrentUser(prev => ({
+                          ...prev,
+                          user_metadata: {
+                            ...prev.user_metadata,
+                            full_name: fullName,
+                            first_name: firstName,
+                            last_name: lastName
+                          }
+                        }));
+
+                        showToast('Profile updated successfully!', 'success');
+                      } catch (error) {
+                        console.error('Error updating profile:', error);
+                        showToast('Failed to update profile. Please try again.', 'error');
+                      }
+                    }}
+                    className="w-full bg-blue-500 text-white px-4 py-3 rounded-lg hover:bg-blue-400 transition-colors text-sm font-semibold"
+                  >
+                    Save Profile Changes
+                  </button>
+                </div>
+              </div>
+
               {/* Organization Name */}
               <div>
                 <label className="block text-sm font-semibold text-white mb-2">Organization Name</label>
@@ -2314,7 +2423,7 @@ export default function DashboardPage() {
                 />
               </div>
 
-              {/* Your Name */}
+              {/* Your Email */}
               <div>
                 <label className="block text-sm font-semibold text-white mb-2">Your Email</label>
                 <input
