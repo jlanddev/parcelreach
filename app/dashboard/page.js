@@ -960,7 +960,29 @@ export default function DashboardPage() {
 
   return (
     <>
-      <div className="h-screen flex overflow-hidden">
+      {/* Admin Viewing Mode Banner */}
+      {typeof window !== 'undefined' && sessionStorage.getItem('admin_viewing_org') && (
+        <div className="fixed top-0 left-0 right-0 z-50 bg-orange-500 text-white px-4 py-2 flex items-center justify-between shadow-lg">
+          <div className="flex items-center gap-3">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+            </svg>
+            <span className="font-semibold">Admin Viewing Mode: {currentTeam?.name || 'Organization Dashboard'}</span>
+          </div>
+          <button
+            onClick={() => {
+              sessionStorage.removeItem('admin_viewing_org');
+              window.location.href = '/admin/land';
+            }}
+            className="bg-white/20 hover:bg-white/30 px-4 py-1 rounded transition-colors font-semibold"
+          >
+            Exit Admin View
+          </button>
+        </div>
+      )}
+
+      <div className={`h-screen flex overflow-hidden ${typeof window !== 'undefined' && sessionStorage.getItem('admin_viewing_org') ? 'pt-12' : ''}`}>
         {/* Premium Dark Sidebar - Full Height */}
         <aside className={`
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
