@@ -194,6 +194,8 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
     if (!newNote.trim() && attachments.length === 0) return;
 
     const mentionedUsers = extractMentions(newNote);
+    console.log('📝 Mentioned users:', mentionedUsers);
+    console.log('📝 Team members:', teamMembers);
 
     const { data, error } = await supabase
       .from('lead_notes')
@@ -208,6 +210,8 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
       }])
       .select();
 
+    console.log('📝 Note created:', data, 'Error:', error);
+
     if (!error && mentionedUsers.length > 0) {
       // Build lead description for notification
       const leadName = lead?.name || 'Unknown';
@@ -219,7 +223,8 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
       const leadDescription = `${leadName} - ${leadLocation}`;
 
       for (const userId of mentionedUsers) {
-        await fetch('/api/notifications/create', {
+        console.log('🔔 Creating notification for user:', userId);
+        const response = await fetch('/api/notifications/create', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -233,6 +238,8 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
             sendEmail: true
           })
         });
+        const result = await response.json();
+        console.log('🔔 Notification created:', result);
       }
     }
 
@@ -279,6 +286,13 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
   const filteredMembers = teamMembers?.filter(m =>
     m.users.full_name.toLowerCase().includes(mentionSearch.toLowerCase())
   ) || [];
+
+  const getInitials = (name) => {
+    if (!name) return 'U';
+    const parts = name.trim().split(' ');
+    if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
+    return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
+  };
 
   const highlightMentions = (text) => {
     if (!teamMembers) return text;
@@ -328,8 +342,8 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
             {/* Header */}
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-full ${isReply ? 'bg-gradient-to-br from-orange-500 to-red-500' : 'bg-gradient-to-br from-purple-600 to-blue-600'} flex items-center justify-center font-bold text-white shadow-lg`}>
-                  {note.user?.full_name?.charAt(0).toUpperCase() || 'U'}
+                <div className={`w-10 h-10 rounded-full ${isReply ? 'bg-gradient-to-br from-orange-500 to-red-500' : 'bg-gradient-to-br from-purple-600 to-blue-600'} flex items-center justify-center font-bold text-white shadow-lg text-sm`}>
+                  {getInitials(note.user?.full_name)}
                 </div>
                 <div>
                   <div className="font-semibold text-white text-sm">
@@ -478,8 +492,8 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
       {/* New Note Input */}
       <form onSubmit={handleSubmit} className="relative">
         <div className="flex gap-3">
-          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-600 to-teal-600 flex items-center justify-center font-bold text-white shadow-lg flex-shrink-0">
-            {currentUserName?.charAt(0).toUpperCase() || 'U'}
+          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-600 to-teal-600 flex items-center justify-center font-bold text-white shadow-lg flex-shrink-0 text-sm">
+            {getInitials(currentUserName)}
           </div>
           <div className="flex-1 relative">
             <textarea
@@ -500,7 +514,7 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
                     className="w-full text-left px-3 py-2 hover:bg-slate-600 text-white text-sm flex items-center gap-2 transition-colors"
                   >
                     <div className="w-7 h-7 rounded-full bg-purple-600 flex items-center justify-center font-semibold text-xs">
-                      {member.users.full_name.charAt(0).toUpperCase()}
+                      {getInitials(member.users.full_name)}
                     </div>
                     <div className="font-medium">{member.users.full_name}</div>
                   </button>
