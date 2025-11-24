@@ -1558,7 +1558,11 @@ export default function LeadsMap({ leads = [], zoomToLead = null, developments =
               <div className="flex justify-between items-center py-2 border-b border-slate-700/30">
                 <span className="text-slate-400">Location</span>
                 <span className="text-white font-medium text-right">
-                  {selectedParcel.parcel.properties.fields?.county || 'Unknown'}, TX
+                  {selectedParcel.lead ? (
+                    `${selectedParcel.lead.county || selectedParcel.lead.property_county || selectedParcel.parcel.properties.fields?.county || 'Unknown'}, ${selectedParcel.lead.state || selectedParcel.lead.property_state || 'TX'}`
+                  ) : (
+                    `${selectedParcel.parcel.properties.fields?.county || 'Unknown'}, TX`
+                  )}
                 </span>
               </div>
 
@@ -1625,8 +1629,12 @@ export default function LeadsMap({ leads = [], zoomToLead = null, developments =
                 <div className="text-slate-400 mb-1">Property Address</div>
                 <div className="text-white font-medium">
                   {selectedParcel.lead ? (
-                    // Use lead data if available
-                    `${selectedParcel.lead.address || selectedParcel.lead.street_address || 'Address not available'}${selectedParcel.lead.city ? ', ' + selectedParcel.lead.city : ''}${selectedParcel.lead.state || selectedParcel.lead.property_state ? ', ' + (selectedParcel.lead.state || selectedParcel.lead.property_state) : ''}${selectedParcel.lead.county || selectedParcel.lead.property_county ? ', ' + (selectedParcel.lead.county || selectedParcel.lead.property_county) : ''}`
+                    // Use lead data if available - format: Street, City, State
+                    [
+                      selectedParcel.lead.address || selectedParcel.lead.street_address,
+                      selectedParcel.lead.city,
+                      selectedParcel.lead.state || selectedParcel.lead.property_state
+                    ].filter(Boolean).join(', ') || 'Address not available'
                   ) : (
                     // Fall back to parcel GIS data
                     selectedParcel.parcel.properties.headline || 'Address not available'
