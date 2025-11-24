@@ -16,6 +16,8 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
   const [cursorPosition, setCursorPosition] = useState(0);
   const [replyingTo, setReplyingTo] = useState(null);
   const [expandedNotes, setExpandedNotes] = useState(new Set());
+  const [attachments, setAttachments] = useState([]);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     fetchNotes();
@@ -138,9 +140,58 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
     return mentions;
   };
 
+  const handleFileSelect = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    setUploading(true);
+
+    try {
+      const uploadedFiles = [];
+
+      for (const file of files) {
+        // Generate unique filename
+        const fileExt = file.name.split('.').pop();
+        const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
+        const filePath = `note-attachments/${leadId}/${fileName}`;
+
+        // Upload to Supabase Storage
+        const { data, error } = await supabase.storage
+          .from('lead-files')
+          .upload(filePath, file);
+
+        if (error) throw error;
+
+        // Get public URL
+        const { data: { publicUrl } } = supabase.storage
+          .from('lead-files')
+          .getPublicUrl(filePath);
+
+        uploadedFiles.push({
+          name: file.name,
+          url: publicUrl,
+          type: file.type,
+          size: file.size,
+          path: filePath
+        });
+      }
+
+      setAttachments(prev => [...prev, ...uploadedFiles]);
+    } catch (error) {
+      console.error('Error uploading files:', error);
+      alert('Failed to upload files. Please try again.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const removeAttachment = (index) => {
+    setAttachments(prev => prev.filter((_, i) => i !== index));
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!newNote.trim()) return;
+    if (!newNote.trim() && attachments.length === 0) return;
 
     const mentionedUsers = extractMentions(newNote);
 
@@ -152,7 +203,8 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
         team_id: teamId,
         content: newNote,
         parent_id: replyingTo?.id || null,
-        mentioned_users: mentionedUsers
+        mentioned_users: mentionedUsers,
+        attachments: attachments
       }])
       .select();
 
@@ -186,6 +238,7 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
 
     setNewNote('');
     setReplyingTo(null);
+    setAttachments([]);
     fetchNotes();
   };
 
@@ -321,6 +374,43 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
               </button>
             )}
 
+            {/* Attachments */}
+            {note.attachments && note.attachments.length > 0 && (
+              <div className="mt-3 mb-3">
+                <div className="flex flex-wrap gap-2">
+                  {note.attachments.map((file, index) => (
+                    <div key={index} className="relative group">
+                      {file.type?.startsWith('image/') ? (
+                        <a href={file.url} target="_blank" rel="noopener noreferrer" className="block">
+                          <img
+                            src={file.url}
+                            alt={file.name}
+                            className="max-w-xs max-h-48 rounded-lg border border-slate-600 hover:border-purple-500 transition-all cursor-pointer object-cover"
+                          />
+                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 rounded-lg transition-all" />
+                        </a>
+                      ) : (
+                        <a
+                          href={file.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 bg-slate-700/50 hover:bg-slate-700 border border-slate-600 hover:border-purple-500 rounded-lg px-3 py-2 transition-all group"
+                        >
+                          <svg className="w-5 h-5 text-slate-400 group-hover:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          </svg>
+                          <span className="text-sm text-slate-300 group-hover:text-white font-medium">{file.name}</span>
+                          <span className="text-xs text-slate-500">
+                            {file.size ? `(${(file.size / 1024).toFixed(1)}KB)` : ''}
+                          </span>
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Actions */}
             <div className="flex items-center gap-4 pt-3 border-t border-slate-700/30">
               <button
@@ -420,10 +510,56 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
           </div>
         </div>
 
-        <div className="flex justify-end mt-2">
+        {/* Attachment Previews */}
+        {attachments.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {attachments.map((file, index) => (
+              <div key={index} className="relative group bg-slate-700 rounded-lg p-2 flex items-center gap-2 pr-8">
+                {file.type.startsWith('image/') ? (
+                  <img src={file.url} alt={file.name} className="w-12 h-12 object-cover rounded" />
+                ) : (
+                  <div className="w-12 h-12 bg-slate-600 rounded flex items-center justify-center">
+                    <svg className="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                    </svg>
+                  </div>
+                )}
+                <span className="text-xs text-slate-300 max-w-[100px] truncate">{file.name}</span>
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(index)}
+                  className="absolute top-1 right-1 bg-red-500 hover:bg-red-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex justify-between items-center mt-2">
+          <div className="flex items-center gap-2">
+            <input
+              type="file"
+              id="file-upload"
+              multiple
+              accept="image/*,.pdf,.doc,.docx,.txt"
+              onChange={handleFileSelect}
+              className="hidden"
+            />
+            <label
+              htmlFor="file-upload"
+              className={`flex items-center gap-1.5 px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg text-xs font-medium transition-colors cursor-pointer ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+              </svg>
+              {uploading ? 'Uploading...' : 'Attach Files'}
+            </label>
+          </div>
           <button
             type="submit"
-            disabled={!newNote.trim()}
+            disabled={(!newNote.trim() && attachments.length === 0) || uploading}
             className="bg-purple-600 hover:bg-purple-500 text-white px-6 py-2 rounded-lg text-sm font-semibold transition-colors shadow-lg shadow-purple-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {replyingTo ? 'Post Reply' : 'Post Note'}
