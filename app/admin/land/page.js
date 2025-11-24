@@ -1904,7 +1904,7 @@ export default function LandLeadsAdminPage() {
           }}
         >
           <div
-            className="bg-slate-800 rounded-xl border border-slate-700 max-w-2xl w-full p-6"
+            className="bg-slate-800 rounded-xl border border-slate-700 max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6"
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-xl font-bold mb-4">Assign Lead to Organizations</h3>
