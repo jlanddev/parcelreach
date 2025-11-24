@@ -584,6 +584,7 @@ export default function DashboardPage() {
             team_id,
             status,
             offer_price,
+            purchase_price,
             contract_status,
             contract_sent_date,
             contract_signed_date,
@@ -647,10 +648,11 @@ export default function DashboardPage() {
         }
         return {
           ...lead,
-          // Team-specific data (status, offers, contracts)
+          // Team-specific data (status, offers, contracts, pricing)
           status: teamData?.status || lead.status || 'new',
           offerPrice: teamData?.offer_price || lead.offerprice,
           offerprice: teamData?.offer_price || lead.offerprice,
+          purchasePrice: teamData?.purchase_price, // Per-org marketplace price
           contractStatus: teamData?.contract_status,
           contractSigned: teamData?.contract_signed_date,
           contractsigned: teamData?.contract_signed_date,
@@ -701,13 +703,15 @@ export default function DashboardPage() {
 
       const purchasedLeadIds = new Set(purchases?.map(p => p.lead_id) || []);
 
-      // Apply masking to leads with price that haven't been purchased
+      // Apply masking to leads with purchase_price that haven't been purchased
+      // Use purchasePrice (team-specific) instead of price (global)
       const maskedLeads = normalizedLeads.map(lead => {
-        const hasPrice = lead.price && parseFloat(lead.price) > 0;
+        const hasPrice = lead.purchasePrice && parseFloat(lead.purchasePrice) > 0;
         const isPurchased = purchasedLeadIds.has(lead.id);
 
         if (hasPrice && !isPurchased) {
-          return maskLead(lead);
+          // Pass purchasePrice to maskLead so it shows correct price
+          return maskLead({ ...lead, price: lead.purchasePrice });
         }
         return lead;
       });

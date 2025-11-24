@@ -189,36 +189,32 @@ export default function LandLeadsAdminPage() {
           return;
         }
 
-        // Create team_lead_data record (only use columns that exist in base schema)
+        // Determine price for this specific org
+        const priceValue = leadPrice ? parseFloat(leadPrice) : null;
+
+        // Create team_lead_data record with org-specific price
         const { error: teamDataError } = await supabase
           .from('team_lead_data')
           .insert([{
             team_id: assignment.team_id,
             lead_id: leadId,
-            status: 'new'
+            status: 'new',
+            purchase_price: priceValue // Store price per-org, not globally
           }]);
 
         // Ignore duplicate errors (team already has this lead)
         if (teamDataError && !teamDataError.message.includes('duplicate') && teamDataError.code !== '23505') {
           console.error('❌ Team data creation error:', teamDataError);
+        } else {
+          if (priceValue !== null) {
+            console.log(`💰 Org ${assignment.team_id}: price $${priceValue} (masked)`);
+          } else {
+            console.log(`✅ Org ${assignment.team_id}: free (unmasked)`);
+          }
         }
       }
 
-      console.log('✅ Assignments and team data created successfully');
-
-      // Update lead price - ALWAYS update to either set or clear price
-      // If no price entered, set to null (removes marketplace mask)
-      const priceValue = leadPrice ? parseFloat(leadPrice) : null;
-      await supabase
-        .from('leads')
-        .update({ price: priceValue })
-        .eq('id', leadId);
-
-      if (priceValue !== null) {
-        console.log(`💰 Lead price set to $${priceValue}`);
-      } else {
-        console.log(`✅ Lead price cleared (free assignment)`);
-      }
+      console.log('✅ Assignments with per-org pricing created successfully');
 
       // Update lead status if not already assigned
       await supabase
@@ -228,6 +224,17 @@ export default function LandLeadsAdminPage() {
 
       // Create notifications for all team members of assigned teams
       for (const teamId of teamIds) {
+        // Get the price for THIS specific team/org
+        const { data: teamData } = await supabase
+          .from('team_lead_data')
+          .select('purchase_price')
+          .eq('team_id', teamId)
+          .eq('lead_id', leadId)
+          .single();
+
+        const orgPrice = teamData?.purchase_price || null;
+        const isPricedLead = orgPrice && orgPrice > 0;
+
         const { data: teamMembers } = await supabase
           .from('team_members')
           .select('user_id')
@@ -238,13 +245,10 @@ export default function LandLeadsAdminPage() {
           const state = leadData?.property_state || leadData?.state || 'TX';
           const acres = leadData?.acres || leadData?.acreage || 'N/A';
 
-          // Check if this is a priced lead (for purchase)
-          const isPricedLead = priceValue && priceValue > 0;
-
           // For priced leads, DON'T show owner name (prevents lookup without purchase)
           const title = isPricedLead ? 'New Lead Available for Purchase' : 'New Lead';
           const message = isPricedLead
-            ? `${acres} acres in ${location}, ${state} - $${priceValue}`
+            ? `${acres} acres in ${location}, ${state} - $${orgPrice}`
             : `${leadData?.full_name || leadData?.name || 'Property'} - ${acres} in ${location}`;
 
           // Create notification for each team member via API (sends email too)
@@ -255,11 +259,11 @@ export default function LandLeadsAdminPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   userId: member.user_id,
-                  type: 'lead_assigned', // Always use lead_assigned, email template determined by message format
+                  type: 'lead_assigned',
                   title: title,
                   message: message,
                   sendEmail: true,
-                  isPricedLead: isPricedLead // Pass flag to determine email template
+                  isPricedLead: isPricedLead
                 })
               });
             } catch (err) {
