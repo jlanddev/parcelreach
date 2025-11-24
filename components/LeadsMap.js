@@ -1632,20 +1632,25 @@ export default function LeadsMap({ leads = [], zoomToLead = null, developments =
                     // Use lead data if available - format: Street, City, State
                     (() => {
                       const street = selectedParcel.lead.address || selectedParcel.lead.street_address;
-                      const city = selectedParcel.lead.city;
+                      let city = selectedParcel.lead.city;
                       const state = selectedParcel.lead.state || selectedParcel.lead.property_state;
 
-                      // Check if city already includes state (e.g., "PULASKI, PA")
-                      const cityHasState = city && state && city.toUpperCase().includes(`, ${state.toUpperCase()}`);
+                      // Check if city already ends with the state in various formats
+                      if (city && state) {
+                        const stateUpper = state.toUpperCase();
+                        const cityUpper = city.toUpperCase();
 
-                      // Build address parts, excluding state if already in city
-                      const parts = [
-                        street,
-                        city,
-                        cityHasState ? null : state
-                      ].filter(Boolean);
+                        // Check for formats: "CITY, PA", "CITY,PA", "CITY PA", "CITY, PA, PA"
+                        if (cityUpper.endsWith(`, ${stateUpper}`) ||
+                            cityUpper.endsWith(`,${stateUpper}`) ||
+                            cityUpper.endsWith(` ${stateUpper}`)) {
+                          // City already has state, use as-is
+                          return [street, city].filter(Boolean).join(', ') || 'Address not available';
+                        }
+                      }
 
-                      return parts.join(', ') || 'Address not available';
+                      // City doesn't have state, add it
+                      return [street, city, state].filter(Boolean).join(', ') || 'Address not available';
                     })()
                   ) : (
                     // Fall back to parcel GIS data
