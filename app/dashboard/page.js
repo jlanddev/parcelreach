@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import dynamicImport from 'next/dynamic';
 import { createClient } from '@supabase/supabase-js';
@@ -350,7 +350,7 @@ export default function DashboardPage() {
 
   // Store note ID for scrolling
   const [scrollToNoteId, setScrollToNoteId] = useState(null);
-  const hasProcessedUrlRef = useState({ current: false })[0];
+  const hasProcessedUrlRef = useRef(false);
 
   // Reset URL processing flag when modal closes
   useEffect(() => {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
@@ -21,8 +21,8 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [noteViews, setNoteViews] = useState({});
   const [highlightedNoteId, setHighlightedNoteId] = useState(null);
-  const noteRefs = useState({})[0]; // Store refs for each note
-  const hasScrolledRef = useState({ current: false })[0]; // Track if we've scrolled
+  const noteRefs = useRef({}); // Store refs for each note
+  const hasScrolledRef = useRef(false); // Track if we've scrolled
 
   // Track user presence
   useEffect(() => {
@@ -118,7 +118,7 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
 
     // Small delay to ensure DOM is rendered
     const timer = setTimeout(() => {
-      const targetRef = noteRefs[scrollToNoteId];
+      const targetRef = noteRefs.current[scrollToNoteId];
       if (targetRef) {
         targetRef.scrollIntoView({ behavior: 'smooth', block: 'center' });
         setHighlightedNoteId(scrollToNoteId);
@@ -586,7 +586,7 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
     return (
       <div
         key={note.id}
-        ref={el => noteRefs[note.id] = el}
+        ref={el => noteRefs.current[note.id] = el}
         className={`${isReply ? 'ml-12 mt-3' : 'mb-6'}`}
       >
         <div className={`bg-slate-800/50 border rounded-xl overflow-hidden transition-all ${
