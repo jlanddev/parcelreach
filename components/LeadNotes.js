@@ -475,8 +475,10 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
 
               <button
                 onClick={() => {
-                  setReplyingTo(note);
-                  setNewNote('');
+                  // Always reply to the top-level parent (not nested)
+                  const topParent = isReply ? { ...note, id: note.parent_id || note.id } : note;
+                  setReplyingTo(topParent);
+                  setNewNote(`@${note.user?.full_name} `);
                 }}
                 className="flex items-center gap-1.5 text-slate-400 hover:text-purple-400 text-xs font-medium transition-colors"
               >
