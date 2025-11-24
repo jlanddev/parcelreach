@@ -1624,7 +1624,13 @@ export default function LeadsMap({ leads = [], zoomToLead = null, developments =
               <div className="py-2 border-b border-slate-700/30">
                 <div className="text-slate-400 mb-1">Property Address</div>
                 <div className="text-white font-medium">
-                  {selectedParcel.parcel.properties.headline || 'Address not available'}
+                  {selectedParcel.lead ? (
+                    // Use lead data if available
+                    `${selectedParcel.lead.address || selectedParcel.lead.street_address || 'Address not available'}${selectedParcel.lead.city ? ', ' + selectedParcel.lead.city : ''}${selectedParcel.lead.state || selectedParcel.lead.property_state ? ', ' + (selectedParcel.lead.state || selectedParcel.lead.property_state) : ''}${selectedParcel.lead.county || selectedParcel.lead.property_county ? ', ' + (selectedParcel.lead.county || selectedParcel.lead.property_county) : ''}`
+                  ) : (
+                    // Fall back to parcel GIS data
+                    selectedParcel.parcel.properties.headline || 'Address not available'
+                  )}
                 </div>
               </div>
 
