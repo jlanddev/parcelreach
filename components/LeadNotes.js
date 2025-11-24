@@ -39,7 +39,16 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
       .eq('lead_id', leadId)
       .eq('team_id', teamId)
       .is('parent_id', null)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: false });
+
+    // Sort replies within each thread chronologically (oldest to newest)
+    if (data) {
+      data.forEach(note => {
+        if (note.replies) {
+          note.replies.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+        }
+      });
+    }
 
     if (!error) {
       // Fetch likes for all notes
