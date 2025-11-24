@@ -247,20 +247,21 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
       const firstName = nameParts[0];
       const lastName = nameParts[nameParts.length - 1];
 
-      // Check for @fullname, @firstname, or @lastname
+      // Check for @fullname first (prioritize full name match), then @firstname, or @lastname
       const patterns = [
-        fullName, // "jordan harmon"
-        firstName, // "jordan"
-        lastName // "harmon"
-      ].filter(Boolean).map(name =>
-        new RegExp(`@${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi')
-      );
+        { name: fullName, type: 'full' }, // "jordan harmon"
+        { name: firstName, type: 'first' }, // "jordan"
+        { name: lastName, type: 'last' } // "harmon"
+      ].filter(p => p.name).map(p => ({
+        regex: new RegExp(`@${p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\s|$|[.,!?])`, 'gi'),
+        type: p.type
+      }));
 
       for (const pattern of patterns) {
-        if (pattern.test(text)) {
+        if (pattern.regex.test(text)) {
           if (!mentions.includes(member.users.id)) {
             mentions.push(member.users.id);
-            console.log(`✅ Found mention: ${fullName} (${member.users.id})`);
+            console.log(`✅ Found ${pattern.type} name mention: ${fullName} (${member.users.id})`);
           }
           break;
         }
@@ -437,16 +438,54 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
   ) || [];
 
   const getInitials = (name) => {
-    if (!name) return 'U';
+    if (!name || name.trim() === '') {
+      console.error('⚠️ No name provided to getInitials. currentUserName:', currentUserName, 'currentUserId:', currentUserId);
+      // Try to get first letter from user ID as last resort
+      if (currentUserId) {
+        return currentUserId.substring(0, 2).toUpperCase();
+      }
+      return '??';
+    }
     const parts = name.trim().split(' ');
     if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
     return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
+  };
+
+  // Generate consistent avatar color from user ID
+  const getAvatarColor = (userId) => {
+    if (!userId) return 'from-slate-600 to-slate-700';
+
+    // Hash the user ID to get a number
+    let hash = 0;
+    const str = userId.toString();
+    for (let i = 0; i < str.length; i++) {
+      hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    }
+
+    // Array of nice gradient combinations (professional colors)
+    const gradients = [
+      'from-purple-600 to-blue-600',
+      'from-blue-600 to-cyan-600',
+      'from-green-600 to-teal-600',
+      'from-orange-600 to-red-600',
+      'from-pink-600 to-purple-600',
+      'from-indigo-600 to-purple-600',
+      'from-teal-600 to-green-600',
+      'from-red-600 to-pink-600',
+      'from-cyan-600 to-blue-600',
+      'from-amber-600 to-orange-600'
+    ];
+
+    // Pick a gradient based on the hash
+    const index = Math.abs(hash) % gradients.length;
+    return gradients[index];
   };
 
   const highlightMentions = (text) => {
     if (!teamMembers) return text;
 
     let result = text;
+    // Sort by name length (longest first) to match full names before partial names
     const sortedMembers = [...teamMembers].sort((a, b) =>
       (b.users.full_name?.length || 0) - (a.users.full_name?.length || 0)
     );
@@ -455,7 +494,8 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
       const fullName = member.users.full_name;
       if (!fullName) return;
 
-      const mentionPattern = new RegExp(`(@${fullName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})\\b`, 'gi');
+      // Match @fullname with optional word boundary at end (to handle spaces)
+      const mentionPattern = new RegExp(`(@${fullName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})(?=\\s|$|[.,!?])`, 'gi');
       result = result.replace(mentionPattern, '<span class="text-blue-400 font-medium cursor-pointer hover:underline">$1</span>');
     });
 
@@ -484,11 +524,20 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
     const hasLiked = note.likes?.includes(currentUserId);
     const likeCount = note.likes?.length || 0;
 
-    // Get online status for this user
+    // Get online status for this user - calculate based on last_seen
     const userPresence = onlineUsers.find(u => u.user_id === note.user_id);
-    const statusColor = userPresence?.status === 'online' ? 'bg-green-500'
-      : userPresence?.status === 'away' ? 'bg-yellow-500'
-      : 'bg-gray-500';
+    let statusColor = 'bg-gray-500'; // default offline
+    if (userPresence?.last_seen) {
+      const lastSeenTime = new Date(userPresence.last_seen).getTime();
+      const now = Date.now();
+      const minutesAgo = (now - lastSeenTime) / (1000 * 60);
+
+      if (minutesAgo < 2) {
+        statusColor = 'bg-green-500'; // online
+      } else if (minutesAgo < 10) {
+        statusColor = 'bg-yellow-500'; // away
+      }
+    }
 
     // Get views for this note
     const views = noteViews[note.id] || [];
@@ -511,7 +560,7 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-3">
                 <div className="relative">
-                  <div className={`w-10 h-10 rounded-full ${isReply ? 'bg-gradient-to-br from-orange-500 to-red-500' : 'bg-gradient-to-br from-purple-600 to-blue-600'} flex items-center justify-center font-bold text-white shadow-lg text-sm`}>
+                  <div className={`w-10 h-10 rounded-full bg-gradient-to-br ${getAvatarColor(note.user_id)} flex items-center justify-center font-bold text-white shadow-lg text-sm`}>
                     {getInitials(note.user?.full_name)}
                   </div>
                   {/* Online status dot */}
@@ -635,12 +684,21 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
 
               {/* Read receipts */}
               {viewCount > 0 && (
-                <div className="ml-auto flex items-center gap-1.5 text-slate-500 text-xs" title={views.map(v => v.full_name).join(', ')}>
+                <div className="ml-auto flex items-center gap-1.5 text-slate-500 text-xs group relative cursor-help">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
                   </svg>
                   Seen by {viewCount}
+                  {/* Custom tooltip */}
+                  <div className="absolute bottom-full right-0 mb-2 hidden group-hover:block bg-slate-700 text-white text-xs rounded-lg px-3 py-2 shadow-xl whitespace-nowrap z-10 border border-slate-600">
+                    <div className="font-semibold mb-1 text-slate-300">Viewed by:</div>
+                    {views.map((v, i) => (
+                      <div key={i} className="text-white">{v.full_name || 'Unknown'}</div>
+                    ))}
+                    {/* Arrow */}
+                    <div className="absolute top-full right-4 -mt-1 border-4 border-transparent border-t-slate-700"></div>
+                  </div>
                 </div>
               )}
             </div>
@@ -659,30 +717,6 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
 
   return (
     <div className="flex flex-col w-full max-w-[750px] h-[650px]">
-      {/* Currently Viewing Indicator */}
-      {onlineUsers.length > 0 && (
-        <div className="mb-4 px-4 py-2 bg-slate-800/30 border border-slate-700/50 rounded-lg">
-          <div className="flex items-center gap-2 text-sm">
-            <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
-              <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
-              <path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" />
-            </svg>
-            <span className="text-slate-400">
-              Currently viewing: {' '}
-              {onlineUsers
-                .filter(u => u.user_id !== currentUserId)
-                .map((u, i, arr) => (
-                  <span key={u.user_id} className="text-white font-medium">
-                    {u.users?.full_name}
-                    {i < arr.length - 1 ? ', ' : ''}
-                  </span>
-                )) ||
-                <span className="text-slate-500">Just you</span>
-              }
-            </span>
-          </div>
-        </div>
-      )}
 
       {/* Notes List - Scrollable at TOP */}
       <div className="flex-1 overflow-y-auto space-y-5 pr-2 mb-6" style={{ maxHeight: '65%' }}>
@@ -724,7 +758,7 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
       {/* New Note Input - FIXED at BOTTOM */}
       <form onSubmit={handleSubmit} className="relative bg-slate-800/30 border-t-2 border-slate-700 pt-4">
         <div className="flex gap-4">
-          <div className="w-12 h-12 rounded-full bg-gradient-to-br from-green-600 to-teal-600 flex items-center justify-center font-bold text-white shadow-lg flex-shrink-0 text-base">
+          <div className={`w-12 h-12 rounded-full bg-gradient-to-br ${getAvatarColor(currentUserId)} flex items-center justify-center font-bold text-white shadow-lg flex-shrink-0 text-base`}>
             {getInitials(currentUserName)}
           </div>
           <div className="flex-1 relative">
@@ -745,7 +779,7 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
                     onClick={() => insertMention(member.users)}
                     className="w-full text-left px-4 py-3 hover:bg-slate-600 text-white text-sm flex items-center gap-3 transition-colors"
                   >
-                    <div className="w-8 h-8 rounded-full bg-purple-600 flex items-center justify-center font-semibold text-sm">
+                    <div className={`w-8 h-8 rounded-full bg-gradient-to-br ${getAvatarColor(member.users.id)} flex items-center justify-center font-semibold text-sm`}>
                       {getInitials(member.users.full_name)}
                     </div>
                     <div className="font-medium">{member.users.full_name}</div>

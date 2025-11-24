@@ -133,12 +133,10 @@ export default function DashboardPage() {
         return;
       }
 
-      setCurrentUser(user);
-
       // Get or create user profile
       const { data: userData } = await supabase
         .from('users')
-        .select('id')
+        .select('id, full_name, first_name, last_name, email')
         .eq('id', user.id)
         .single();
 
@@ -148,7 +146,30 @@ export default function DashboardPage() {
           email: user.email,
           full_name: user.email.split('@')[0]
         }]);
+        // Fetch the newly created user data
+        const { data: newUserData } = await supabase
+          .from('users')
+          .select('id, full_name, first_name, last_name, email')
+          .eq('id', user.id)
+          .single();
+
+        // Merge user data with auth user
+        setCurrentUser({ ...user, ...newUserData });
+      } else {
+        // If full_name is missing, update it from email
+        if (!userData.full_name) {
+          const defaultName = user.email.split('@')[0];
+          await supabase
+            .from('users')
+            .update({ full_name: defaultName })
+            .eq('id', user.id);
+          userData.full_name = defaultName;
+        }
+        // Merge user data with auth user
+        setCurrentUser({ ...user, ...userData });
       }
+
+      console.log('✅ Current user loaded:', { ...user, ...userData });
 
       // Check if user is admin
       const isAdmin = user.email === 'admin@parcelreach.ai' || user.email === 'jordan@havenground.com' || user.email === 'jordan@landreach.co';
