@@ -1007,8 +1007,8 @@ export default function DashboardPage() {
                 </svg>
               </button>
 
-              {/* Notifications */}
-              {currentUser && (
+              {/* Notifications - hide when admin viewing another org */}
+              {currentUser && !sessionStorage.getItem('admin_viewing_org') && (
                 <NotificationBell userId={currentUser.id} />
               )}
 
