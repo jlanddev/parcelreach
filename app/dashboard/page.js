@@ -232,6 +232,26 @@ export default function DashboardPage() {
     setTeamMembers(data || []);
   };
 
+  const updateMemberRole = async (userId, newRole) => {
+    if (!currentTeam?.id) return;
+
+    try {
+      const { error } = await supabase
+        .from('team_members')
+        .update({ role: newRole })
+        .eq('team_id', currentTeam.id)
+        .eq('user_id', userId);
+
+      if (error) throw error;
+
+      showToast(`Role updated to ${newRole}`, 'success');
+      loadTeamMembers(currentTeam.id);
+    } catch (error) {
+      console.error('Error updating role:', error);
+      showToast('Failed to update role', 'error');
+    }
+  };
+
   // Fetch recent developments from open data portals
   const fetchDevelopments = async () => {
     setDevelopmentsLoading(true);
@@ -1952,7 +1972,9 @@ export default function DashboardPage() {
                     {currentUser && (
                       <LeadNotes
                         leadId={selectedLead.id}
+                        lead={selectedLead}
                         currentUserId={currentUser.id}
+                        currentUserName={currentUser.full_name}
                         teamMembers={teamMembers}
                         teamId={currentTeam?.id}
                       />
@@ -2308,17 +2330,36 @@ export default function DashboardPage() {
                 <label className="block text-sm font-semibold text-white mb-2">Team Members</label>
                 <div className="space-y-2 mb-3">
                   {teamMembers?.map((member) => (
-                    <div key={member.users.id} className="flex items-center justify-between bg-slate-900/50 border border-slate-700/50 rounded-lg px-4 py-2">
-                      <div>
-                        <p className="text-white text-sm">{member.users.full_name}</p>
+                    <div key={member.users.id} className="flex items-center justify-between bg-slate-900/50 border border-slate-700/50 rounded-lg px-4 py-3">
+                      <div className="flex-1">
+                        <p className="text-white text-sm font-medium">{member.users.full_name}</p>
                         <p className="text-slate-400 text-xs">{member.users.email}</p>
                       </div>
-                      <button
-                        onClick={() => alert('Remove team member feature coming soon')}
-                        className="text-red-400 hover:text-red-300 text-sm"
-                      >
-                        Remove
-                      </button>
+                      <div className="flex items-center gap-3">
+                        {userRole === 'owner' ? (
+                          <select
+                            value={member.role || 'member'}
+                            onChange={(e) => updateMemberRole(member.user_id, e.target.value)}
+                            className="bg-slate-800 border border-slate-600 text-white text-xs rounded px-2 py-1 focus:outline-none focus:border-blue-500"
+                          >
+                            <option value="owner">Owner</option>
+                            <option value="executive">Executive</option>
+                            <option value="member">Member</option>
+                          </select>
+                        ) : (
+                          <span className="text-slate-400 text-xs px-2 py-1">
+                            {member.role || 'member'}
+                          </span>
+                        )}
+                        {userRole === 'owner' && (
+                          <button
+                            onClick={() => alert('Remove team member feature coming soon')}
+                            className="text-red-400 hover:text-red-300 text-sm"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>

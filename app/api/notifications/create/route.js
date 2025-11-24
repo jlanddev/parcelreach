@@ -55,6 +55,7 @@ export async function POST(request) {
         type,
         title,
         message,
+        link: link || null,
         read: false
       }])
       .select()

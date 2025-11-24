@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import { useRouter } from 'next/navigation';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -9,6 +10,7 @@ const supabase = createClient(
 );
 
 export default function NotificationsPanel({ userId, onLeadClick }) {
+  const router = useRouter();
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
@@ -61,7 +63,14 @@ export default function NotificationsPanel({ userId, onLeadClick }) {
 
   const handleNotificationClick = (notification) => {
     markAsRead(notification.id);
-    if (notification.lead_id && onLeadClick) {
+    setIsOpen(false);
+
+    // If there's a link, navigate to it
+    if (notification.link) {
+      router.push(notification.link);
+    }
+    // Fallback to old behavior for backward compatibility
+    else if (notification.lead_id && onLeadClick) {
       onLeadClick(notification.lead_id);
     }
   };
