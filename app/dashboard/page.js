@@ -542,14 +542,20 @@ export default function DashboardPage() {
         };
       });
 
-      // Fetch user's purchases to check which priced leads they've bought
-      // Get current user from auth session (not state, which may not be set yet)
-      const { data: { user } } = await supabase.auth.getUser();
+      // Fetch TEAM purchases (any team member) to check which priced leads have been bought
+      // Get all team members first
+      const { data: members } = await supabase
+        .from('team_members')
+        .select('user_id')
+        .eq('team_id', teamId);
 
+      const teamUserIds = members?.map(m => m.user_id) || [];
+
+      // Get purchases by ANY team member
       const { data: purchases } = await supabase
         .from('lead_purchases')
         .select('lead_id')
-        .eq('user_id', user?.id);
+        .in('user_id', teamUserIds);
 
       const purchasedLeadIds = new Set(purchases?.map(p => p.lead_id) || []);
 
