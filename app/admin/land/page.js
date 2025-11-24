@@ -206,14 +206,18 @@ export default function LandLeadsAdminPage() {
 
       console.log('✅ Assignments and team data created successfully');
 
-      // Update lead price if set (makes it a marketplace lead)
+      // Update lead price - ALWAYS update to either set or clear price
+      // If no price entered, set to null (removes marketplace mask)
       const priceValue = leadPrice ? parseFloat(leadPrice) : null;
+      await supabase
+        .from('leads')
+        .update({ price: priceValue })
+        .eq('id', leadId);
+
       if (priceValue !== null) {
-        await supabase
-          .from('leads')
-          .update({ price: priceValue })
-          .eq('id', leadId);
         console.log(`💰 Lead price set to $${priceValue}`);
+      } else {
+        console.log(`✅ Lead price cleared (free assignment)`);
       }
 
       // Update lead status if not already assigned
