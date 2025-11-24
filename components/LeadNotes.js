@@ -120,23 +120,39 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
 
     // Sort team members by name length (longest first) to match longer names first
     const sortedMembers = [...teamMembers].sort((a, b) =>
-      (b.users.full_name?.length || 0) - (a.users.full_name?.length || 0)
+      (b.users?.full_name?.length || 0) - (a.users?.full_name?.length || 0)
     );
 
     // For each team member, check if their name is mentioned
     sortedMembers.forEach(member => {
-      const fullName = member.users.full_name;
+      const fullName = member.users?.full_name;
       if (!fullName) return;
 
-      // Check if @name appears in the text (case insensitive)
-      const mentionPattern = new RegExp(`@${fullName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
-      if (mentionPattern.test(text)) {
-        if (!mentions.includes(member.users.id)) {
-          mentions.push(member.users.id);
+      const nameParts = fullName.split(' ');
+      const firstName = nameParts[0];
+      const lastName = nameParts[nameParts.length - 1];
+
+      // Check for @fullname, @firstname, or @lastname
+      const patterns = [
+        fullName, // "jordan harmon"
+        firstName, // "jordan"
+        lastName // "harmon"
+      ].filter(Boolean).map(name =>
+        new RegExp(`@${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi')
+      );
+
+      for (const pattern of patterns) {
+        if (pattern.test(text)) {
+          if (!mentions.includes(member.users.id)) {
+            mentions.push(member.users.id);
+            console.log(`✅ Found mention: ${fullName} (${member.users.id})`);
+          }
+          break;
         }
       }
     });
 
+    console.log('📝 Total mentions found:', mentions);
     return mentions;
   };
 
