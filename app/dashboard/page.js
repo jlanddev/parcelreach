@@ -350,31 +350,50 @@ export default function DashboardPage() {
 
   // Auto-open lead from notification link
   useEffect(() => {
-    if (typeof window === 'undefined' || !leads.length) return;
+    if (typeof window === 'undefined') return;
 
     const urlParams = new URLSearchParams(window.location.search);
     const leadIdFromNotif = urlParams.get('lead');
 
-    if (leadIdFromNotif) {
-      console.log('🔔 Notification link detected, opening lead:', leadIdFromNotif);
+    // If no lead parameter, skip
+    if (!leadIdFromNotif) return;
 
-      // Find the lead in the loaded leads
-      const leadToOpen = leads.find(l => l.id === leadIdFromNotif);
+    console.log('🔔 Notification link detected, opening lead:', leadIdFromNotif);
+    console.log('📊 Leads currently loaded:', leads.length);
 
-      if (leadToOpen) {
-        console.log('✅ Found lead, opening modal:', leadToOpen.name);
+    // If leads haven't loaded yet, wait for them
+    if (!leads.length) {
+      console.log('⏳ Waiting for leads to load...');
+      return;
+    }
+
+    // Find the lead in the loaded leads
+    const leadToOpen = leads.find(l => l.id === leadIdFromNotif);
+
+    if (leadToOpen) {
+      console.log('✅ Found lead, opening modal:', leadToOpen.name);
+
+      // Use a small delay to ensure React state is ready
+      setTimeout(() => {
         setSelectedLead(leadToOpen);
         setModalOpen(true);
+        console.log('✅ Modal opened for:', leadToOpen.name);
+      }, 100);
 
-        // Clean up URL immediately to prevent re-opening
+      // Clean up URL after modal opens
+      setTimeout(() => {
         window.history.replaceState({}, '', '/dashboard');
-      } else {
-        console.warn('⚠️ Lead not found in current leads list:', leadIdFromNotif);
-        console.log('Available lead IDs:', leads.map(l => l.id));
+        console.log('✅ URL cleaned up');
+      }, 500);
+    } else {
+      console.warn('⚠️ Lead not found in current leads list:', leadIdFromNotif);
+      console.log('Available lead IDs:', leads.map(l => l.id));
+      console.log('Available lead names:', leads.map(l => l.name));
 
-        // Clean up URL even if lead not found
+      // Clean up URL even if lead not found
+      setTimeout(() => {
         window.history.replaceState({}, '', '/dashboard');
-      }
+      }, 500);
     }
   }, [leads]);
 
