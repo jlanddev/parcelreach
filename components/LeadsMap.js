@@ -1629,28 +1629,32 @@ export default function LeadsMap({ leads = [], zoomToLead = null, developments =
                 <div className="text-slate-400 mb-1">Property Address</div>
                 <div className="text-white font-medium">
                   {selectedParcel.lead ? (
-                    // Use lead data if available - format: Street, City, State
+                    // Use lead data if available
                     (() => {
-                      const street = selectedParcel.lead.address || selectedParcel.lead.street_address;
-                      let city = selectedParcel.lead.city;
+                      const address = selectedParcel.lead.address || selectedParcel.lead.street_address;
+                      const city = selectedParcel.lead.city;
                       const state = selectedParcel.lead.state || selectedParcel.lead.property_state;
 
-                      // Check if city already ends with the state in various formats
+                      // If address already looks complete (has commas and state), use as-is
+                      if (address && state && address.toUpperCase().includes(state.toUpperCase())) {
+                        return address;
+                      }
+
+                      // Check if city already ends with state
                       if (city && state) {
                         const stateUpper = state.toUpperCase();
                         const cityUpper = city.toUpperCase();
 
-                        // Check for formats: "CITY, PA", "CITY,PA", "CITY PA", "CITY, PA, PA"
                         if (cityUpper.endsWith(`, ${stateUpper}`) ||
                             cityUpper.endsWith(`,${stateUpper}`) ||
                             cityUpper.endsWith(` ${stateUpper}`)) {
-                          // City already has state, use as-is
-                          return [street, city].filter(Boolean).join(', ') || 'Address not available';
+                          // City has state, just add street + city
+                          return [address, city].filter(Boolean).join(', ') || 'Address not available';
                         }
                       }
 
-                      // City doesn't have state, add it
-                      return [street, city, state].filter(Boolean).join(', ') || 'Address not available';
+                      // Build from parts
+                      return [address, city, state].filter(Boolean).join(', ') || 'Address not available';
                     })()
                   ) : (
                     // Fall back to parcel GIS data
