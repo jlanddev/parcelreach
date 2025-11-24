@@ -375,7 +375,7 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
 
             {/* Content */}
             <div
-              className="text-slate-200 text-sm leading-relaxed whitespace-pre-wrap mb-3"
+              className="text-slate-200 text-base leading-relaxed whitespace-pre-wrap mb-3"
               dangerouslySetInnerHTML={{ __html: highlightMentions(displayContent) }}
             />
 
@@ -500,8 +500,8 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
               value={newNote}
               onChange={handleNoteChange}
               placeholder="Write a note and mention others with @"
-              rows={3}
-              className="w-full bg-slate-800/50 border border-slate-600 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 resize-none text-sm"
+              rows={5}
+              className="w-full bg-slate-800/50 border border-slate-600 rounded-xl px-4 py-4 text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 resize-vertical text-base leading-relaxed min-h-[120px]"
             />
 
             {showMentions && filteredMembers.length > 0 && (
