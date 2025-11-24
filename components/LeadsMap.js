@@ -1559,7 +1559,7 @@ export default function LeadsMap({ leads = [], zoomToLead = null, developments =
                 <span className="text-slate-400">Location</span>
                 <span className="text-white font-medium text-right">
                   {selectedParcel.lead ? (
-                    `${selectedParcel.lead.county || selectedParcel.lead.property_county || selectedParcel.parcel.properties.fields?.county || 'Unknown'}, ${selectedParcel.lead.state || selectedParcel.lead.property_state || 'TX'}`
+                    `${selectedParcel.lead.county || selectedParcel.lead.property_county || selectedParcel.parcel.properties.fields?.county || 'Unknown'} County, ${selectedParcel.lead.state || selectedParcel.lead.property_state || 'TX'}`
                   ) : (
                     `${selectedParcel.parcel.properties.fields?.county || 'Unknown'}, TX`
                   )}
@@ -1630,11 +1630,23 @@ export default function LeadsMap({ leads = [], zoomToLead = null, developments =
                 <div className="text-white font-medium">
                   {selectedParcel.lead ? (
                     // Use lead data if available - format: Street, City, State
-                    [
-                      selectedParcel.lead.address || selectedParcel.lead.street_address,
-                      selectedParcel.lead.city,
-                      selectedParcel.lead.state || selectedParcel.lead.property_state
-                    ].filter(Boolean).join(', ') || 'Address not available'
+                    (() => {
+                      const street = selectedParcel.lead.address || selectedParcel.lead.street_address;
+                      const city = selectedParcel.lead.city;
+                      const state = selectedParcel.lead.state || selectedParcel.lead.property_state;
+
+                      // Check if city already includes state (e.g., "PULASKI, PA")
+                      const cityHasState = city && state && city.toUpperCase().includes(`, ${state.toUpperCase()}`);
+
+                      // Build address parts, excluding state if already in city
+                      const parts = [
+                        street,
+                        city,
+                        cityHasState ? null : state
+                      ].filter(Boolean);
+
+                      return parts.join(', ') || 'Address not available';
+                    })()
                   ) : (
                     // Fall back to parcel GIS data
                     selectedParcel.parcel.properties.headline || 'Address not available'
