@@ -350,10 +350,20 @@ export default function DashboardPage() {
 
   // Store note ID for scrolling
   const [scrollToNoteId, setScrollToNoteId] = useState(null);
+  const hasProcessedUrlRef = useState({ current: false })[0];
+
+  // Reset URL processing flag when modal closes
+  useEffect(() => {
+    if (!modalOpen) {
+      hasProcessedUrlRef.current = false;
+      setScrollToNoteId(null);
+    }
+  }, [modalOpen]);
 
   // Auto-open lead from notification link
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    if (hasProcessedUrlRef.current) return; // Only process once
 
     const urlParams = new URLSearchParams(window.location.search);
     const leadIdFromNotif = urlParams.get('lead');
@@ -379,6 +389,7 @@ export default function DashboardPage() {
 
     if (leadToOpen) {
       console.log('✅ Found lead, opening modal:', leadToOpen.name);
+      hasProcessedUrlRef.current = true; // Mark as processed
 
       // Use a small delay to ensure React state is ready
       setTimeout(() => {
@@ -399,6 +410,8 @@ export default function DashboardPage() {
       console.warn('⚠️ Lead not found in current leads list:', leadIdFromNotif);
       console.log('Available lead IDs:', leads.map(l => l.id));
       console.log('Available lead names:', leads.map(l => l.name));
+
+      hasProcessedUrlRef.current = true; // Mark as processed even if not found
 
       // Clean up URL even if lead not found
       setTimeout(() => {

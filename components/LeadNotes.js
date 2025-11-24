@@ -22,6 +22,7 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
   const [noteViews, setNoteViews] = useState({});
   const [highlightedNoteId, setHighlightedNoteId] = useState(null);
   const noteRefs = useState({})[0]; // Store refs for each note
+  const hasScrolledRef = useState({ current: false })[0]; // Track if we've scrolled
 
   // Track user presence
   useEffect(() => {
@@ -113,7 +114,7 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
 
   // Scroll to specific note when scrollToNoteId is provided
   useEffect(() => {
-    if (!scrollToNoteId || !notes.length) return;
+    if (!scrollToNoteId || !notes.length || hasScrolledRef.current) return;
 
     // Small delay to ensure DOM is rendered
     const timer = setTimeout(() => {
@@ -121,6 +122,7 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
       if (targetRef) {
         targetRef.scrollIntoView({ behavior: 'smooth', block: 'center' });
         setHighlightedNoteId(scrollToNoteId);
+        hasScrolledRef.current = true; // Mark as scrolled
 
         // Remove highlight after 3 seconds
         setTimeout(() => setHighlightedNoteId(null), 3000);
@@ -129,6 +131,11 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
 
     return () => clearTimeout(timer);
   }, [scrollToNoteId, notes]);
+
+  // Reset scroll tracking when modal closes (when leadId changes)
+  useEffect(() => {
+    hasScrolledRef.current = false;
+  }, [leadId]);
 
   const fetchNotes = async () => {
     if (!teamId) return;
