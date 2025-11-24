@@ -937,8 +937,9 @@ export default function LandLeadsAdminPage() {
     }
   };
 
-  const unassignedLeads = allLeads.filter(l => !l.purchased_by);
-  const assignedLeads = allLeads.filter(l => l.purchased_by);
+  // Check lead_assignments table to determine if lead is assigned
+  const unassignedLeads = allLeads.filter(l => !leadAssignments[l.id] || leadAssignments[l.id].length === 0);
+  const assignedLeads = allLeads.filter(l => leadAssignments[l.id] && leadAssignments[l.id].length > 0);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
