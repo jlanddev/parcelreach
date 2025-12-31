@@ -2,155 +2,290 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
+import { useState } from 'react';
 
 export default function LandingPage() {
+  const [formData, setFormData] = useState({ firstName: '', email: '', phone: '' });
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    // Redirect to signup or handle form submission
+    window.location.href = `/signup?name=${encodeURIComponent(formData.firstName)}&email=${encodeURIComponent(formData.email)}&phone=${encodeURIComponent(formData.phone)}`;
+  };
+
+  const logos = [
+    'D.R. Horton', 'KB Homes', 'T. Wilson', 'Pyramid Land',
+    'Land Exit Solutions', 'Go Westlands LLC', 'Gibson Communities', 'Ranch Road Development'
+  ];
+
   return (
-    <>
-      <style dangerouslySetInnerHTML={{
-        __html: `
-          @keyframes topoFloat {
-            0%, 100% { transform: translateY(0px); }
-            50% { transform: translateY(-15px); }
-          }
-        `
-      }} />
-
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white">
-        {/* Animated Topographic Lines Background */}
-        <div className="absolute inset-x-0 bottom-0 pointer-events-none" style={{ height: '40%' }}>
-          <div
-            className="absolute inset-0"
-            style={{
-              backgroundImage: 'url(/topo-lines.png)',
-              backgroundSize: 'cover',
-              backgroundPosition: 'bottom center',
-              backgroundRepeat: 'no-repeat',
-              opacity: 0.12,
-              animation: 'topoFloat 20s ease-in-out infinite',
-              maskImage: 'linear-gradient(to top, rgba(0,0,0,1) 0%, rgba(0,0,0,0.5) 50%, rgba(0,0,0,0) 100%)',
-              WebkitMaskImage: 'linear-gradient(to top, rgba(0,0,0,1) 0%, rgba(0,0,0,0.5) 50%, rgba(0,0,0,0) 100%)'
-            }}
-          />
-        </div>
-
-        {/* Nav */}
-        <nav className="relative z-20 flex justify-between items-center px-6 py-4 max-w-7xl mx-auto">
+    <div className="min-h-screen bg-cream font-sans">
+      {/* Navigation */}
+      <nav className="bg-forest">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
           <Image
             src="/parcelreach-logo.png"
-            alt="ParcelReach AI"
-            width={200}
-            height={67}
+            alt="ParcelReach"
+            width={180}
+            height={60}
             priority
-            className="w-auto h-12"
+            className="h-10 w-auto brightness-0 invert"
           />
           <Link
             href="/login"
-            className="px-4 py-2 text-sm font-semibold text-slate-300 hover:text-white transition-colors"
+            className="text-cream/90 hover:text-white font-medium transition-colors"
           >
             Sign In
           </Link>
-        </nav>
+        </div>
+      </nav>
 
-        {/* Hero Section */}
-        <div className="relative z-10 px-4 pt-12 pb-20 max-w-7xl mx-auto">
-          <div className="text-center max-w-4xl mx-auto mb-16">
-            <h1 className="text-5xl sm:text-6xl lg:text-7xl font-bold mb-6 leading-tight">
-              Turn Land Leads Into
-              <span className="block bg-gradient-to-r from-blue-400 to-orange-400 bg-clip-text text-transparent">
-                Closed Deals
-              </span>
+      {/* Hero Section */}
+      <section className="relative bg-forest text-white overflow-hidden">
+        {/* Subtle topographic pattern overlay */}
+        <div
+          className="absolute inset-0 opacity-5"
+          style={{
+            backgroundImage: 'url(/topo-lines.png)',
+            backgroundSize: 'cover',
+            backgroundPosition: 'center'
+          }}
+        />
+
+        <div className="relative max-w-7xl mx-auto px-6 py-24 lg:py-32">
+          <div className="max-w-3xl">
+            <h1 className="font-serif text-5xl lg:text-6xl xl:text-7xl font-bold leading-tight mb-6">
+              Tap Into America's Most Proven Land Pipeline
             </h1>
-            <p className="text-xl sm:text-2xl text-slate-400 mb-10 max-w-2xl mx-auto">
-              AI-powered lead intelligence that finds motivated land sellers and delivers them straight to your team
+            <p className="text-xl lg:text-2xl text-white/80 mb-10 leading-relaxed">
+              Access our battle-tested PPC campaigns that have generated millions in land deals nationwide. Premium leads in premium locations, ready when you are.
             </p>
             <a
-              href="https://calendly.com/jordan-parcelreach"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-block px-8 py-4 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white text-lg font-bold rounded-xl shadow-lg shadow-blue-500/30 transition-all transform hover:scale-105"
+              href="#signup"
+              className="inline-block px-8 py-4 bg-gold hover:bg-gold/90 text-charcoal font-bold text-lg rounded transition-all transform hover:scale-105"
             >
-              Book a Demo Call
-            </a>
-            <p className="mt-4 text-sm text-slate-500">Free 15-minute strategy session</p>
-          </div>
-
-          {/* Features Grid */}
-          <div className="grid md:grid-cols-3 gap-8 max-w-6xl mx-auto mb-20">
-            {/* Feature 1 */}
-            <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-2xl p-8 hover:border-blue-500/50 transition-all">
-              <div className="w-14 h-14 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl flex items-center justify-center mb-6">
-                <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-                </svg>
-              </div>
-              <h3 className="text-2xl font-bold mb-3">Smart Lead Sourcing</h3>
-              <p className="text-slate-400">
-                Our AI identifies motivated land sellers through multiple channels - PPC, direct outreach, and market analysis
-              </p>
-            </div>
-
-            {/* Feature 2 */}
-            <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-2xl p-8 hover:border-orange-500/50 transition-all">
-              <div className="w-14 h-14 bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl flex items-center justify-center mb-6">
-                <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                </svg>
-              </div>
-              <h3 className="text-2xl font-bold mb-3">Team Dashboard</h3>
-              <p className="text-slate-400">
-                Manage leads, track progress, and collaborate with your team all in one beautiful 3D map interface
-              </p>
-            </div>
-
-            {/* Feature 3 */}
-            <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-2xl p-8 hover:border-green-500/50 transition-all">
-              <div className="w-14 h-14 bg-gradient-to-br from-green-500 to-green-600 rounded-xl flex items-center justify-center mb-6">
-                <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-              </div>
-              <h3 className="text-2xl font-bold mb-3">Instant Notifications</h3>
-              <p className="text-slate-400">
-                Get notified the moment a new qualified lead comes in. Never miss an opportunity
-              </p>
-            </div>
-          </div>
-
-          {/* CTA Section */}
-          <div className="bg-gradient-to-br from-slate-800/80 to-slate-900/80 backdrop-blur border border-slate-700/50 rounded-3xl p-12 text-center max-w-4xl mx-auto">
-            <h2 className="text-4xl font-bold mb-4">Ready to Scale Your Land Business?</h2>
-            <p className="text-xl text-slate-400 mb-8 max-w-2xl mx-auto">
-              Book a free 15-minute demo call and see how ParcelReach can help you close more deals
-            </p>
-            <a
-              href="https://calendly.com/jordan-parcelreach"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-block px-10 py-5 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white text-xl font-bold rounded-xl shadow-lg shadow-blue-500/30 transition-all transform hover:scale-105"
-            >
-              Schedule Your Demo
+              Start My 7-Day Free Trial
             </a>
           </div>
         </div>
+      </section>
 
-        {/* Footer */}
-        <footer className="relative z-10 border-t border-slate-800 py-8">
-          <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center text-sm text-slate-500">
-            <p>© 2025 ParcelReach AI. All rights reserved.</p>
-            <div className="flex gap-6 mt-4 md:mt-0">
-              <Link href="/privacy-policy" className="hover:text-slate-300 transition-colors">
+      {/* Logo Bar */}
+      <section className="bg-cream/50 border-y border-earth/10 py-8 overflow-hidden">
+        <p className="text-center text-earth/60 text-sm uppercase tracking-wider mb-6">
+          Trusted by industry leaders
+        </p>
+        <div className="relative">
+          <div className="flex animate-scroll">
+            {[...logos, ...logos].map((logo, i) => (
+              <div
+                key={i}
+                className="flex-shrink-0 mx-12 text-charcoal/40 font-semibold text-lg whitespace-nowrap"
+              >
+                {logo}
+              </div>
+            ))}
+          </div>
+        </div>
+        <style jsx>{`
+          @keyframes scroll {
+            0% { transform: translateX(0); }
+            100% { transform: translateX(-50%); }
+          }
+          .animate-scroll {
+            animation: scroll 30s linear infinite;
+          }
+        `}</style>
+      </section>
+
+      {/* Stats Section */}
+      <section className="py-20 lg:py-28 bg-white">
+        <div className="max-w-7xl mx-auto px-6">
+          <h2 className="font-serif text-4xl lg:text-5xl font-bold text-charcoal text-center mb-16">
+            Premium Pipeline Performance
+          </h2>
+
+          <div className="grid md:grid-cols-3 gap-8 lg:gap-12">
+            {/* Stat 1 */}
+            <div className="text-center p-8 rounded-lg bg-cream/50">
+              <div className="w-16 h-16 mx-auto mb-6 bg-forest/10 rounded-full flex items-center justify-center">
+                <svg className="w-8 h-8 text-forest" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                </svg>
+              </div>
+              <h3 className="font-serif text-2xl font-bold text-charcoal mb-3">Highly Vetted Leads</h3>
+              <p className="text-charcoal/70 leading-relaxed">
+                Premium properties in premium locations with motivated sellers ready to transact.
+              </p>
+            </div>
+
+            {/* Stat 2 */}
+            <div className="text-center p-8 rounded-lg bg-cream/50">
+              <div className="w-16 h-16 mx-auto mb-6 bg-forest/10 rounded-full flex items-center justify-center">
+                <svg className="w-8 h-8 text-forest" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
+                </svg>
+              </div>
+              <h3 className="font-serif text-2xl font-bold text-charcoal mb-3">1 in 10 Close Rate</h3>
+              <p className="text-charcoal/70 leading-relaxed">
+                Consistent results from our proven system.
+              </p>
+            </div>
+
+            {/* Stat 3 */}
+            <div className="text-center p-8 rounded-lg bg-cream/50">
+              <div className="w-16 h-16 mx-auto mb-6 bg-forest/10 rounded-full flex items-center justify-center">
+                <svg className="w-8 h-8 text-forest" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                </svg>
+              </div>
+              <h3 className="font-serif text-2xl font-bold text-charcoal mb-3">8-10x ROI on Ad Spend</h3>
+              <p className="text-charcoal/70 leading-relaxed">
+                Years of optimization working for you from day one.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Dashboard Preview Section */}
+      <section className="py-20 lg:py-28 bg-cream">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
+            <div>
+              <h2 className="font-serif text-4xl lg:text-5xl font-bold text-charcoal mb-6">
+                Your Dashboard, Your Deals
+              </h2>
+              <p className="text-lg text-charcoal/70 leading-relaxed mb-6">
+                Log into your dashboard and see exactly what's available. Fresh leads with timestamps, location details, acreage specs, and all the intel you need to move fast on the right opportunities.
+              </p>
+              <p className="text-lg text-charcoal/70 leading-relaxed">
+                Buy leads when you want them. No monthly commitments, no wasted budget on leads that don't fit your criteria.
+              </p>
+            </div>
+            <div className="relative">
+              <div className="bg-white rounded-lg shadow-2xl overflow-hidden border border-earth/10">
+                {/* Mock Dashboard */}
+                <div className="bg-forest p-4">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-red-400"></div>
+                    <div className="w-3 h-3 rounded-full bg-yellow-400"></div>
+                    <div className="w-3 h-3 rounded-full bg-green-400"></div>
+                  </div>
+                </div>
+                <div className="p-6 space-y-4">
+                  {/* Sample Lead Cards */}
+                  {[
+                    { time: '2 min ago', location: 'Travis County, TX', acres: '15.2 acres', type: 'Residential' },
+                    { time: '18 min ago', location: 'Williamson County, TX', acres: '8.5 acres', type: 'Agricultural' },
+                    { time: '45 min ago', location: 'Hays County, TX', acres: '22.1 acres', type: 'Commercial' },
+                  ].map((lead, i) => (
+                    <div key={i} className="flex items-center justify-between p-4 bg-cream/50 rounded-lg border border-earth/10">
+                      <div>
+                        <p className="font-semibold text-charcoal">{lead.location}</p>
+                        <p className="text-sm text-charcoal/60">{lead.acres} - {lead.type}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs text-earth">{lead.time}</p>
+                        <span className="inline-block mt-1 px-2 py-1 bg-forest/10 text-forest text-xs rounded">New</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Sign Up Section */}
+      <section id="signup" className="py-20 lg:py-28 bg-white">
+        <div className="max-w-xl mx-auto px-6">
+          <div className="text-center mb-10">
+            <h2 className="font-serif text-4xl lg:text-5xl font-bold text-charcoal mb-4">
+              Ready to Access Premium Land Leads?
+            </h2>
+            <p className="text-lg text-charcoal/70">
+              Start your 7-day free trial and see the quality difference.
+            </p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div>
+              <input
+                type="text"
+                placeholder="First Name"
+                required
+                value={formData.firstName}
+                onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
+                className="w-full px-5 py-4 border border-earth/20 rounded-lg text-charcoal placeholder-charcoal/40 focus:outline-none focus:border-forest focus:ring-1 focus:ring-forest"
+              />
+            </div>
+            <div>
+              <input
+                type="email"
+                placeholder="Email"
+                required
+                value={formData.email}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                className="w-full px-5 py-4 border border-earth/20 rounded-lg text-charcoal placeholder-charcoal/40 focus:outline-none focus:border-forest focus:ring-1 focus:ring-forest"
+              />
+            </div>
+            <div>
+              <input
+                type="tel"
+                placeholder="Phone"
+                required
+                value={formData.phone}
+                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                className="w-full px-5 py-4 border border-earth/20 rounded-lg text-charcoal placeholder-charcoal/40 focus:outline-none focus:border-forest focus:ring-1 focus:ring-forest"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="w-full py-4 bg-gold hover:bg-gold/90 text-charcoal font-bold text-lg rounded-lg transition-all disabled:opacity-50"
+            >
+              {submitting ? 'Starting Trial...' : 'Start My 7-Day Free Trial'}
+            </button>
+          </form>
+
+          <p className="text-center text-charcoal/50 text-sm mt-4">
+            No credit card required. Cancel anytime.
+          </p>
+        </div>
+      </section>
+
+      {/* Footer */}
+      <footer className="bg-forest text-white/80 py-12">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="flex flex-col md:flex-row justify-between items-center gap-6">
+            <Image
+              src="/parcelreach-logo.png"
+              alt="ParcelReach"
+              width={150}
+              height={50}
+              className="h-8 w-auto brightness-0 invert"
+            />
+            <div className="flex flex-wrap justify-center gap-6 text-sm">
+              <Link href="/privacy-policy" className="hover:text-white transition-colors">
                 Privacy Policy
               </Link>
-              <Link href="/terms-of-use" className="hover:text-slate-300 transition-colors">
+              <Link href="/terms-of-use" className="hover:text-white transition-colors">
                 Terms of Use
               </Link>
-              <Link href="/refund-policy" className="hover:text-slate-300 transition-colors">
+              <Link href="/refund-policy" className="hover:text-white transition-colors">
                 Refund Policy
               </Link>
             </div>
           </div>
-        </footer>
-      </div>
-    </>
+          <div className="mt-8 pt-8 border-t border-white/10 text-center text-sm text-white/50">
+            <p>&copy; 2025 ParcelReach. All rights reserved.</p>
+          </div>
+        </div>
+      </footer>
+    </div>
   );
 }
