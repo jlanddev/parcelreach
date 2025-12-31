@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+function getStripe() {
+  return new Stripe(process.env.STRIPE_SECRET_KEY);
+}
 
 export async function POST(request) {
   try {
+    const stripe = getStripe();
     // Create Stripe Checkout Session for $1,200 membership
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],

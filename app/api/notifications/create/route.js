@@ -1,11 +1,12 @@
 import { createClient } from '@supabase/supabase-js';
 import { sendMentionNotification } from '@/lib/email';
 
-// Initialize Supabase with service role key for server-side operations
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+function getSupabase() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
+}
 
 /**
  * POST /api/notifications/create
@@ -25,6 +26,7 @@ const supabase = createClient(
  */
 export async function POST(request) {
   try {
+    const supabase = getSupabase();
     const body = await request.json();
     const {
       userId,

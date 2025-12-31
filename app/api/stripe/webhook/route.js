@@ -1,14 +1,15 @@
-import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
 import { sendLeadPurchaseConfirmation } from '@/lib/email';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+function getSupabase() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
+}
 
 export async function POST(request) {
+  const supabase = getSupabase();
   const body = await request.text();
   const sig = request.headers.get('stripe-signature');
 

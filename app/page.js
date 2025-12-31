@@ -8,11 +8,36 @@ export default function LandingPage() {
   const [formData, setFormData] = useState({ firstName: '', email: '', phone: '' });
   const [submitting, setSubmitting] = useState(false);
 
+  const [error, setError] = useState('');
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSubmitting(true);
-    // Redirect to signup or handle form submission
-    window.location.href = `/signup?name=${encodeURIComponent(formData.firstName)}&email=${encodeURIComponent(formData.email)}&phone=${encodeURIComponent(formData.phone)}`;
+    setError('');
+
+    try {
+      const response = await fetch('/api/create-subscription-checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: formData.email,
+          firstName: formData.firstName,
+          phone: formData.phone
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create checkout session');
+      }
+
+      // Redirect to Stripe Checkout
+      window.location.href = data.url;
+    } catch (err) {
+      setError(err.message);
+      setSubmitting(false);
+    }
   };
 
   const logos = [
@@ -73,18 +98,20 @@ export default function LandingPage() {
       </section>
 
       {/* Logo Bar */}
-      <section className="bg-cream/50 border-y border-earth/10 py-8 overflow-hidden">
-        <p className="text-center text-earth/60 text-sm uppercase tracking-wider mb-6">
+      <section className="bg-white border-y border-earth/10 py-12 lg:py-16 overflow-hidden">
+        <p className="text-center text-earth/60 text-sm uppercase tracking-widest mb-10 font-medium">
           Trusted by industry leaders
         </p>
         <div className="relative">
-          <div className="flex animate-scroll">
+          <div className="flex animate-scroll items-center">
             {[...logos, ...logos].map((logo, i) => (
               <div
                 key={i}
-                className="flex-shrink-0 mx-12 text-charcoal/40 font-semibold text-lg whitespace-nowrap"
+                className="flex-shrink-0 mx-10 lg:mx-16 px-8 py-4 bg-cream/50 rounded-lg border border-earth/10"
               >
-                {logo}
+                <span className="text-charcoal font-serif font-bold text-2xl lg:text-3xl whitespace-nowrap tracking-tight">
+                  {logo}
+                </span>
               </div>
             ))}
           </div>
@@ -95,7 +122,7 @@ export default function LandingPage() {
             100% { transform: translateX(-50%); }
           }
           .animate-scroll {
-            animation: scroll 30s linear infinite;
+            animation: scroll 40s linear infinite;
           }
         `}</style>
       </section>
@@ -211,6 +238,12 @@ export default function LandingPage() {
               Start your 7-day free trial and see the quality difference.
             </p>
           </div>
+
+          {error && (
+            <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+              <p className="text-red-600 text-sm">{error}</p>
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>

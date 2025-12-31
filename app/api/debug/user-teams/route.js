@@ -1,9 +1,11 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+function getSupabase() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
+}
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
@@ -14,6 +16,7 @@ export async function GET(request) {
   }
 
   try {
+    const supabase = getSupabase();
     // Find user by email
     const { data: { users }, error: userError } = await supabase.auth.admin.listUsers();
     const user = users?.find(u => u.email === email);

@@ -2,13 +2,19 @@ import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+function getStripe() {
+  return new Stripe(process.env.STRIPE_SECRET_KEY);
+}
+
+function getSupabase() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
+}
 
 export async function POST(request) {
+  const stripe = getStripe();
   const body = await request.text();
   const signature = request.headers.get('stripe-signature');
 
@@ -30,7 +36,7 @@ export async function POST(request) {
   // Handle the event
   switch (event.type) {
     case 'checkout.session.completed':
-      await handleCheckoutCompleted(event.data.object);
+      await handleCheckoutCompleted(event.data.object, stripe);
       break;
 
     case 'setup_intent.succeeded':
@@ -38,7 +44,7 @@ export async function POST(request) {
       break;
 
     case 'payment_method.attached':
-      await handlePaymentMethodAttached(event.data.object);
+      await handlePaymentMethodAttached(event.data.object, stripe);
       break;
 
     case 'charge.failed':
@@ -56,7 +62,8 @@ export async function POST(request) {
   return NextResponse.json({ received: true });
 }
 
-async function handleCheckoutCompleted(session) {
+async function handleCheckoutCompleted(session, stripe) {
+  const supabase = getSupabase();
   console.log('✅ Checkout completed:', session.id);
   console.log('📋 Session mode:', session.mode);
   console.log('📋 Session metadata:', JSON.stringify(session.metadata));
@@ -162,7 +169,8 @@ async function handleSetupIntentSucceeded(setupIntent) {
   console.log('✅ Setup intent succeeded:', setupIntent.id);
 }
 
-async function handlePaymentMethodAttached(paymentMethod) {
+async function handlePaymentMethodAttached(paymentMethod, stripe) {
+  const supabase = getSupabase();
   console.log('💳 Payment method attached:', paymentMethod.id);
 
   // Payment method is attached to customer
@@ -201,6 +209,7 @@ async function handlePaymentMethodAttached(paymentMethod) {
 }
 
 async function handleChargeFailed(charge) {
+  const supabase = getSupabase();
   console.error('❌ Charge failed:', charge.id, charge.failure_message);
 
   // Record the failed charge
@@ -220,6 +229,7 @@ async function handleChargeFailed(charge) {
 }
 
 async function handleSubscriptionDeleted(subscription) {
+  const supabase = getSupabase();
   console.log('❌ Subscription deleted:', subscription.id);
 
   // Deactivate contractor
