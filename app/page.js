@@ -90,7 +90,7 @@ export default function LandingPage() {
                   }}
                 >
                   {/* Real dashboard screenshots */}
-                  <div className="relative rounded-xl shadow-2xl overflow-hidden border border-slate-700">
+                  <div className="relative rounded-xl shadow-2xl overflow-hidden border-2 border-slate-500/50">
                     {dashImages.map((src, i) => (
                       <Image
                         key={src}
