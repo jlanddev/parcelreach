@@ -27,10 +27,10 @@ export default function LandingPage() {
             <Image
               src="/parcelreach-logo.png"
               alt="ParcelReach"
-              width={200}
-              height={67}
+              width={280}
+              height={93}
               priority
-              className="h-12 w-auto"
+              className="h-16 w-auto"
             />
             <Link
               href="/login"
@@ -70,16 +70,16 @@ export default function LandingPage() {
             <div
               className="flex items-center"
               style={{
-                animation: 'scrollLogos 30s linear infinite',
+                animation: 'scrollLogos 60s linear infinite',
                 width: 'fit-content'
               }}
             >
               {[...logos, ...logos].map((logo, i) => (
                 <div
                   key={i}
-                  className="flex-shrink-0 mx-8 px-12 py-8 bg-slate-800 border border-slate-700 rounded-xl"
+                  className="flex-shrink-0 mx-6 px-8 py-4 bg-slate-800 border border-slate-700 rounded-xl"
                 >
-                  <span className="text-white font-bold text-4xl lg:text-5xl whitespace-nowrap">
+                  <span className="text-white font-bold text-xl lg:text-2xl whitespace-nowrap">
                     {logo}
                   </span>
                 </div>
