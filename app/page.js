@@ -2,8 +2,19 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
+import { useState, useEffect } from 'react';
 
 export default function LandingPage() {
+  const [currentSlide, setCurrentSlide] = useState(0);
+  const dashImages = ['/dash-1.png', '/dash-2.png', '/dash-3.png'];
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentSlide((prev) => (prev + 1) % dashImages.length);
+    }, 4000);
+    return () => clearInterval(timer);
+  }, []);
+
   const logos = [
     'D.R. Horton', 'KB Homes', 'T. Wilson', 'Pyramid Land',
     'Land Exit Solutions', 'Go Westlands LLC', 'Gibson Communities', 'Ranch Road Development'
@@ -42,33 +53,70 @@ export default function LandingPage() {
         </nav>
 
         {/* Hero Section */}
-        <section className="relative overflow-hidden">
-          {/* Topo background image - faded right side */}
-          <div
-            className="absolute right-0 top-0 w-2/3 h-full pointer-events-none"
-            style={{
-              backgroundImage: 'url(/hero-topo.png)',
-              backgroundSize: 'cover',
-              backgroundPosition: 'center',
-              opacity: 0.4,
-              maskImage: 'linear-gradient(to right, transparent 0%, rgba(0,0,0,0.5) 30%, rgba(0,0,0,1) 100%)',
-              WebkitMaskImage: 'linear-gradient(to right, transparent 0%, rgba(0,0,0,0.5) 30%, rgba(0,0,0,1) 100%)'
-            }}
-          />
-          <div className="relative max-w-7xl mx-auto px-6 py-24 lg:py-32">
-            <div className="max-w-3xl">
-              <h1 className="text-5xl lg:text-6xl xl:text-7xl font-bold leading-tight mb-6 text-white">
-                Tap Into America's Most Proven Land Pipeline
-              </h1>
-              <p className="text-xl lg:text-2xl text-slate-400 mb-10 leading-relaxed">
-                Access our battle-tested PPC campaigns that have generated millions in land deals nationwide. Premium leads in premium locations, ready when you are.
-              </p>
-              <Link
-                href="/signup"
-                className="inline-block px-8 py-4 bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-700 hover:to-blue-600 text-white font-bold text-lg rounded-lg transition-all transform hover:scale-105 shadow-lg"
-              >
-                Start My 7-Day Free Trial
-              </Link>
+        <section className="relative overflow-hidden min-h-[700px]">
+          <div className="relative max-w-7xl mx-auto px-6 py-16 lg:py-24">
+            <div className="grid lg:grid-cols-2 gap-12 items-center">
+              {/* Left side - Text */}
+              <div className="max-w-xl">
+                <h1 className="text-4xl lg:text-5xl xl:text-6xl font-bold leading-tight mb-6 text-white">
+                  Tap Into America's Most Proven Land Pipeline
+                </h1>
+                <p className="text-lg lg:text-xl text-slate-400 mb-8 leading-relaxed">
+                  Access our battle-tested PPC campaigns that have generated millions in land deals nationwide. Premium leads in premium locations, ready when you are.
+                </p>
+                <div className="flex flex-wrap gap-4">
+                  <Link
+                    href="/signup"
+                    className="inline-block px-8 py-4 bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-700 hover:to-blue-600 text-white font-bold text-lg rounded-lg transition-all transform hover:scale-105 shadow-lg"
+                  >
+                    Start My 7-Day Free Trial
+                  </Link>
+                  <Link
+                    href="/login"
+                    className="inline-block px-8 py-4 border border-slate-600 text-slate-300 hover:text-white hover:border-slate-500 font-semibold text-lg rounded-lg transition-all"
+                  >
+                    Learn More
+                  </Link>
+                </div>
+              </div>
+
+              {/* Right side - Slanted Dashboard Screenshot Slideshow */}
+              <div className="relative lg:absolute lg:right-0 lg:top-1/2 lg:-translate-y-1/2 lg:w-[60%]">
+                <div
+                  className="relative"
+                  style={{
+                    transform: 'perspective(1500px) rotateY(-12deg) rotateX(4deg)',
+                    transformOrigin: 'center center'
+                  }}
+                >
+                  {/* Real dashboard screenshots */}
+                  <div className="relative rounded-xl shadow-2xl overflow-hidden border border-slate-700">
+                    {dashImages.map((src, i) => (
+                      <Image
+                        key={src}
+                        src={src}
+                        alt={`ParcelReach Dashboard ${i + 1}`}
+                        width={1200}
+                        height={700}
+                        className={`w-full h-auto transition-opacity duration-1000 ${i === currentSlide ? 'opacity-100' : 'opacity-0 absolute inset-0'}`}
+                        priority={i === 0}
+                      />
+                    ))}
+                  </div>
+                  {/* Slide indicators */}
+                  <div className="flex justify-center gap-2 mt-4">
+                    {dashImages.map((_, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setCurrentSlide(i)}
+                        className={`w-2 h-2 rounded-full transition-all ${i === currentSlide ? 'bg-blue-500 w-6' : 'bg-slate-600'}`}
+                      />
+                    ))}
+                  </div>
+                  {/* Glow effect */}
+                  <div className="absolute -inset-4 bg-blue-500/10 rounded-2xl blur-2xl -z-10"></div>
+                </div>
+              </div>
             </div>
           </div>
         </section>
