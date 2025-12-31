@@ -81,12 +81,12 @@ export default function LandingPage() {
               </div>
 
               {/* Right side - Slanted Dashboard Screenshot Slideshow */}
-              <div className="relative lg:absolute lg:right-0 lg:top-1/2 lg:-translate-y-1/2 lg:w-[60%]">
+              <div className="hidden lg:block absolute -right-32 top-1/2 -translate-y-1/2 w-[65%]">
                 <div
                   className="relative"
                   style={{
-                    transform: 'perspective(1500px) rotateY(-12deg) rotateX(4deg)',
-                    transformOrigin: 'center center'
+                    transform: 'perspective(2000px) rotateY(-15deg) rotateX(2deg)',
+                    transformOrigin: 'left center'
                   }}
                 >
                   {/* Real dashboard screenshots */}
