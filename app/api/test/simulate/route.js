@@ -151,8 +151,6 @@ export async function POST(request) {
       .insert([{
         name: orgName,
         subscription_type: 'monthly',
-        stripe_customer_id: customer.id,
-        stripe_subscription_id: subscription.id,
         owner_id: authData.user.id,
         created_at: new Date().toISOString()
       }])
