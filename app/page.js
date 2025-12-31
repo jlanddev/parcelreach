@@ -27,10 +27,10 @@ export default function LandingPage() {
             <Image
               src="/parcelreach-logo.png"
               alt="ParcelReach"
-              width={280}
-              height={93}
+              width={500}
+              height={167}
               priority
-              className="h-16 w-auto"
+              className="h-28 w-auto"
             />
             <Link
               href="/login"
@@ -228,9 +228,9 @@ export default function LandingPage() {
               <Image
                 src="/parcelreach-logo.png"
                 alt="ParcelReach"
-                width={150}
-                height={50}
-                className="h-8 w-auto"
+                width={400}
+                height={133}
+                className="h-20 w-auto"
               />
               <div className="flex flex-wrap justify-center gap-6 text-sm">
                 <Link href="/privacy-policy" className="text-slate-400 hover:text-white transition-colors">
