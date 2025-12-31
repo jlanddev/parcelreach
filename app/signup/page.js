@@ -139,6 +139,21 @@ function SignupContent() {
 
         router.push('/dashboard?welcome=team');
       } else {
+        // Track Lead event - user submitted signup form
+        const eventId = `lead_${Date.now()}`;
+        fetch('/api/fb-conversion', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            eventName: 'Lead',
+            email: formData.email,
+            firstName: formData.firstName,
+            lastName: formData.lastName,
+            contentName: 'ParcelReach Signup',
+            eventId
+          })
+        }).catch(console.error);
+
         // New signups go to Stripe checkout
         const response = await fetch('/api/create-subscription-checkout', {
           method: 'POST',
@@ -166,6 +181,22 @@ function SignupContent() {
           organizationName: formData.organizationName,
           password: formData.password
         }));
+
+        // Track AddPaymentInfo - user going to Stripe checkout
+        fetch('/api/fb-conversion', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            eventName: 'AddPaymentInfo',
+            email: formData.email,
+            firstName: formData.firstName,
+            lastName: formData.lastName,
+            value: 97,
+            currency: 'USD',
+            contentName: 'ParcelReach Checkout',
+            eventId: `api_${Date.now()}`
+          })
+        }).catch(console.error);
 
         // Redirect to Stripe
         window.location.href = data.url;

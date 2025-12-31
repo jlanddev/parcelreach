@@ -15,6 +15,19 @@ export default function LandingPage() {
     return () => clearInterval(timer);
   }, []);
 
+  // Track ViewContent on page load
+  useEffect(() => {
+    fetch('/api/fb-conversion', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        eventName: 'ViewContent',
+        contentName: 'ParcelReach Landing Page',
+        eventId: `vc_${Date.now()}`
+      })
+    }).catch(console.error);
+  }, []);
+
   const logos = [
     'D.R. Horton', 'KB Homes', 'T. Wilson', 'Pyramid Land',
     'Land Exit Solutions', 'Go Westlands LLC', 'Gibson Communities', 'Ranch Road Development'
@@ -57,7 +70,7 @@ export default function LandingPage() {
           <div className="relative max-w-7xl mx-auto px-6 py-16 lg:py-24">
             <div className="grid lg:grid-cols-2 gap-12 items-center">
               {/* Left side - Text */}
-              <div className="max-w-xl">
+              <div className="max-w-xl relative z-10">
                 <h1 className="text-4xl lg:text-5xl xl:text-6xl font-bold leading-tight mb-6 text-white">
                   Tap Into America's Most Proven Land Pipeline
                 </h1>
@@ -81,7 +94,7 @@ export default function LandingPage() {
               </div>
 
               {/* Right side - Slanted Dashboard Screenshot Slideshow */}
-              <div className="hidden lg:block absolute -right-32 top-1/2 -translate-y-1/2 w-[65%]">
+              <div className="hidden lg:block absolute -right-20 top-1/2 -translate-y-1/2 w-[55%] z-0">
                 <div
                   className="relative"
                   style={{

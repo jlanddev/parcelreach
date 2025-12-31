@@ -108,6 +108,43 @@ function SuccessContent() {
       // Clear the stored signup data
       sessionStorage.removeItem('signupData');
 
+      // Track Facebook Conversion API - CompleteRegistration
+      try {
+        const timestamp = Date.now();
+        await fetch('/api/fb-conversion', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            eventName: 'CompleteRegistration',
+            email: email,
+            firstName: firstName,
+            lastName: lastName,
+            value: 97,
+            currency: 'USD',
+            contentName: 'ParcelReach Monthly Subscription',
+            eventId: `cr_${timestamp}`
+          })
+        });
+
+        // Also track StartTrial event
+        await fetch('/api/fb-conversion', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            eventName: 'StartTrial',
+            email: email,
+            firstName: firstName,
+            lastName: lastName,
+            value: 97,
+            currency: 'USD',
+            contentName: '7-Day Free Trial',
+            eventId: `st_${timestamp}`
+          })
+        });
+      } catch (fbError) {
+        console.error('FB Conversion tracking error:', fbError);
+      }
+
       setAccountCreated(true);
 
     } catch (err) {
