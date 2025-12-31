@@ -130,7 +130,6 @@ export async function POST(request) {
         full_name: `${firstName} ${lastName}`,
         first_name: firstName,
         last_name: lastName,
-        stripe_customer_id: customer.id,
         created_at: new Date().toISOString()
       }], { onConflict: 'id' });
 
