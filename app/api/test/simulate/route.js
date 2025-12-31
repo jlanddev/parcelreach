@@ -194,6 +194,7 @@ export async function POST(request) {
     const { data: leadData, error: leadError } = await supabase
       .from('leads')
       .insert([{
+        name: `Test Owner ${testId}`,
         full_name: `Test Owner ${testId}`,
         email: `testowner_${testId}@example.com`,
         phone: '555-123-4567',
