@@ -95,88 +95,80 @@ function SignupContent() {
         throw new Error('Please use a stronger password');
       }
 
-      // Combine first and last name for full_name
-      const fullName = `${formData.firstName.trim()} ${formData.lastName.trim()}`;
+      // If user was invited to a team, use old flow (no payment needed)
+      if (inviteToken && invitation) {
+        const fullName = `${formData.firstName.trim()} ${formData.lastName.trim()}`;
 
-      // Create Supabase auth user
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: formData.email,
-        password: formData.password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/dashboard`,
-          data: {
-            full_name: fullName,
-            first_name: formData.firstName,
-            last_name: formData.lastName,
-            organization_name: formData.organizationName
+        // Create Supabase auth user
+        const { data: authData, error: authError } = await supabase.auth.signUp({
+          email: formData.email,
+          password: formData.password,
+          options: {
+            emailRedirectTo: `${window.location.origin}/dashboard`,
+            data: {
+              full_name: fullName,
+              first_name: formData.firstName,
+              last_name: formData.lastName
+            }
           }
-        }
-      });
+        });
 
-      if (authError) throw authError;
+        if (authError) throw authError;
 
-      // Create user profile in users table FIRST (required for foreign key)
-      // Use upsert to handle existing users from previous failed attempts
-      const { error: userError } = await supabase
-        .from('users')
-        .upsert([{
+        // Create user profile
+        await supabase.from('users').upsert([{
           id: authData.user.id,
           email: formData.email,
           full_name: fullName,
           first_name: formData.firstName,
           last_name: formData.lastName,
           created_at: new Date().toISOString()
-        }], {
-          onConflict: 'id'
-        });
+        }], { onConflict: 'id' });
 
-      if (userError) throw userError;
-
-      // If user was invited to a team, join that team instead of creating new one
-      if (inviteToken && invitation) {
-        // Accept the invitation via API
+        // Accept the invitation
         const inviteResponse = await fetch('/api/team/accept-invite', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token: inviteToken })
         });
 
-        const inviteResult = await inviteResponse.json();
-
         if (!inviteResponse.ok) {
+          const inviteResult = await inviteResponse.json();
           throw new Error(inviteResult.error || 'Failed to accept team invitation');
         }
 
-        // Redirect to dashboard with team welcome message
         router.push('/dashboard?welcome=team');
       } else {
-        // Create team/organization with monthly subscription
-        const { data: teamData, error: teamError } = await supabase
-          .from('teams')
-          .insert([{
-            name: formData.organizationName,
-            subscription_type: 'monthly',
-            owner_id: authData.user.id,
-            created_at: new Date().toISOString()
-          }])
-          .select()
-          .single();
+        // New signups go to Stripe checkout
+        const response = await fetch('/api/create-subscription-checkout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: formData.email,
+            firstName: formData.firstName,
+            lastName: formData.lastName,
+            organizationName: formData.organizationName,
+            password: formData.password
+          })
+        });
 
-        if (teamError) throw teamError;
+        const data = await response.json();
 
-        // Create team member record
-        const { error: memberError } = await supabase
-          .from('team_members')
-          .insert([{
-            team_id: teamData.id,
-            user_id: authData.user.id,
-            role: 'owner'
-          }]);
+        if (!response.ok) {
+          throw new Error(data.error || 'Failed to create checkout session');
+        }
 
-        if (memberError) throw memberError;
+        // Store form data in sessionStorage for after Stripe redirect
+        sessionStorage.setItem('signupData', JSON.stringify({
+          email: formData.email,
+          firstName: formData.firstName,
+          lastName: formData.lastName,
+          organizationName: formData.organizationName,
+          password: formData.password
+        }));
 
-        // Redirect to dashboard
-        router.push('/dashboard');
+        // Redirect to Stripe
+        window.location.href = data.url;
       }
 
     } catch (err) {
