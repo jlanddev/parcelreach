@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 
-const PIXEL_ID = '1541281450393771';
+const PIXEL_ID = '1404108557990913';
 const ACCESS_TOKEN = process.env.FB_CONVERSION_API_TOKEN;
 
 // Hash function for user data (required by Facebook)
