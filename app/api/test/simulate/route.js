@@ -191,6 +191,7 @@ export async function POST(request) {
     // STEP 7: Create Test Lead
     // ============================================
     console.log('📍 Step 7: Creating test lead...');
+    const testAddress = `${Math.floor(Math.random() * 9999)} Test Ranch Rd, Austin, TX 78701`;
     const { data: leadData, error: leadError } = await supabase
       .from('leads')
       .insert([{
@@ -204,7 +205,8 @@ export async function POST(request) {
         state: 'TX',
         acres: 15.5,
         price: 125,
-        street_address: `${Math.floor(Math.random() * 9999)} Test Ranch Rd`,
+        address: testAddress,
+        street_address: testAddress,
         source: 'e2e_test',
         created_at: new Date().toISOString()
       }])
