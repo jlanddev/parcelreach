@@ -43,6 +43,18 @@ export default function LandingPage() {
 
         {/* Hero Section */}
         <section className="relative overflow-hidden">
+          {/* Topo background image - faded right side */}
+          <div
+            className="absolute right-0 top-0 w-2/3 h-full pointer-events-none"
+            style={{
+              backgroundImage: 'url(/hero-topo.png)',
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+              opacity: 0.4,
+              maskImage: 'linear-gradient(to right, transparent 0%, rgba(0,0,0,0.5) 30%, rgba(0,0,0,1) 100%)',
+              WebkitMaskImage: 'linear-gradient(to right, transparent 0%, rgba(0,0,0,0.5) 30%, rgba(0,0,0,1) 100%)'
+            }}
+          />
           <div className="relative max-w-7xl mx-auto px-6 py-24 lg:py-32">
             <div className="max-w-3xl">
               <h1 className="text-5xl lg:text-6xl xl:text-7xl font-bold leading-tight mb-6 text-white">
