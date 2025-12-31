@@ -41,6 +41,23 @@ export default function LandingPage() {
             0% { transform: translateX(0); }
             100% { transform: translateX(-50%); }
           }
+          @keyframes fadeInUp {
+            from {
+              opacity: 0;
+              transform: translateY(30px);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(0);
+            }
+          }
+          .animate-fade-in-up {
+            animation: fadeInUp 0.8s ease-out forwards;
+          }
+          .animate-delay-100 { animation-delay: 0.1s; }
+          .animate-delay-200 { animation-delay: 0.2s; }
+          .animate-delay-300 { animation-delay: 0.3s; }
+          .animate-delay-400 { animation-delay: 0.4s; }
         `
       }} />
 
@@ -71,25 +88,20 @@ export default function LandingPage() {
             <div className="grid lg:grid-cols-2 gap-12 items-center">
               {/* Left side - Text */}
               <div className="max-w-xl relative z-10">
-                <h1 className="text-4xl lg:text-5xl xl:text-6xl font-bold leading-tight mb-6 text-white">
+                <h1 className="text-4xl lg:text-5xl xl:text-6xl font-bold leading-tight mb-6 text-white animate-fade-in-up">
                   Tap Into America's Most Proven Land Pipeline
                 </h1>
-                <p className="text-lg lg:text-xl text-slate-400 mb-8 leading-relaxed">
+                <p className="text-lg lg:text-xl text-slate-400 mb-8 leading-relaxed animate-fade-in-up animate-delay-100" style={{opacity: 0}}>
                   Access our battle-tested PPC campaigns that have generated millions in land deals nationwide. Premium leads in premium locations, ready when you are.
                 </p>
-                <div className="flex flex-wrap gap-4">
+                <div className="animate-fade-in-up animate-delay-200" style={{opacity: 0}}>
                   <Link
                     href="/signup"
-                    className="inline-block px-8 py-4 bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-700 hover:to-blue-600 text-white font-bold text-lg rounded-lg transition-all transform hover:scale-105 shadow-lg"
+                    className="inline-block px-10 py-5 bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-700 hover:to-blue-600 text-white font-bold text-xl rounded-lg transition-all transform hover:scale-105 shadow-xl shadow-blue-500/25"
                   >
                     Start My 7-Day Free Trial
                   </Link>
-                  <Link
-                    href="/login"
-                    className="inline-block px-8 py-4 border border-slate-600 text-slate-300 hover:text-white hover:border-slate-500 font-semibold text-lg rounded-lg transition-all"
-                  >
-                    Learn More
-                  </Link>
+                  <p className="mt-4 text-slate-500 text-sm">No credit card required to start</p>
                 </div>
               </div>
 
