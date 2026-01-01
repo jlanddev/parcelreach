@@ -21,6 +21,16 @@ function SuccessContent() {
     }
   }, [sessionId]);
 
+  // Redirect to login after successful signup
+  useEffect(() => {
+    if (accountCreated) {
+      const timer = setTimeout(() => {
+        window.location.href = '/login?welcome=true';
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [accountCreated]);
+
   async function createAccount() {
     try {
       // Get stored signup data from sessionStorage
@@ -197,16 +207,6 @@ function SuccessContent() {
       </div>
     );
   }
-
-  // Redirect to login after successful signup
-  useEffect(() => {
-    if (accountCreated) {
-      const timer = setTimeout(() => {
-        window.location.href = '/login?welcome=true';
-      }, 2000);
-      return () => clearTimeout(timer);
-    }
-  }, [accountCreated]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center px-4">
