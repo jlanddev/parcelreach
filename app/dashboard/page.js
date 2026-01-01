@@ -1313,7 +1313,15 @@ export default function DashboardPage() {
                           return;
                         }
 
-                        // Redirect to Stripe checkout
+                        // Check if direct charge succeeded (one-click purchase)
+                        if (data.directCharge && data.success) {
+                          showToast('Lead purchased successfully!', 'success');
+                          // Refresh leads to show unlocked data
+                          await fetchLeads(currentTeam.id);
+                          return;
+                        }
+
+                        // Redirect to Stripe checkout if no saved card
                         window.location.href = data.url;
                       } catch (error) {
                         console.error('Purchase error:', error);

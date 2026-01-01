@@ -65,18 +65,90 @@ export async function POST(request) {
     const userEmail = user?.email;
 
     // Find existing Stripe customer by email
-    let customerId = null;
+    let customer = null;
     if (userEmail) {
       const customers = await stripe.customers.list({
         email: userEmail,
         limit: 1
       });
       if (customers.data.length > 0) {
-        customerId = customers.data[0].id;
+        customer = customers.data[0];
       }
     }
 
-    // Create Stripe checkout session with customer if found
+    // Try to charge saved card directly (one-click purchase)
+    if (customer) {
+      // Get customer's default payment method or first available
+      let paymentMethodId = customer.invoice_settings?.default_payment_method;
+
+      if (!paymentMethodId) {
+        // Try to get from subscriptions
+        const subscriptions = await stripe.subscriptions.list({
+          customer: customer.id,
+          status: 'active',
+          limit: 1
+        });
+        if (subscriptions.data.length > 0) {
+          paymentMethodId = subscriptions.data[0].default_payment_method;
+        }
+      }
+
+      if (!paymentMethodId) {
+        // List payment methods directly
+        const paymentMethods = await stripe.paymentMethods.list({
+          customer: customer.id,
+          type: 'card',
+          limit: 1
+        });
+        if (paymentMethods.data.length > 0) {
+          paymentMethodId = paymentMethods.data[0].id;
+        }
+      }
+
+      // If we have a payment method, charge directly
+      if (paymentMethodId) {
+        try {
+          const paymentIntent = await stripe.paymentIntents.create({
+            amount: Math.round(parseFloat(price) * 100),
+            currency: 'usd',
+            customer: customer.id,
+            payment_method: paymentMethodId,
+            off_session: true,
+            confirm: true,
+            description: `Land Lead - ${lead.property_county || lead.county}, ${lead.property_state || lead.state}`,
+            metadata: {
+              leadId,
+              userId,
+              teamId,
+              price: price
+            }
+          });
+
+          if (paymentIntent.status === 'succeeded') {
+            // Payment successful - record the purchase
+            await supabase.from('lead_purchases').insert([{
+              lead_id: leadId,
+              user_id: userId,
+              team_id: teamId,
+              price: price,
+              stripe_payment_intent_id: paymentIntent.id,
+              purchased_at: new Date().toISOString()
+            }]);
+
+            return Response.json({
+              success: true,
+              directCharge: true,
+              message: 'Lead purchased successfully'
+            });
+          }
+        } catch (chargeError) {
+          // If direct charge fails (e.g., card declined), fall back to checkout
+          console.log('Direct charge failed, falling back to checkout:', chargeError.message);
+        }
+      }
+    }
+
+    // Fall back to checkout session if no saved card or direct charge failed
     const sessionConfig = {
       payment_method_types: ['card'],
       line_items: [
@@ -87,7 +159,7 @@ export async function POST(request) {
               name: `Land Lead - ${lead.property_county || lead.county}, ${lead.property_state || lead.state}`,
               description: `${lead.acres || 'N/A'} acres`,
             },
-            unit_amount: Math.round(parseFloat(price) * 100), // Convert to cents
+            unit_amount: Math.round(parseFloat(price) * 100),
           },
           quantity: 1,
         },
@@ -103,10 +175,8 @@ export async function POST(request) {
       }
     };
 
-    // Add customer to session if found - this pre-fills their saved card
-    if (customerId) {
-      sessionConfig.customer = customerId;
-      sessionConfig.customer_update = { address: 'auto' };
+    if (customer) {
+      sessionConfig.customer = customer.id;
     } else if (userEmail) {
       sessionConfig.customer_email = userEmail;
     }
