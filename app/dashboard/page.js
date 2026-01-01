@@ -63,6 +63,7 @@ export default function DashboardPage() {
   const [userRole, setUserRole] = useState(null); // owner, executive, or member
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxImage, setLightboxImage] = useState(null);
+  const [purchasingLeadId, setPurchasingLeadId] = useState(null);
   const [saveTimeout, setSaveTimeout] = useState(null);
   const [logoPosition, setLogoPosition] = useState({ x: 0, y: 0 });
   const [logoSize, setLogoSize] = useState(200);
@@ -1297,11 +1298,16 @@ export default function DashboardPage() {
                     key={lead.id}
                     lead={lead}
                     userRole={userRole}
+                    isPurchasing={purchasingLeadId === (lead.originalLeadId || lead.id)}
                     onPurchase={async (lead) => {
+                      const leadId = lead.originalLeadId || lead.id;
                       try {
+                        setPurchasingLeadId(leadId);
+
                         const { data: { user } } = await supabase.auth.getUser();
                         if (!user) {
                           showToast('Please log in to purchase', 'error');
+                          setPurchasingLeadId(null);
                           return;
                         }
 
@@ -1310,7 +1316,7 @@ export default function DashboardPage() {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({
-                            leadId: lead.originalLeadId || lead.id,
+                            leadId: leadId,
                             userId: user.id,
                             teamId: currentTeam.id
                           })
@@ -1320,6 +1326,7 @@ export default function DashboardPage() {
 
                         if (!response.ok) {
                           showToast(data.error || 'Failed to start checkout', 'error');
+                          setPurchasingLeadId(null);
                           return;
                         }
 
@@ -1328,6 +1335,7 @@ export default function DashboardPage() {
                           showToast('Lead purchased successfully!', 'success');
                           // Refresh leads to show unlocked data
                           await fetchLeads(currentTeam.id);
+                          setPurchasingLeadId(null);
                           return;
                         }
 
@@ -1336,6 +1344,7 @@ export default function DashboardPage() {
                       } catch (error) {
                         console.error('Purchase error:', error);
                         showToast('Failed to purchase lead', 'error');
+                        setPurchasingLeadId(null);
                       }
                     }}
                   />
