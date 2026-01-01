@@ -162,24 +162,89 @@ export default function LandingPage() {
             </div>
           </div>
 
-          {/* Mobile Dashboard Preview - top edge tucks behind button only */}
+          {/* Mobile Dashboard Preview - 3 tablet layout like Prophetic */}
           <div
             className="lg:hidden relative pb-16"
             style={{
               zIndex: 1,
-              marginTop: '-50px',
+              marginTop: '-40px',
             }}
           >
             {/* Large ambient glow */}
             <div
-              className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[120%] h-[120%] bg-blue-500/10 blur-[100px] rounded-full pointer-events-none"
+              className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[140%] h-[140%] bg-blue-500/10 blur-[100px] rounded-full pointer-events-none"
             ></div>
-            {/* Device frame with 3D angle */}
+
+            {/* LEFT PEEK TABLET - 20% visible */}
             <div
-              className="relative mx-2"
+              className="absolute top-8"
               style={{
-                transform: 'perspective(1500px) rotateX(2deg) rotateY(-8deg)',
+                left: '-35%',
+                width: '75%',
+                transform: 'perspective(1000px) rotateY(-35deg) rotateX(-2deg)',
+                transformOrigin: 'right center',
+                zIndex: 0,
+              }}
+            >
+              <div
+                style={{
+                  background: '#1a1a2e',
+                  padding: '8px',
+                  borderRadius: '12px',
+                  boxShadow: '0 50px 100px rgba(0,0,0,0.6)',
+                }}
+              >
+                <div className="rounded-lg overflow-hidden">
+                  <Image
+                    src="/dash-2.png"
+                    alt="ParcelReach Dashboard"
+                    width={900}
+                    height={550}
+                    className="w-full h-auto"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* RIGHT PEEK TABLET - 10-15% visible */}
+            <div
+              className="absolute top-8"
+              style={{
+                right: '-38%',
+                width: '75%',
+                transform: 'perspective(1000px) rotateY(35deg) rotateX(-2deg)',
+                transformOrigin: 'left center',
+                zIndex: 0,
+              }}
+            >
+              <div
+                style={{
+                  background: '#1a1a2e',
+                  padding: '8px',
+                  borderRadius: '12px',
+                  boxShadow: '0 50px 100px rgba(0,0,0,0.6)',
+                }}
+              >
+                <div className="rounded-lg overflow-hidden">
+                  <Image
+                    src="/dash-3.png"
+                    alt="ParcelReach Dashboard"
+                    width={900}
+                    height={550}
+                    className="w-full h-auto"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* MAIN CENTER TABLET - left toward viewer, right away */}
+            <div
+              className="relative mx-auto"
+              style={{
+                width: '95%',
+                transform: 'perspective(1000px) rotateY(12deg) rotateX(-2deg)',
                 transformOrigin: 'center center',
+                zIndex: 2,
               }}
             >
               <div
@@ -187,7 +252,7 @@ export default function LandingPage() {
                   background: '#1a1a2e',
                   padding: '10px',
                   borderRadius: '16px',
-                  boxShadow: '0 40px 80px rgba(0,0,0,0.5)',
+                  boxShadow: '0 50px 100px rgba(0,0,0,0.6)',
                 }}
               >
                 <div className="rounded-lg overflow-hidden">
