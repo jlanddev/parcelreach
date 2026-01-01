@@ -1,62 +1,55 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Image from 'next/image';
+import { Suspense } from 'react';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
-export default function LoginPage() {
+function LoginContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const isWelcome = searchParams.get('welcome') === 'true';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [mode, setMode] = useState('login');
+  const [error, setError] = useState('');
 
-  const handleAuth = async (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
+    setError('');
 
     try {
-      if (mode === 'signup') {
-        const { data, error } = await supabase.auth.signUp({
-          email,
-          password,
-        });
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-        if (error) throw error;
-        alert('Account created! You can now sign in.');
-        setMode('login');
-      } else {
-        const { data, error} = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
+      if (error) throw error;
 
-        if (error) throw error;
+      const { data: userData } = await supabase
+        .from('users')
+        .select('id')
+        .eq('id', data.user.id)
+        .single();
 
-        const { data: userData } = await supabase
-          .from('users')
-          .select('id')
-          .eq('id', data.user.id)
-          .single();
-
-        if (!userData) {
-          await supabase.from('users').insert([{
-            id: data.user.id,
-            email: data.user.email,
-            full_name: data.user.email.split('@')[0]
-          }]);
-        }
-
-        router.push('/dashboard');
+      if (!userData) {
+        await supabase.from('users').insert([{
+          id: data.user.id,
+          email: data.user.email,
+          full_name: data.user.email.split('@')[0]
+        }]);
       }
-    } catch (error) {
-      alert(error.message);
+
+      router.push('/dashboard');
+    } catch (err) {
+      setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -101,13 +94,21 @@ export default function LoginPage() {
           />
         </div>
 
+        {isWelcome && (
+          <div className="mb-6 p-4 bg-green-500/10 border border-green-500/30 rounded-lg text-center">
+            <p className="text-green-400 font-medium">Account created. Please login to your dashboard.</p>
+          </div>
+        )}
+
         <div className="flex mb-6 bg-slate-900 rounded-lg p-1">
           <button
+            type="button"
             className="flex-1 py-2 px-4 rounded-md text-sm font-semibold transition-all bg-blue-500 text-white"
           >
             Sign In
           </button>
           <button
+            type="button"
             onClick={() => router.push('/signup')}
             className="flex-1 py-2 px-4 rounded-md text-sm font-semibold transition-all text-slate-400 hover:text-white"
           >
@@ -115,7 +116,13 @@ export default function LoginPage() {
           </button>
         </div>
 
-        <form onSubmit={handleAuth} className="space-y-4">
+        {error && (
+          <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-center">
+            <p className="text-red-400 text-sm">{error}</p>
+          </div>
+        )}
+
+        <form onSubmit={handleLogin} className="space-y-4">
           <div>
             <label className="block text-sm font-semibold text-slate-300 mb-2">Email</label>
             <input
@@ -145,19 +152,29 @@ export default function LoginPage() {
             disabled={loading}
             className="w-full bg-gradient-to-r from-blue-600 to-blue-500 text-white py-3 rounded-lg font-semibold hover:from-blue-700 hover:to-blue-600 transition-all disabled:opacity-50"
           >
-            {loading ? 'Loading...' : mode === 'login' ? 'Sign In' : 'Create Account'}
+            {loading ? 'Signing in...' : 'Sign In'}
           </button>
 
-          {mode === 'login' && (
-            <div className="text-center mt-4">
-              <a href="/forgot-password" className="text-sm text-blue-400 hover:text-blue-300 transition-colors">
-                Forgot your password?
-              </a>
-            </div>
-          )}
+          <div className="text-center mt-4">
+            <a href="/forgot-password" className="text-sm text-blue-400 hover:text-blue-300 transition-colors">
+              Forgot your password?
+            </a>
+          </div>
         </form>
       </div>
     </div>
     </>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+      </div>
+    }>
+      <LoginContent />
+    </Suspense>
   );
 }

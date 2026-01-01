@@ -184,72 +184,21 @@ function SuccessContent() {
     );
   }
 
+  // Redirect to login after successful signup
+  useEffect(() => {
+    if (accountCreated) {
+      const timer = setTimeout(() => {
+        window.location.href = '/login?welcome=true';
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [accountCreated]);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center px-4">
-      <div className="max-w-2xl w-full bg-slate-800 rounded-2xl shadow-2xl p-8 md:p-12 text-center">
-        <div className="w-24 h-24 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-6">
-          <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-          </svg>
-        </div>
-
-        <h1 className="text-4xl md:text-5xl font-bold text-white mb-4">
-          Welcome to ParcelReach!
-        </h1>
-        <p className="text-xl text-slate-300 mb-8">
-          Your account is ready. Check your email to confirm, then log in to access premium land leads.
-        </p>
-
-        <div className="bg-slate-900 rounded-xl p-6 mb-8 text-left">
-          <h2 className="text-xl font-bold text-white mb-4">Your 7-Day Free Trial:</h2>
-          <div className="space-y-3">
-            <div className="flex items-start gap-3">
-              <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center flex-shrink-0 font-bold">1</div>
-              <div>
-                <div className="font-semibold text-white">Check your email</div>
-                <div className="text-slate-400">Confirm your email address to activate your account</div>
-              </div>
-            </div>
-            <div className="flex items-start gap-3">
-              <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center flex-shrink-0 font-bold">2</div>
-              <div>
-                <div className="font-semibold text-white">Login to your dashboard</div>
-                <div className="text-slate-400">Browse available land leads in your area</div>
-              </div>
-            </div>
-            <div className="flex items-start gap-3">
-              <div className="w-8 h-8 bg-green-500 text-white rounded-full flex items-center justify-center flex-shrink-0 font-bold">3</div>
-              <div>
-                <div className="font-semibold text-white">Start closing deals!</div>
-                <div className="text-slate-400">Purchase leads and connect with motivated sellers</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex flex-col sm:flex-row gap-4 justify-center">
-          <Link
-            href="/login"
-            className="bg-blue-600 text-white px-8 py-4 rounded-lg font-bold text-lg hover:bg-blue-700 transition shadow-lg"
-          >
-            Login to Dashboard
-          </Link>
-          <Link
-            href="/"
-            className="bg-slate-700 text-white px-8 py-4 rounded-lg font-bold text-lg hover:bg-slate-600 transition"
-          >
-            Back to Home
-          </Link>
-        </div>
-
-        <div className="mt-8 pt-8 border-t border-slate-700">
-          <p className="text-slate-400">
-            Questions? Email us at{' '}
-            <a href="mailto:support@parcelreach.ai" className="text-blue-400 hover:underline font-semibold">
-              support@parcelreach.ai
-            </a>
-          </p>
-        </div>
+      <div className="text-center">
+        <p className="text-xl text-slate-300 mb-4">Account created successfully.</p>
+        <p className="text-slate-400">Redirecting to login...</p>
       </div>
     </div>
   );
