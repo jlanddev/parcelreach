@@ -104,6 +104,20 @@ function SuccessContent() {
       // Clear the stored signup data
       sessionStorage.removeItem('signupData');
 
+      // Send welcome email
+      try {
+        await fetch('/api/send-welcome-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: email,
+            firstName: firstName
+          })
+        });
+      } catch (welcomeError) {
+        console.error('Welcome email error:', welcomeError);
+      }
+
       // Track Facebook Conversion API - CompleteRegistration
       try {
         const timestamp = Date.now();
