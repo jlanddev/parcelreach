@@ -82,9 +82,6 @@ function SuccessContent() {
         .from('teams')
         .insert([{
           name: organizationName,
-          subscription_type: 'monthly',
-          stripe_customer_id: verifyData.session?.customer,
-          stripe_subscription_id: verifyData.session?.subscription,
           owner_id: authData.user.id,
           created_at: new Date().toISOString()
         }])
