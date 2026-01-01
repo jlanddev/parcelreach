@@ -167,7 +167,7 @@ export default function LandingPage() {
             className="lg:hidden relative pb-16"
             style={{
               zIndex: 1,
-              marginTop: '-40px',
+              marginTop: '-15px',
             }}
           >
             {/* Large ambient glow */}
