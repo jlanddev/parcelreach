@@ -103,14 +103,13 @@ export default function LoginPage() {
 
         <div className="flex mb-6 bg-slate-900 rounded-lg p-1">
           <button
-            onClick={() => setMode('login')}
-            className={`flex-1 py-2 px-4 rounded-md text-sm font-semibold transition-all ${mode === 'login' ? 'bg-blue-500 text-white' : 'text-slate-400'}`}
+            className="flex-1 py-2 px-4 rounded-md text-sm font-semibold transition-all bg-blue-500 text-white"
           >
             Sign In
           </button>
           <button
-            onClick={() => setMode('signup')}
-            className={`flex-1 py-2 px-4 rounded-md text-sm font-semibold transition-all ${mode === 'signup' ? 'bg-blue-500 text-white' : 'text-slate-400'}`}
+            onClick={() => router.push('/signup')}
+            className="flex-1 py-2 px-4 rounded-md text-sm font-semibold transition-all text-slate-400 hover:text-white"
           >
             Sign Up
           </button>
