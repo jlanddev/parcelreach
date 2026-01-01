@@ -70,7 +70,6 @@ function SuccessContent() {
           full_name: fullName,
           first_name: firstName,
           last_name: lastName,
-          stripe_customer_id: verifyData.session?.customer,
           created_at: new Date().toISOString()
         }], {
           onConflict: 'id'
