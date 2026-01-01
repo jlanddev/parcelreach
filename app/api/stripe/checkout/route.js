@@ -29,7 +29,22 @@ export async function POST(request) {
       return Response.json({ error: 'Lead not found' }, { status: 404 });
     }
 
-    if (!lead.price || parseFloat(lead.price) <= 0) {
+    // Get price from team_lead_data (where admin sets price per team)
+    let price = lead.price;
+    if (teamId) {
+      const { data: teamLeadData } = await supabase
+        .from('team_lead_data')
+        .select('purchase_price')
+        .eq('lead_id', leadId)
+        .eq('team_id', teamId)
+        .single();
+
+      if (teamLeadData?.purchase_price) {
+        price = teamLeadData.purchase_price;
+      }
+    }
+
+    if (!price || parseFloat(price) <= 0) {
       return Response.json({ error: 'Lead has no price set' }, { status: 400 });
     }
 
@@ -56,7 +71,7 @@ export async function POST(request) {
               name: `Land Lead - ${lead.property_county || lead.county}, ${lead.property_state || lead.state}`,
               description: `${lead.acres || 'N/A'} acres`,
             },
-            unit_amount: Math.round(parseFloat(lead.price) * 100), // Convert to cents
+            unit_amount: Math.round(parseFloat(price) * 100), // Convert to cents
           },
           quantity: 1,
         },
@@ -68,7 +83,7 @@ export async function POST(request) {
         leadId,
         userId,
         teamId,
-        price: lead.price
+        price: price
       }
     });
 
