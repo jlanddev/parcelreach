@@ -671,8 +671,8 @@ export default function DashboardPage() {
         };
       });
 
-      // Fetch TEAM purchases (any team member) to check which priced leads have been bought
-      // Get all team members first
+      // Fetch TEAM purchases to check which priced leads have been bought
+      // Query by team_id directly (more reliable) AND by team member user_ids
       const { data: members } = await supabase
         .from('team_members')
         .select('user_id')
@@ -680,13 +680,23 @@ export default function DashboardPage() {
 
       const teamUserIds = members?.map(m => m.user_id) || [];
 
-      // Get purchases by ANY team member
-      const { data: purchases } = await supabase
+      // Get purchases by team_id OR by any team member user_id
+      const { data: purchasesByTeam } = await supabase
         .from('lead_purchases')
         .select('lead_id')
-        .in('user_id', teamUserIds);
+        .eq('team_id', teamId);
 
-      const purchasedLeadIds = new Set(purchases?.map(p => p.lead_id) || []);
+      const { data: purchasesByUsers } = await supabase
+        .from('lead_purchases')
+        .select('lead_id')
+        .in('user_id', teamUserIds.length > 0 ? teamUserIds : ['00000000-0000-0000-0000-000000000000']);
+
+      // Combine both purchase lists
+      const allPurchasedIds = [
+        ...(purchasesByTeam?.map(p => p.lead_id) || []),
+        ...(purchasesByUsers?.map(p => p.lead_id) || [])
+      ];
+      const purchasedLeadIds = new Set(allPurchasedIds);
 
       // Apply masking to leads with purchase_price that haven't been purchased
       // Use purchasePrice (team-specific) instead of price (global)

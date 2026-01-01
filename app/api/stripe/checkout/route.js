@@ -1,5 +1,6 @@
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
+import { sendLeadPurchaseConfirmation } from '@/lib/email';
 
 function getStripe() {
   return new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -134,6 +135,23 @@ export async function POST(request) {
               stripe_payment_intent_id: paymentIntent.id,
               purchased_at: new Date().toISOString()
             }]);
+
+            // Send purchase confirmation email
+            try {
+              await sendLeadPurchaseConfirmation({
+                toEmail: userEmail,
+                toName: user?.user_metadata?.full_name || user?.user_metadata?.first_name || '',
+                leadName: lead.fullname || lead.full_name || 'Property Owner',
+                location: `${lead.property_county || lead.county}, ${lead.property_state || lead.state}`,
+                acres: lead.acres || 'N/A',
+                price: price,
+                email: lead.email || 'N/A',
+                phone: lead.phone || 'N/A',
+                address: lead.address || lead.street_address || 'N/A'
+              });
+            } catch (emailError) {
+              console.error('Failed to send purchase confirmation email:', emailError);
+            }
 
             return Response.json({
               success: true,
