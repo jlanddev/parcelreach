@@ -11,10 +11,15 @@ function SuccessContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [accountCreated, setAccountCreated] = useState(false);
+  const [needsPassword, setNeedsPassword] = useState(false);
+  const [stripeData, setStripeData] = useState(null);
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [creatingAccount, setCreatingAccount] = useState(false);
 
   useEffect(() => {
     if (sessionId) {
-      createAccount();
+      checkAndCreateAccount();
     } else {
       setLoading(false);
       setError('No session ID found');
@@ -31,15 +36,73 @@ function SuccessContent() {
     }
   }, [accountCreated]);
 
-  async function createAccount() {
+  async function checkAndCreateAccount() {
     try {
       // Get stored signup data from sessionStorage
       const signupDataStr = sessionStorage.getItem('signupData');
+
       if (!signupDataStr) {
-        throw new Error('Signup data not found. Please try signing up again.');
+        // No sessionStorage - need to get data from Stripe and ask for password
+        const verifyResponse = await fetch(`/api/verify-checkout-session?session_id=${sessionId}`);
+        const verifyData = await verifyResponse.json();
+
+        if (!verifyResponse.ok) {
+          throw new Error(verifyData.error || 'Failed to verify payment');
+        }
+
+        // Store Stripe session data and show password form
+        setStripeData(verifyData);
+        setNeedsPassword(true);
+        setLoading(false);
+        return;
       }
 
       const signupData = JSON.parse(signupDataStr);
+      await createAccount(signupData);
+    } catch (err) {
+      console.error('Account creation error:', err);
+      setError(err.message || 'Failed to create account');
+      setLoading(false);
+    }
+  }
+
+  async function handlePasswordSubmit(e) {
+    e.preventDefault();
+    setError('');
+
+    if (password !== confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
+
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+
+    setCreatingAccount(true);
+
+    try {
+      // Build signup data from Stripe metadata
+      const metadata = stripeData.session?.metadata || {};
+      const signupData = {
+        email: metadata.email || stripeData.session?.customer_email,
+        firstName: metadata.first_name || '',
+        lastName: metadata.last_name || '',
+        organizationName: metadata.organization_name || 'My Organization',
+        password: password
+      };
+
+      await createAccount(signupData);
+    } catch (err) {
+      console.error('Account creation error:', err);
+      setError(err.message || 'Failed to create account');
+      setCreatingAccount(false);
+    }
+  }
+
+  async function createAccount(signupData) {
+    try {
       const { email, firstName, lastName, organizationName, password } = signupData;
 
       // Verify the Stripe session
@@ -181,6 +244,64 @@ function SuccessContent() {
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
           <p className="text-slate-400">Creating your account...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show password form if sessionStorage was lost
+  if (needsPassword) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center px-4">
+        <div className="max-w-md w-full bg-slate-800 rounded-2xl shadow-2xl p-8">
+          <div className="text-center mb-6">
+            <div className="w-16 h-16 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+              <svg className="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <h1 className="text-2xl font-bold text-white mb-2">Payment Successful!</h1>
+            <p className="text-slate-400">Set your password to complete signup</p>
+          </div>
+
+          {error && (
+            <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+              <p className="text-red-400 text-sm">{error}</p>
+            </div>
+          )}
+
+          <form onSubmit={handlePasswordSubmit} className="space-y-4">
+            <div>
+              <label className="block text-sm font-semibold text-slate-300 mb-2">Password</label>
+              <input
+                type="password"
+                required
+                minLength={8}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white"
+                placeholder="Min 8 characters"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-slate-300 mb-2">Confirm Password</label>
+              <input
+                type="password"
+                required
+                minLength={8}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={creatingAccount}
+              className="w-full bg-gradient-to-r from-blue-600 to-blue-500 text-white py-3 rounded-lg font-semibold hover:from-blue-700 hover:to-blue-600 transition-all disabled:opacity-50"
+            >
+              {creatingAccount ? 'Creating Account...' : 'Complete Signup'}
+            </button>
+          </form>
         </div>
       </div>
     );
