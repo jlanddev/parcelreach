@@ -218,25 +218,10 @@ export default function DashboardPage() {
           loadTeamMembers(teams[0].team_id);
           fetchLeads(teams[0].team_id);
         } else {
-        // Create default team for user
-        const { data: newTeam } = await supabase
-          .from('teams')
-          .insert([{
-            name: `${user.email}'s Team`,
-            owner_id: user.id
-          }])
-          .select()
-          .single();
-
-        await supabase.from('team_members').insert([{
-          team_id: newTeam.id,
-          user_id: user.id,
-          role: 'owner'
-        }]);
-
-          setCurrentTeam(newTeam);
-          loadTeamMembers(newTeam.id);
-          fetchLeads(newTeam.id);
+          // No team found - user should have team from signup
+          // Don't auto-create to avoid duplicates
+          console.error('No team found for user:', user.id);
+          setCurrentTeam(null);
         }
       }
     };
