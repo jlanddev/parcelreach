@@ -164,10 +164,7 @@ export default function LandingPage() {
 
           {/* Mobile Dashboard Preview - 3 tablet layout like Prophetic */}
           <div
-            className="lg:hidden relative pb-16 mt-6"
-            style={{
-              zIndex: 1,
-            }}
+            className="lg:hidden relative pb-16 mt-12"
           >
             {/* Large ambient glow */}
             <div
