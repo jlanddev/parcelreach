@@ -99,18 +99,18 @@ export default function LandingPage() {
         </nav>
 
         {/* Hero Section */}
-        <section className="relative" style={{ overflow: 'visible' }}>
+        <section className="relative overflow-x-clip">
           <div className="relative max-w-7xl mx-auto px-3 sm:px-6 pt-8 sm:pt-16 lg:py-24">
             <div className="grid lg:grid-cols-2 gap-8 lg:gap-12 items-center">
               {/* Left side - Text */}
-              <div className="max-w-xl relative z-20">
+              <div className="max-w-xl">
                 <h1 className="text-3xl sm:text-4xl lg:text-5xl xl:text-6xl font-bold leading-tight mb-4 sm:mb-6 text-white animate-fade-in-up">
                   Tap Into America's Most Proven Land Pipeline
                 </h1>
                 <p className="text-base sm:text-lg lg:text-xl text-slate-400 mb-6 sm:mb-8 leading-relaxed animate-fade-in-up animate-delay-100" style={{opacity: 0}}>
                   Access our battle-tested PPC campaigns that have generated millions in land deals nationwide. Premium leads in premium locations, ready when you are.
                 </p>
-                <div className="animate-fade-in-up animate-delay-200 relative z-20" style={{opacity: 0}}>
+                <div className="animate-fade-in-up animate-delay-200 relative z-10" style={{opacity: 0}}>
                   {/* Ambient glow behind button */}
                   <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-80 h-32 bg-blue-500/20 blur-[60px] rounded-full pointer-events-none"></div>
                   <Link
@@ -162,22 +162,20 @@ export default function LandingPage() {
             </div>
           </div>
 
-          {/* Mobile Dashboard Preview - Large, overlapping from behind (like Prophetic) */}
+          {/* Mobile Dashboard Preview - top edge tucks behind button only */}
           <div
-            className="lg:hidden relative pointer-events-none"
+            className="lg:hidden relative"
             style={{
               zIndex: 1,
-              marginTop: '-100px',
-              width: '110vw',
-              marginLeft: '-5vw',
+              marginTop: '-50px',
             }}
           >
             {/* Large ambient glow */}
             <div
-              className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-[150%] bg-blue-500/10 blur-[120px] rounded-full"
+              className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[120%] h-[120%] bg-blue-500/10 blur-[100px] rounded-full pointer-events-none"
             ></div>
             <div
-              className="relative"
+              className="relative mx-[-3%]"
               style={{
                 transform: 'perspective(1000px) rotateY(-5deg)',
                 transformOrigin: 'center center',
