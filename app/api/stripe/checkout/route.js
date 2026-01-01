@@ -60,8 +60,24 @@ export async function POST(request) {
       return Response.json({ error: 'Lead already purchased' }, { status: 400 });
     }
 
-    // Create Stripe checkout session
-    const session = await stripe.checkout.sessions.create({
+    // Get user's email from auth to find their Stripe customer
+    const { data: { user } } = await supabase.auth.admin.getUserById(userId);
+    const userEmail = user?.email;
+
+    // Find existing Stripe customer by email
+    let customerId = null;
+    if (userEmail) {
+      const customers = await stripe.customers.list({
+        email: userEmail,
+        limit: 1
+      });
+      if (customers.data.length > 0) {
+        customerId = customers.data[0].id;
+      }
+    }
+
+    // Create Stripe checkout session with customer if found
+    const sessionConfig = {
       payment_method_types: ['card'],
       line_items: [
         {
@@ -85,7 +101,17 @@ export async function POST(request) {
         teamId,
         price: price
       }
-    });
+    };
+
+    // Add customer to session if found - this pre-fills their saved card
+    if (customerId) {
+      sessionConfig.customer = customerId;
+      sessionConfig.customer_update = { address: 'auto' };
+    } else if (userEmail) {
+      sessionConfig.customer_email = userEmail;
+    }
+
+    const session = await stripe.checkout.sessions.create(sessionConfig);
 
     return Response.json({ sessionId: session.id, url: session.url });
   } catch (error) {
