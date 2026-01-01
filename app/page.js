@@ -164,7 +164,7 @@ export default function LandingPage() {
 
           {/* Mobile Dashboard Preview - top edge tucks behind button only */}
           <div
-            className="lg:hidden relative"
+            className="lg:hidden relative pb-16"
             style={{
               zIndex: 1,
               marginTop: '-50px',
@@ -174,24 +174,34 @@ export default function LandingPage() {
             <div
               className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[120%] h-[120%] bg-blue-500/10 blur-[100px] rounded-full pointer-events-none"
             ></div>
+            {/* Device frame with 3D angle */}
             <div
-              className="relative mx-[-3%]"
+              className="relative mx-2"
               style={{
-                transform: 'perspective(1000px) rotateY(-5deg)',
+                transform: 'perspective(1500px) rotateX(2deg) rotateY(-8deg)',
                 transformOrigin: 'center center',
               }}
             >
-              <div className="rounded-xl shadow-2xl overflow-hidden border border-slate-600/30">
-                {dashImages.map((src, i) => (
-                  <Image
-                    key={src}
-                    src={src}
-                    alt={`ParcelReach Dashboard ${i + 1}`}
-                    width={900}
-                    height={550}
-                    className={`w-full h-auto transition-opacity duration-700 ${i === currentSlide ? 'opacity-100' : 'opacity-0 absolute inset-0'}`}
-                  />
-                ))}
+              <div
+                style={{
+                  background: '#1a1a2e',
+                  padding: '10px',
+                  borderRadius: '16px',
+                  boxShadow: '0 40px 80px rgba(0,0,0,0.5)',
+                }}
+              >
+                <div className="rounded-lg overflow-hidden">
+                  {dashImages.map((src, i) => (
+                    <Image
+                      key={src}
+                      src={src}
+                      alt={`ParcelReach Dashboard ${i + 1}`}
+                      width={900}
+                      height={550}
+                      className={`w-full h-auto transition-opacity duration-700 ${i === currentSlide ? 'opacity-100' : 'opacity-0 absolute inset-0'}`}
+                    />
+                  ))}
+                </div>
               </div>
             </div>
           </div>
