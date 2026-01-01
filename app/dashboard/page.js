@@ -64,6 +64,8 @@ export default function DashboardPage() {
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxImage, setLightboxImage] = useState(null);
   const [purchasingLeadId, setPurchasingLeadId] = useState(null);
+  const [billingInfo, setBillingInfo] = useState(null);
+  const [billingLoading, setBillingLoading] = useState(false);
   const [saveTimeout, setSaveTimeout] = useState(null);
   const [logoPosition, setLogoPosition] = useState({ x: 0, y: 0 });
   const [logoSize, setLogoSize] = useState(200);
@@ -305,8 +307,25 @@ export default function DashboardPage() {
       }
     };
 
+    const loadBillingInfo = async () => {
+      if (!currentUser?.id) return;
+      setBillingLoading(true);
+      try {
+        const response = await fetch(`/api/stripe/billing-portal?userId=${currentUser.id}`);
+        const data = await response.json();
+        if (response.ok) {
+          setBillingInfo(data);
+        }
+      } catch (error) {
+        console.error('Error loading billing info:', error);
+      } finally {
+        setBillingLoading(false);
+      }
+    };
+
     if (accountOpen) {
       loadUserProfile();
+      loadBillingInfo();
     }
   }, [currentUser, accountOpen]);
 
@@ -1323,6 +1342,15 @@ export default function DashboardPage() {
                         });
 
                         const data = await response.json();
+
+                        // Check if card was declined - redirect to billing portal
+                        if (data.cardDeclined && data.billingPortalUrl) {
+                          showToast('Card declined. Redirecting to update payment method...', 'error');
+                          setTimeout(() => {
+                            window.location.href = data.billingPortalUrl;
+                          }, 1500);
+                          return;
+                        }
 
                         if (!response.ok) {
                           showToast(data.error || 'Failed to start checkout', 'error');
@@ -2622,8 +2650,55 @@ export default function DashboardPage() {
               {/* Billing */}
               <div>
                 <label className="block text-sm font-semibold text-white mb-2">Billing</label>
+                {billingInfo?.card ? (
+                  <div className="bg-slate-700/50 rounded-lg p-3 mb-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-7 bg-gradient-to-br from-slate-600 to-slate-800 rounded flex items-center justify-center">
+                          <span className="text-[10px] font-bold text-white uppercase">{billingInfo.card.brand}</span>
+                        </div>
+                        <div>
+                          <div className="text-white text-sm font-medium">•••• {billingInfo.card.last4}</div>
+                          <div className="text-slate-400 text-xs">Expires {billingInfo.card.expMonth}/{billingInfo.card.expYear}</div>
+                        </div>
+                      </div>
+                      {billingInfo.subscription && (
+                        <div className={`text-xs px-2 py-1 rounded ${billingInfo.subscription.status === 'trialing' ? 'bg-blue-500/20 text-blue-400' : billingInfo.subscription.status === 'active' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                          {billingInfo.subscription.status === 'trialing' ? 'Trial' : billingInfo.subscription.status}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : billingLoading ? (
+                  <div className="bg-slate-700/50 rounded-lg p-3 mb-3 text-center">
+                    <div className="text-slate-400 text-sm">Loading billing info...</div>
+                  </div>
+                ) : null}
                 <button
-                  onClick={() => alert('Billing management coming soon')}
+                  onClick={async () => {
+                    try {
+                      const { data: { user } } = await supabase.auth.getUser();
+                      if (!user) return;
+
+                      const response = await fetch('/api/stripe/billing-portal', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          userId: user.id,
+                          returnUrl: window.location.href
+                        })
+                      });
+
+                      const data = await response.json();
+                      if (data.url) {
+                        window.location.href = data.url;
+                      } else {
+                        showToast(data.error || 'Failed to open billing portal', 'error');
+                      }
+                    } catch (error) {
+                      showToast('Failed to open billing portal', 'error');
+                    }
+                  }}
                   className="w-full bg-slate-700 text-white px-4 py-3 rounded-lg hover:bg-slate-600 transition-colors text-sm font-semibold"
                 >
                   Manage Billing

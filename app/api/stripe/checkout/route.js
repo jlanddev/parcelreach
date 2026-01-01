@@ -166,8 +166,23 @@ export async function POST(request) {
             });
           }
         } catch (chargeError) {
-          // If direct charge fails (e.g., card declined), fall back to checkout
-          console.log('Direct charge failed, falling back to checkout:', chargeError.message);
+          // If direct charge fails (e.g., card declined), redirect to billing portal
+          console.log('Direct charge failed:', chargeError.message);
+
+          // Check if it's a card error
+          if (chargeError.type === 'StripeCardError' || chargeError.code === 'card_declined') {
+            // Create billing portal session for user to update card
+            const portalSession = await stripe.billingPortal.sessions.create({
+              customer: customer.id,
+              return_url: `${request.headers.get('origin')}/dashboard?update_card=true`
+            });
+
+            return Response.json({
+              cardDeclined: true,
+              billingPortalUrl: portalSession.url,
+              error: 'Your card was declined. Please update your payment method.'
+            });
+          }
         }
       }
     }
