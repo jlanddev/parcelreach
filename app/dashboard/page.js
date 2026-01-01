@@ -66,6 +66,9 @@ export default function DashboardPage() {
   const [purchasingLeadId, setPurchasingLeadId] = useState(null);
   const [billingInfo, setBillingInfo] = useState(null);
   const [billingLoading, setBillingLoading] = useState(false);
+  const [cancelModalOpen, setCancelModalOpen] = useState(false);
+  const [cancelPassword, setCancelPassword] = useState('');
+  const [cancelLoading, setCancelLoading] = useState(false);
   const [saveTimeout, setSaveTimeout] = useState(null);
   const [logoPosition, setLogoPosition] = useState({ x: 0, y: 0 });
   const [logoSize, setLogoSize] = useState(200);
@@ -2651,20 +2654,20 @@ export default function DashboardPage() {
               <div>
                 <label className="block text-sm font-semibold text-white mb-2">Billing</label>
                 {billingInfo?.card ? (
-                  <div className="bg-slate-700/50 rounded-lg p-3 mb-3">
+                  <div className="bg-slate-700/50 rounded-lg p-4 mb-3">
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-7 bg-gradient-to-br from-slate-600 to-slate-800 rounded flex items-center justify-center">
-                          <span className="text-[10px] font-bold text-white uppercase">{billingInfo.card.brand}</span>
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-8 bg-gradient-to-br from-slate-500 to-slate-700 rounded-md flex items-center justify-center border border-slate-500/30">
+                          <span className="text-[8px] font-bold text-white uppercase tracking-tight">{billingInfo.card.brand}</span>
                         </div>
                         <div>
-                          <div className="text-white text-sm font-medium">•••• {billingInfo.card.last4}</div>
+                          <div className="text-white text-sm font-semibold">•••• •••• •••• {billingInfo.card.last4}</div>
                           <div className="text-slate-400 text-xs">Expires {billingInfo.card.expMonth}/{billingInfo.card.expYear}</div>
                         </div>
                       </div>
                       {billingInfo.subscription && (
-                        <div className={`text-xs px-2 py-1 rounded ${billingInfo.subscription.status === 'trialing' ? 'bg-blue-500/20 text-blue-400' : billingInfo.subscription.status === 'active' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-                          {billingInfo.subscription.status === 'trialing' ? 'Trial' : billingInfo.subscription.status}
+                        <div className={`text-xs px-2 py-1 rounded font-medium ${billingInfo.subscription.status === 'trialing' ? 'bg-blue-500/20 text-blue-400' : billingInfo.subscription.status === 'active' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                          {billingInfo.subscription.status === 'trialing' ? 'Trial' : billingInfo.subscription.status === 'active' ? 'Active' : billingInfo.subscription.status}
                         </div>
                       )}
                     </div>
@@ -2674,35 +2677,58 @@ export default function DashboardPage() {
                     <div className="text-slate-400 text-sm">Loading billing info...</div>
                   </div>
                 ) : null}
-                <button
-                  onClick={async () => {
-                    try {
-                      const { data: { user } } = await supabase.auth.getUser();
-                      if (!user) return;
 
-                      const response = await fetch('/api/stripe/billing-portal', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          userId: user.id,
-                          returnUrl: window.location.href
-                        })
-                      });
+                {/* Show cancellation notice if subscription is set to cancel */}
+                {billingInfo?.subscription?.cancelAtPeriodEnd && (
+                  <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-3">
+                    <div className="text-yellow-400 text-sm font-medium">
+                      Your subscription will end on {new Date(billingInfo.subscription.currentPeriodEnd * 1000).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+                    </div>
+                    <div className="text-slate-400 text-xs mt-1">You'll retain access until this date.</div>
+                  </div>
+                )}
 
-                      const data = await response.json();
-                      if (data.url) {
-                        window.location.href = data.url;
-                      } else {
-                        showToast(data.error || 'Failed to open billing portal', 'error');
+                <div className="flex gap-2">
+                  <button
+                    onClick={async () => {
+                      try {
+                        const { data: { user } } = await supabase.auth.getUser();
+                        if (!user) return;
+
+                        const response = await fetch('/api/stripe/billing-portal', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            userId: user.id,
+                            returnUrl: window.location.href
+                          })
+                        });
+
+                        const data = await response.json();
+                        if (data.url) {
+                          window.location.href = data.url;
+                        } else {
+                          showToast(data.error || 'Failed to open billing portal', 'error');
+                        }
+                      } catch (error) {
+                        showToast('Failed to open billing portal', 'error');
                       }
-                    } catch (error) {
-                      showToast('Failed to open billing portal', 'error');
-                    }
-                  }}
-                  className="w-full bg-slate-700 text-white px-4 py-3 rounded-lg hover:bg-slate-600 transition-colors text-sm font-semibold"
-                >
-                  Manage Billing
-                </button>
+                    }}
+                    className="flex-1 bg-slate-700 text-white px-4 py-3 rounded-lg hover:bg-slate-600 transition-colors text-sm font-semibold"
+                  >
+                    Manage Billing
+                  </button>
+
+                  {/* Cancel Button - only show if subscription is not already cancelled */}
+                  {billingInfo?.subscription && !billingInfo.subscription.cancelAtPeriodEnd && (
+                    <button
+                      onClick={() => setCancelModalOpen(true)}
+                      className="flex-1 bg-red-600/20 text-red-400 border border-red-600/30 px-4 py-3 rounded-lg hover:bg-red-600/30 transition-colors text-sm font-semibold"
+                    >
+                      {billingInfo.subscription.status === 'trialing' ? 'Cancel Trial' : 'Cancel Subscription'}
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="flex gap-3 pt-4 border-t border-slate-700/50">
@@ -3678,6 +3704,121 @@ export default function DashboardPage() {
           message={notificationToast.message}
           onClose={() => setNotificationToast({ show: false, message: '', type: 'success' })}
         />
+      )}
+
+      {/* Cancel Subscription Modal */}
+      {cancelModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl shadow-2xl max-w-md w-full border border-red-500/30 overflow-hidden">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-red-600 to-red-500 p-6 text-center">
+              <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <h2 className="text-2xl font-bold text-white">
+                {billingInfo?.subscription?.status === 'trialing' ? 'Cancel Trial' : 'Cancel Subscription'}
+              </h2>
+            </div>
+
+            {/* Content */}
+            <div className="p-6">
+              <p className="text-slate-300 text-center mb-6">
+                {billingInfo?.subscription?.status === 'trialing'
+                  ? 'Are you sure you want to cancel your trial? You will retain access until your trial ends.'
+                  : 'Are you sure you want to cancel? You will retain access until the end of your current billing period.'}
+              </p>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-2">
+                    Enter your password to confirm
+                  </label>
+                  <input
+                    type="password"
+                    value={cancelPassword}
+                    onChange={(e) => setCancelPassword(e.target.value)}
+                    placeholder="Your password"
+                    className="w-full px-4 py-3 bg-slate-800 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-red-500"
+                  />
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    onClick={() => {
+                      setCancelModalOpen(false);
+                      setCancelPassword('');
+                    }}
+                    className="flex-1 px-4 py-3 bg-slate-700 text-white rounded-lg hover:bg-slate-600 transition-colors font-semibold"
+                    disabled={cancelLoading}
+                  >
+                    Keep Subscription
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (!cancelPassword) {
+                        showToast('Please enter your password', 'error');
+                        return;
+                      }
+
+                      setCancelLoading(true);
+                      try {
+                        const { data: { user } } = await supabase.auth.getUser();
+                        if (!user) {
+                          showToast('Please log in again', 'error');
+                          return;
+                        }
+
+                        const response = await fetch('/api/stripe/cancel-subscription', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            userId: user.id,
+                            password: cancelPassword
+                          })
+                        });
+
+                        const data = await response.json();
+
+                        if (data.success) {
+                          showToast(data.message, 'success');
+                          setCancelModalOpen(false);
+                          setCancelPassword('');
+                          // Refresh billing info
+                          const billingResponse = await fetch(`/api/stripe/billing-portal?userId=${user.id}`);
+                          const billingData = await billingResponse.json();
+                          setBillingInfo(billingData);
+                        } else {
+                          showToast(data.error || 'Failed to cancel subscription', 'error');
+                        }
+                      } catch (error) {
+                        console.error('Cancel error:', error);
+                        showToast('Failed to cancel subscription', 'error');
+                      } finally {
+                        setCancelLoading(false);
+                      }
+                    }}
+                    disabled={cancelLoading || !cancelPassword}
+                    className="flex-1 px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-500 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {cancelLoading ? (
+                      <span className="flex items-center justify-center gap-2">
+                        <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Cancelling...
+                      </span>
+                    ) : (
+                      billingInfo?.subscription?.status === 'trialing' ? 'Cancel Trial' : 'Cancel Subscription'
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Purchase Success Modal */}
