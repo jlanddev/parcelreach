@@ -127,14 +127,20 @@ export async function POST(request) {
 
           if (paymentIntent.status === 'succeeded') {
             // Payment successful - record the purchase
-            await supabase.from('lead_purchases').insert([{
+            const { error: insertError } = await supabase.from('lead_purchases').insert([{
               lead_id: leadId,
               user_id: userId,
               team_id: teamId,
-              price: price,
+              price_paid: price,
               stripe_payment_intent_id: paymentIntent.id,
               purchased_at: new Date().toISOString()
             }]);
+
+            if (insertError) {
+              console.error('Failed to record purchase:', insertError);
+              // Still return success since payment went through
+              // but log the error for debugging
+            }
 
             // Send purchase confirmation email
             try {
