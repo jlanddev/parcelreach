@@ -445,7 +445,7 @@ export default function LandingPage() {
 
               {/* Right side - Text content */}
               <div className="order-1 lg:order-2">
-                <h2 className="text-2xl sm:text-4xl lg:text-5xl font-bold text-white mb-4 sm:mb-8 leading-tight">
+                <h2 className="text-2xl sm:text-4xl lg:text-5xl font-bold text-white mb-4 sm:mb-8 leading-tight whitespace-nowrap">
                   Your Dashboard, Your Deals
                 </h2>
                 <p className="text-sm sm:text-lg text-slate-400 leading-relaxed">
