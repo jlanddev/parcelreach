@@ -301,9 +301,9 @@ export default function LandingPage() {
               {[...logos, ...logos].map((logo, i) => (
                 <div
                   key={i}
-                  className="flex-shrink-0 mx-3 sm:mx-6 px-4 sm:px-8 py-2 sm:py-4 bg-slate-800/60 backdrop-blur-md border border-slate-600/50 rounded-lg sm:rounded-xl shadow-lg"
+                  className="flex-shrink-0 mx-4 sm:mx-8 px-6 sm:px-10 py-3 sm:py-5 bg-slate-800/70 backdrop-blur-md border border-slate-600/50 rounded-xl sm:rounded-2xl shadow-xl"
                 >
-                  <span className="text-white font-bold text-sm sm:text-xl lg:text-2xl whitespace-nowrap">
+                  <span className="text-white font-bold text-base sm:text-2xl lg:text-3xl whitespace-nowrap tracking-tight">
                     {logo}
                   </span>
                 </div>

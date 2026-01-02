@@ -13,6 +13,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@browserbasehq/sdk": "^2.6.0",
     "@mapbox/mapbox-gl-draw": "^1.5.1",
     "@sendgrid/mail": "^8.1.6",
     "@stripe/stripe-js": "^8.4.0",
@@ -24,6 +25,7 @@
     "dotenv": "^17.2.3",
     "mapbox-gl": "^3.16.0",
     "next": "^16.1.1",
+    "playwright-core": "^1.57.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-map-gl": "^8.1.0",
