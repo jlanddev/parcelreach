@@ -448,11 +448,8 @@ export default function LandingPage() {
                 <h2 className="text-2xl sm:text-4xl lg:text-5xl font-bold text-white mb-4 sm:mb-8 leading-tight">
                   Your Dashboard, Your Deals
                 </h2>
-                <p className="text-sm sm:text-lg text-slate-400 leading-relaxed mb-4 sm:mb-6">
-                  Log into your dashboard and see exactly what's available. Fresh leads with timestamps, location details, acreage specs, and all the intel you need to move fast.
-                </p>
                 <p className="text-sm sm:text-lg text-slate-400 leading-relaxed">
-                  Buy leads when you want them. No monthly commitments, no wasted budget.
+                  Log into your dashboard and see exactly what's available. Fresh leads with timestamps, location details, acreage specs, and all the intel you need to move fast.
                 </p>
               </div>
             </div>
