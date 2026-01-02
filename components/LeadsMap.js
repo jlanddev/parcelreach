@@ -155,10 +155,11 @@ export default function LeadsMap({ leads = [], zoomToLead = null, developments =
     map.current = new mapboxgl.Map({
       container: mapContainer.current,
       style: 'mapbox://styles/mapbox/satellite-streets-v12', // High-end satellite view
-      center: [-96.7970, 32.7767], // Dallas, TX (Dallas County - included in trial)
-      zoom: 11,
-      pitch: 0, // Start flat, toggle for 3D
-      bearing: 0
+      center: [30, 20], // Start looking at Africa/Europe for rotation effect
+      zoom: 1.5, // Zoomed out to see globe
+      pitch: 0,
+      bearing: 0,
+      projection: 'globe' // Enable globe projection for rotation
     });
 
     // Add navigation controls
@@ -166,6 +167,59 @@ export default function LeadsMap({ leads = [], zoomToLead = null, developments =
 
     // Add fullscreen control
     map.current.addControl(new mapboxgl.FullscreenControl(), 'top-right');
+
+    // Globe rotation animation on load
+    map.current.on('style.load', () => {
+      // Add atmosphere for nice globe effect
+      map.current.setFog({
+        color: 'rgb(186, 210, 235)',
+        'high-color': 'rgb(36, 92, 223)',
+        'horizon-blend': 0.02,
+        'space-color': 'rgb(11, 11, 25)',
+        'star-intensity': 0.6
+      });
+
+      // Rotation animation
+      let startTime;
+      const rotationDuration = 2000; // 2 seconds of rotation
+      const startLng = 30;
+      const endLng = -98; // Center of US
+
+      function rotateGlobe(timestamp) {
+        if (!startTime) startTime = timestamp;
+        const elapsed = timestamp - startTime;
+        const progress = Math.min(elapsed / rotationDuration, 1);
+
+        // Ease out cubic for smooth deceleration
+        const easeOut = 1 - Math.pow(1 - progress, 3);
+
+        // Interpolate longitude (spin westward to US)
+        const currentLng = startLng + (endLng - startLng) * easeOut;
+
+        map.current.setCenter([currentLng, 35]);
+
+        if (progress < 1) {
+          requestAnimationFrame(rotateGlobe);
+        } else {
+          // After rotation, fly to US view
+          setTimeout(() => {
+            map.current.flyTo({
+              center: [-98, 39], // Center of continental US
+              zoom: 4, // Zoomed out to see whole US
+              pitch: 0,
+              bearing: 0,
+              duration: 2500,
+              essential: true
+            });
+          }, 300);
+        }
+      }
+
+      // Start rotation after a brief pause
+      setTimeout(() => {
+        requestAnimationFrame(rotateGlobe);
+      }, 500);
+    });
 
     // Helper functions for polygon drawing
     function updatePolygons(e) {
