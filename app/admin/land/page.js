@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
+import area from '@turf/area';
 
 export default function LandLeadsAdminPage() {
   const router = useRouter();
@@ -1358,9 +1359,9 @@ export default function LandLeadsAdminPage() {
                           setKmlFile(null);
                           setUploadedGeometry(null);
                         }}
-                        className={`flex-1 px-4 py-2 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2 ${lead.geometry ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}
+                        className={`flex-1 px-4 py-2 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2 ${lead.parcel_geometry ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}
                       >
-                        {lead.geometry ? (
+                        {lead.parcel_geometry ? (
                           <>
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -1384,6 +1385,18 @@ export default function LandLeadsAdminPage() {
                         className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold rounded-lg transition-colors"
                       >
                         View Details
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedLead(lead);
+                          setAssignModalOpen(true);
+                          setSelectedOrgsForAssignment([]);
+                          setLeadPrice('');
+                        }}
+                        className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white text-sm font-semibold rounded-lg transition-colors"
+                      >
+                        Assign
                       </button>
                     </div>
 
@@ -2212,11 +2225,22 @@ export default function LandLeadsAdminPage() {
                       const coords = coordinates.split(/\s+/).map(coord => {
                         const [lng, lat] = coord.split(',').map(Number);
                         return [lng, lat];
-                      });
-                      setUploadedGeometry({
+                      }).filter(c => !isNaN(c[0]) && !isNaN(c[1]));
+
+                      const geometry = {
                         type: 'Polygon',
                         coordinates: [coords]
-                      });
+                      };
+                      setUploadedGeometry(geometry);
+
+                      // Auto-calculate acreage from polygon
+                      const polygon = {
+                        type: 'Feature',
+                        geometry: geometry
+                      };
+                      const areaInSquareMeters = area(polygon);
+                      const areaInAcres = (areaInSquareMeters * 0.000247105).toFixed(2);
+                      setNewLead(prev => ({...prev, acres: areaInAcres}));
                     }
                   }
                 }}
@@ -2233,6 +2257,9 @@ export default function LandLeadsAdminPage() {
                   <span className="font-semibold">KML file loaded successfully!</span>
                 </div>
                 <p className="text-sm text-slate-400 mt-1">Geometry contains {uploadedGeometry.coordinates[0].length} points</p>
+                {newLead.acres && (
+                  <p className="text-sm text-orange-400 font-semibold mt-1">Calculated acreage: {newLead.acres} acres</p>
+                )}
               </div>
             )}
 
