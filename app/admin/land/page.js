@@ -16,6 +16,7 @@ export default function LandLeadsAdminPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('organizations');
   const [assignModalOpen, setAssignModalOpen] = useState(false);
+  const [detailsModalOpen, setDetailsModalOpen] = useState(false);
   const [selectedLead, setSelectedLead] = useState(null);
   const [selectedOrgsForAssignment, setSelectedOrgsForAssignment] = useState([]);
   const [leadPrice, setLeadPrice] = useState(''); // Price for marketplace leads
@@ -193,14 +194,18 @@ export default function LandLeadsAdminPage() {
         // Determine price for this specific org
         const priceValue = leadPrice ? parseFloat(leadPrice) : null;
 
-        // Create team_lead_data record with org-specific price
+        // Create team_lead_data record with org-specific price and lead data
         const { error: teamDataError } = await supabase
           .from('team_lead_data')
           .insert([{
             team_id: assignment.team_id,
             lead_id: leadId,
             status: 'new',
-            purchase_price: priceValue // Store price per-org, not globally
+            purchase_price: priceValue,
+            acres: leadData?.acres || leadData?.acreage || null,
+            parcel_id: leadData?.parcel_id || leadData?.parcelid || null,
+            property_county: leadData?.property_county || leadData?.county || null,
+            property_state: leadData?.property_state || leadData?.state || null
           }]);
 
         // Ignore duplicate errors (team already has this lead)
@@ -1381,6 +1386,7 @@ export default function LandLeadsAdminPage() {
                         onClick={(e) => {
                           e.stopPropagation();
                           setSelectedLead(lead);
+                          setDetailsModalOpen(true);
                         }}
                         className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold rounded-lg transition-colors"
                       >
@@ -1927,6 +1933,199 @@ export default function LandLeadsAdminPage() {
 
       </div>
 
+      {/* Details Modal - Edit & Save */}
+      {detailsModalOpen && selectedLead && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => {
+            setDetailsModalOpen(false);
+            setSelectedLead(null);
+          }}
+        >
+          <div
+            className="bg-slate-800 rounded-xl border border-slate-700 max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-xl font-bold mb-4">Edit Lead Details</h3>
+
+            {/* Editable Lead Info */}
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-400 mb-1">Full Name</label>
+                  <input
+                    type="text"
+                    value={selectedLead.full_name || selectedLead.name || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, full_name: e.target.value, name: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-slate-400 mb-1">Email</label>
+                  <input
+                    type="email"
+                    value={selectedLead.email || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, email: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-400 mb-1">Phone</label>
+                  <input
+                    type="tel"
+                    value={selectedLead.phone || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, phone: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-slate-400 mb-1">Exact Acres</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={selectedLead.acres || selectedLead.acreage || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, acres: e.target.value, acreage: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                    placeholder="Enter exact acreage"
+                  />
+                  {selectedLead.form_data?.acres && (
+                    <p className="text-xs text-slate-500 mt-1">Form submitted: {selectedLead.form_data.acres}</p>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-400 mb-1">Address</label>
+                <input
+                  type="text"
+                  value={selectedLead.street_address || selectedLead.address || ''}
+                  onChange={(e) => setSelectedLead({...selectedLead, street_address: e.target.value, address: e.target.value})}
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-400 mb-1">County</label>
+                  <input
+                    type="text"
+                    value={selectedLead.property_county || selectedLead.county || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, property_county: e.target.value, county: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-slate-400 mb-1">State</label>
+                  <input
+                    type="text"
+                    value={selectedLead.property_state || selectedLead.state || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, property_state: e.target.value, state: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-slate-400 mb-1">Zip</label>
+                  <input
+                    type="text"
+                    value={selectedLead.zip || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, zip: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-400 mb-1">Parcel ID</label>
+                <input
+                  type="text"
+                  value={selectedLead.parcel_id || selectedLead.parcelid || ''}
+                  onChange={(e) => setSelectedLead({...selectedLead, parcel_id: e.target.value, parcelid: e.target.value})}
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  placeholder="Enter parcel ID"
+                />
+              </div>
+            </div>
+
+            {/* Buttons */}
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => {
+                  setDetailsModalOpen(false);
+                  setSelectedLead(null);
+                }}
+                className="flex-1 px-4 py-3 bg-slate-700 text-white rounded-lg hover:bg-slate-600 transition-colors font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  setIsAssigning(true);
+                  try {
+                    const acresValue = selectedLead.acres ? parseFloat(selectedLead.acres) : null;
+
+                    // Update leads table
+                    const { error } = await supabase
+                      .from('leads')
+                      .update({
+                        full_name: selectedLead.full_name || selectedLead.name,
+                        name: selectedLead.full_name || selectedLead.name,
+                        email: selectedLead.email,
+                        phone: selectedLead.phone,
+                        street_address: selectedLead.street_address || selectedLead.address,
+                        address: selectedLead.street_address || selectedLead.address,
+                        property_county: selectedLead.property_county || selectedLead.county,
+                        county: selectedLead.property_county || selectedLead.county,
+                        property_state: selectedLead.property_state || selectedLead.state,
+                        state: selectedLead.property_state || selectedLead.state,
+                        zip: selectedLead.zip,
+                        acres: acresValue,
+                        acreage: acresValue,
+                        parcel_id: selectedLead.parcel_id || selectedLead.parcelid || null,
+                        parcelid: selectedLead.parcel_id || selectedLead.parcelid || null
+                      })
+                      .eq('id', selectedLead.id);
+
+                    if (error) throw error;
+
+                    // Also update team_lead_data for all teams that have this lead
+                    await supabase
+                      .from('team_lead_data')
+                      .update({
+                        acres: acresValue,
+                        parcel_id: selectedLead.parcel_id || selectedLead.parcelid || null,
+                        property_county: selectedLead.property_county || selectedLead.county,
+                        property_state: selectedLead.property_state || selectedLead.state
+                      })
+                      .eq('lead_id', selectedLead.id);
+
+                    alert('Lead saved successfully!');
+
+                    // Refresh leads
+                    const { data } = await supabase.from('leads').select('*').order('created_at', { ascending: false });
+                    if (data) setAllLeads(data);
+
+                    setDetailsModalOpen(false);
+                    setSelectedLead(null);
+                  } catch (err) {
+                    console.error('Error saving lead:', err);
+                    alert('Failed to save lead');
+                  } finally {
+                    setIsAssigning(false);
+                  }
+                }}
+                disabled={isAssigning}
+                className="flex-1 px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-500 transition-colors font-semibold disabled:opacity-50"
+              >
+                {isAssigning ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Assign Modal */}
       {assignModalOpen && selectedLead && (
         <div
@@ -2290,6 +2489,8 @@ export default function LandLeadsAdminPage() {
                     const centerLng = (Math.min(...lngs) + Math.max(...lngs)) / 2;
                     const centerLat = (Math.min(...lats) + Math.max(...lats)) / 2;
 
+                    const acresValue = newLead.acres ? parseFloat(newLead.acres) : null;
+
                     const { error } = await supabase
                       .from('leads')
                       .update({
@@ -2297,13 +2498,25 @@ export default function LandLeadsAdminPage() {
                         latitude: centerLat,
                         longitude: centerLng,
                         parcel_id: newLead.parcel_id || null,
+                        parcelid: newLead.parcel_id || null,
                         notes: newLead.notes || null,
-                        acres: newLead.acres ? parseFloat(newLead.acres) : null,
-                        acreage: newLead.acres ? parseFloat(newLead.acres) : null
+                        acres: acresValue,
+                        acreage: acresValue
                       })
                       .eq('id', leadForMapSearch.id);
 
                     if (error) throw error;
+
+                    // Also update team_lead_data for all teams that have this lead
+                    if (acresValue || newLead.parcel_id) {
+                      await supabase
+                        .from('team_lead_data')
+                        .update({
+                          acres: acresValue,
+                          parcel_id: newLead.parcel_id || null
+                        })
+                        .eq('lead_id', leadForMapSearch.id);
+                    }
 
                     // If notes were provided, also add to lead_notes table
                     if (newLead.notes && newLead.notes.trim()) {

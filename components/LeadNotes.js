@@ -362,7 +362,7 @@ export default function LeadNotes({ leadId, lead, currentUserId, currentUserName
       // Build lead description for notification
       const leadName = lead?.name || 'Unknown';
       const leadLocation = lead?.county && lead?.state
-        ? `${lead.county} County, ${lead.state}`
+        ? `${lead.county.replace(/ County$/i, '')} County, ${lead.state}`
         : lead?.city && lead?.state
         ? `${lead.city}, ${lead.state}`
         : 'Unknown Location';

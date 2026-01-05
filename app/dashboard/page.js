@@ -1430,7 +1430,7 @@ export default function DashboardPage() {
                                   <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
                                 </svg>
                                 <span className="text-[10px] font-medium text-blue-300">
-                                  {lead.county || lead.propertyCounty || 'Unknown'} County, {lead.state || lead.propertyState || 'Unknown'}
+                                  {(lead.county || lead.propertyCounty || 'Unknown').replace(/ County$/i, '')} County, {lead.state || lead.propertyState || 'Unknown'}
                                 </span>
                               </div>
                               {/* Parcel ID Badge */}
@@ -3197,7 +3197,7 @@ export default function DashboardPage() {
                       const propertyAddress = selectedLead.address || selectedLead.street_address || selectedLead.streetaddress || '[Property Address]';
                       const propertyCity = selectedLead.city || '[City]';
                       const propertyState = selectedLead.state || selectedLead.property_state || selectedLead.propertystate || 'OK';
-                      const propertyCounty = selectedLead.county || selectedLead.property_county || selectedLead.propertycounty || '[County]';
+                      const propertyCounty = (selectedLead.county || selectedLead.property_county || selectedLead.propertycounty || '[County]').replace(/ County$/i, '');
                       const propertyZip = selectedLead.zip || selectedLead.zipcode || '[ZIP]';
                       const parcelNumber = selectedLead.parcelid || selectedLead.parcel_id || selectedLead.parcelId || selectedLead.parcel_number || '[Parcel Number]';
                       const acreage = selectedLead.acreage || selectedLead.acres || '[Acreage]';

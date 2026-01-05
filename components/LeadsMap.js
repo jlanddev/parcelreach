@@ -1613,9 +1613,9 @@ export default function LeadsMap({ leads = [], zoomToLead = null, developments =
                 <span className="text-slate-400">Location</span>
                 <span className="text-white font-medium text-right">
                   {selectedParcel.lead ? (
-                    `${selectedParcel.lead.county || selectedParcel.lead.property_county || selectedParcel.parcel.properties.fields?.county || 'Unknown'} County, ${selectedParcel.lead.state || selectedParcel.lead.property_state || 'TX'}`
+                    `${(selectedParcel.lead.county || selectedParcel.lead.property_county || selectedParcel.parcel.properties.fields?.county || 'Unknown').replace(/ County$/i, '')} County, ${selectedParcel.lead.state || selectedParcel.lead.property_state || 'TX'}`
                   ) : (
-                    `${selectedParcel.parcel.properties.fields?.county || 'Unknown'}, TX`
+                    `${(selectedParcel.parcel.properties.fields?.county || 'Unknown').replace(/ County$/i, '')} County, TX`
                   )}
                 </span>
               </div>

@@ -26,7 +26,7 @@ export default function MaskedLeadCard({ lead, onPurchase, userRole, isPurchasin
           {/* Location (County, State) */}
           <div className="mb-2">
             <div className="font-bold text-white text-base">
-              {lead.county || lead.propertyCounty || 'Unknown'} County, {lead.state || lead.propertyState || 'TX'}
+              {(lead.county || lead.propertyCounty || 'Unknown').replace(/ County$/i, '')} County, {lead.state || lead.propertyState || 'TX'}
             </div>
             <div className="flex items-center gap-1 text-xs text-green-400 mt-1">
               <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
