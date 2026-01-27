@@ -1283,6 +1283,14 @@ export default function LandLeadsAdminPage() {
                             </span>
                           </div>
                         )}
+                        {lead.form_data?.isInherited && (
+                          <div>
+                            <span className="text-slate-500">Inherited:</span>{' '}
+                            <span className={lead.form_data.isInherited === 'yes' ? 'text-purple-400 font-semibold' : 'text-slate-300'}>
+                              {lead.form_data.isInherited.toUpperCase()}
+                            </span>
+                          </div>
+                        )}
                         {lead.form_data?.ownedFourYears && (
                           <div>
                             <span className="text-slate-500">4+ Years:</span>{' '}
@@ -1295,6 +1303,12 @@ export default function LandLeadsAdminPage() {
                           <div className="col-span-2">
                             <span className="text-slate-500">On Deed:</span>{' '}
                             <span className="text-slate-300">{lead.form_data.namesOnDeed}</span>
+                          </div>
+                        )}
+                        {lead.form_data?.whySelling && (
+                          <div className="col-span-2 mt-1 pt-1 border-t border-slate-700/30">
+                            <span className="text-slate-500">Why Selling:</span>{' '}
+                            <span className="text-cyan-400 italic">{lead.form_data.whySelling}</span>
                           </div>
                         )}
                       </div>
@@ -2047,6 +2061,65 @@ export default function LandLeadsAdminPage() {
                   placeholder="Enter parcel ID"
                 />
               </div>
+
+              {/* Questionnaire Answers */}
+              {selectedLead.form_data && (
+                <div className="bg-slate-900/50 border border-slate-700 rounded-lg p-4 mt-4">
+                  <h4 className="text-sm font-semibold text-slate-400 mb-3 uppercase tracking-wide">Questionnaire Answers</h4>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    {selectedLead.form_data.position && (
+                      <div>
+                        <span className="text-slate-500">Position:</span>{' '}
+                        <span className="text-white">{selectedLead.form_data.position}</span>
+                      </div>
+                    )}
+                    {selectedLead.form_data.homeOnProperty && (
+                      <div>
+                        <span className="text-slate-500">Home on Property:</span>{' '}
+                        <span className={selectedLead.form_data.homeOnProperty === 'no' ? 'text-green-400 font-semibold' : 'text-yellow-400'}>
+                          {selectedLead.form_data.homeOnProperty.toUpperCase()}
+                        </span>
+                      </div>
+                    )}
+                    {selectedLead.form_data.propertyListed && (
+                      <div>
+                        <span className="text-slate-500">Property Listed:</span>{' '}
+                        <span className={selectedLead.form_data.propertyListed === 'no' ? 'text-green-400 font-semibold' : 'text-yellow-400'}>
+                          {selectedLead.form_data.propertyListed.toUpperCase()}
+                        </span>
+                      </div>
+                    )}
+                    {selectedLead.form_data.isInherited && (
+                      <div>
+                        <span className="text-slate-500">Inherited:</span>{' '}
+                        <span className={selectedLead.form_data.isInherited === 'yes' ? 'text-purple-400 font-semibold' : 'text-slate-300'}>
+                          {selectedLead.form_data.isInherited.toUpperCase()}
+                        </span>
+                      </div>
+                    )}
+                    {selectedLead.form_data.ownedFourYears && (
+                      <div>
+                        <span className="text-slate-500">Owned 4+ Years:</span>{' '}
+                        <span className={selectedLead.form_data.ownedFourYears === 'yes' ? 'text-green-400 font-semibold' : 'text-yellow-400'}>
+                          {selectedLead.form_data.ownedFourYears.toUpperCase()}
+                        </span>
+                      </div>
+                    )}
+                    {selectedLead.form_data.namesOnDeed && (
+                      <div className="col-span-2">
+                        <span className="text-slate-500">Names on Deed:</span>{' '}
+                        <span className="text-white">{selectedLead.form_data.namesOnDeed}</span>
+                      </div>
+                    )}
+                    {selectedLead.form_data.whySelling && (
+                      <div className="col-span-2 mt-2 pt-2 border-t border-slate-700/50">
+                        <span className="text-slate-500">Why Selling:</span>{' '}
+                        <span className="text-cyan-400 italic">{selectedLead.form_data.whySelling}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Buttons */}
@@ -2224,6 +2297,40 @@ export default function LandLeadsAdminPage() {
                   />
                 </div>
               </div>
+
+              {/* Quick Questionnaire Summary */}
+              {selectedLead.form_data && (
+                <div className="bg-slate-900/50 border border-slate-700/50 rounded p-3 mt-3">
+                  <div className="flex flex-wrap gap-3 text-xs">
+                    {selectedLead.form_data.homeOnProperty && (
+                      <span className={`px-2 py-1 rounded ${selectedLead.form_data.homeOnProperty === 'no' ? 'bg-green-900/50 text-green-400' : 'bg-yellow-900/50 text-yellow-400'}`}>
+                        Home: {selectedLead.form_data.homeOnProperty.toUpperCase()}
+                      </span>
+                    )}
+                    {selectedLead.form_data.propertyListed && (
+                      <span className={`px-2 py-1 rounded ${selectedLead.form_data.propertyListed === 'no' ? 'bg-green-900/50 text-green-400' : 'bg-yellow-900/50 text-yellow-400'}`}>
+                        Listed: {selectedLead.form_data.propertyListed.toUpperCase()}
+                      </span>
+                    )}
+                    {selectedLead.form_data.isInherited && (
+                      <span className={`px-2 py-1 rounded ${selectedLead.form_data.isInherited === 'yes' ? 'bg-purple-900/50 text-purple-400' : 'bg-slate-700 text-slate-400'}`}>
+                        Inherited: {selectedLead.form_data.isInherited.toUpperCase()}
+                      </span>
+                    )}
+                    {selectedLead.form_data.ownedFourYears && (
+                      <span className={`px-2 py-1 rounded ${selectedLead.form_data.ownedFourYears === 'yes' ? 'bg-green-900/50 text-green-400' : 'bg-yellow-900/50 text-yellow-400'}`}>
+                        4+ Yrs: {selectedLead.form_data.ownedFourYears.toUpperCase()}
+                      </span>
+                    )}
+                  </div>
+                  {selectedLead.form_data.whySelling && (
+                    <div className="mt-2 pt-2 border-t border-slate-700/50 text-xs">
+                      <span className="text-slate-500">Why Selling:</span>{' '}
+                      <span className="text-cyan-400 italic">{selectedLead.form_data.whySelling}</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Price Input for Marketplace Leads */}
