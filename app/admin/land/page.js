@@ -36,70 +36,155 @@ export default function LandLeadsAdminPage() {
   const [loggingActivity, setLoggingActivity] = useState(false);
   const [leadActivities, setLeadActivities] = useState({}); // leadId -> activities array
   const [rundownFilter, setRundownFilter] = useState(null); // For Daily Rundown tile clicks
+  const [toast, setToast] = useState(null); // { message, type, leadName }
+  const [actionInProgress, setActionInProgress] = useState(null); // { leadId, action }
+  const [completedToday, setCompletedToday] = useState(new Set()); // Lead IDs completed today
 
-  // Temperature calculation based on lead age and activity
-  const calculateTemperature = (lead) => {
-    const now = new Date();
-    const createdAt = new Date(lead.created_at);
-    const lastActivity = lead.last_activity_at ? new Date(lead.last_activity_at) : null;
-    const hoursSinceCreation = (now - createdAt) / (1000 * 60 * 60);
-    const daysSinceActivity = lastActivity ? (now - lastActivity) / (1000 * 60 * 60 * 24) : null;
-
-    // CRITICAL: New lead < 1 hour
-    if (hoursSinceCreation < 1) return 'CRITICAL';
-    // HOT: New lead 1-4 hours OR has scheduled action due today
-    if (hoursSinceCreation < 4) return 'HOT';
-    // Check days since activity for older leads
-    if (daysSinceActivity !== null) {
-      if (daysSinceActivity < 2) return 'HOT';
-      if (daysSinceActivity < 7) return 'WARM';
-      if (daysSinceActivity < 14) return 'COOLING';
-      return 'COLD';
-    }
-    // No activity yet - use creation time
-    const daysSinceCreation = hoursSinceCreation / 24;
-    if (daysSinceCreation < 1) return 'HOT';
-    if (daysSinceCreation < 7) return 'WARM';
-    if (daysSinceCreation < 14) return 'COOLING';
-    return 'COLD';
+  // Show toast notification
+  const showToast = (message, type = 'success', leadName = '') => {
+    setToast({ message, type, leadName });
+    setTimeout(() => setToast(null), 3000);
   };
 
-  // Temperature display config
-  const TEMPERATURE_CONFIG = {
-    CRITICAL: { color: 'red', bg: 'from-red-500/30 to-red-600/30', border: 'border-red-500', text: 'text-red-400', pulse: true },
-    HOT: { color: 'orange', bg: 'from-orange-500/20 to-orange-600/20', border: 'border-orange-500/50', text: 'text-orange-400', pulse: false },
-    WARM: { color: 'yellow', bg: 'from-yellow-500/20 to-yellow-600/20', border: 'border-yellow-500/50', text: 'text-yellow-400', pulse: false },
-    COOLING: { color: 'blue', bg: 'from-blue-500/20 to-blue-600/20', border: 'border-blue-500/50', text: 'text-blue-400', pulse: false },
-    COLD: { color: 'slate', bg: 'from-slate-500/20 to-slate-600/20', border: 'border-slate-500/50', text: 'text-slate-400', pulse: false }
+  // Mark lead as done for today (removes from daily rundown)
+  const markDoneForToday = async (leadId, outcome = 'SPOKE') => {
+    const lead = allLeads.find(l => l.id === leadId);
+    const leadName = lead?.full_name || lead?.name || 'Lead';
+
+    setActionInProgress({ leadId, action: 'done' });
+
+    try {
+      // Log the activity
+      const { data: { user } } = await supabase.auth.getUser();
+
+      await supabase.from('activities').insert({
+        lead_id: leadId,
+        user_id: user?.id,
+        activity_type: 'CALL',
+        outcome: outcome,
+        created_at: new Date().toISOString()
+      });
+
+      if (user) {
+        await supabase.from('lead_notes').insert({
+          lead_id: leadId,
+          user_id: user.id,
+          content: `[DAILY RUNDOWN] Completed - ${outcome}`,
+          mentioned_users: []
+        });
+      }
+
+      // Update lead's last activity
+      await supabase.from('leads').update({
+        last_activity_at: new Date().toISOString()
+      }).eq('id', leadId);
+
+      // Update local state
+      setAllLeads(prev => prev.map(l =>
+        l.id === leadId ? { ...l, last_activity_at: new Date().toISOString() } : l
+      ));
+
+      // Add to completed set (removes from daily rundown)
+      setCompletedToday(prev => new Set([...prev, leadId]));
+
+      showToast('Cleared from today\'s list', 'success', leadName);
+
+    } catch (err) {
+      console.error('markDoneForToday error:', err);
+      showToast('Error: ' + err.message, 'error', leadName);
+    } finally {
+      setActionInProgress(null);
+    }
+  };
+
+  // Simple lead status helper
+  const getLeadStatus = (lead) => {
+    const status = (lead.pipeline_status || lead.status || 'new').toUpperCase();
+    // Map to simple categories
+    if (status === 'NEW' || status === 'ATTEMPTING') return 'NEW';
+    if (status === 'CONTACTED' || status === 'QUALIFYING') return 'CONTACTED';
+    if (['OFFER_MADE', 'NEGOTIATING', 'UNDER_CONTRACT'].includes(status)) return 'WORKING';
+    if (status === 'NURTURE' || status === 'LONG_TERM') return 'LONG_TERM';
+    if (status === 'CLOSED') return 'CLOSED';
+    if (status === 'DEAD') return 'DEAD';
+    return 'NEW';
+  };
+
+  // How long ago helper
+  const timeAgo = (date) => {
+    if (!date) return '';
+    const mins = Math.floor((new Date() - new Date(date)) / 60000);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
   };
 
   // Quick log activity (one-tap)
   const quickLogActivity = async (leadId, outcome) => {
     const lead = allLeads.find(l => l.id === leadId);
-    const { data: { user } } = await supabase.auth.getUser();
+    const leadName = lead?.full_name || lead?.name || 'Lead';
 
-    // Log to lead_notes
-    if (user) {
-      await supabase.from('lead_notes').insert({
+    // Show immediate visual feedback
+    setActionInProgress({ leadId, action: outcome });
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+
+      // Try to log to activities table first
+      await supabase.from('activities').insert({
         lead_id: leadId,
-        user_id: user.id,
-        content: `[CALL] ${outcome}`,
-        mentioned_users: []
+        user_id: user?.id,
+        activity_type: 'CALL',
+        outcome: outcome,
+        created_at: new Date().toISOString()
       });
+
+      // Also log to lead_notes as backup
+      if (user) {
+        await supabase.from('lead_notes').insert({
+          lead_id: leadId,
+          user_id: user.id,
+          content: `[CALL] ${outcome}`,
+          mentioned_users: []
+        });
+      }
+
+      // Update lead
+      const updates = {
+        last_activity_at: new Date().toISOString(),
+        touch_count: (lead?.touch_count || 0) + 1,
+        call_count: (lead?.call_count || 0) + 1
+      };
+
+      if (outcome === 'SPOKE' && (!lead?.status || lead.status === 'new')) {
+        updates.status = 'contacted';
+        updates.pipeline_status = 'CONTACTED';
+      }
+
+      await supabase.from('leads').update(updates).eq('id', leadId);
+
+      // Update local state
+      setAllLeads(prev => prev.map(l =>
+        l.id === leadId ? { ...l, ...updates } : l
+      ));
+
+      // Show success toast
+      const outcomeLabels = {
+        'NO_ANSWER': 'No Answer logged',
+        'LEFT_VM': 'Voicemail logged',
+        'SPOKE': 'Call completed',
+        'TEXTED': 'Text logged'
+      };
+      showToast(outcomeLabels[outcome] || 'Activity logged', 'success', leadName);
+
+    } catch (err) {
+      console.error('quickLogActivity error:', err);
+      showToast('Error: ' + err.message, 'error', leadName);
+    } finally {
+      setActionInProgress(null);
     }
-
-    // Update lead based on outcome
-    const updates = { last_activity_at: new Date().toISOString() };
-    if (outcome === 'SPOKE' && (!lead?.status || lead.status === 'new')) {
-      updates.status = 'contacted';
-    }
-
-    await supabase.from('leads').update(updates).eq('id', leadId);
-
-    // Update local state
-    setAllLeads(allLeads.map(l =>
-      l.id === leadId ? { ...l, ...updates } : l
-    ));
   };
 
   // Pipeline status options
@@ -217,40 +302,51 @@ export default function LandLeadsAdminPage() {
     const lead = allLeads.find(l => l.id === leadId);
     const oldStatus = lead?.pipeline_status || lead?.status || 'NEW';
 
+    console.log('Updating status:', { leadId, oldStatus, newStatus });
+
+    // Update local state immediately for responsiveness
+    setAllLeads(prev => prev.map(l =>
+      l.id === leadId ? { ...l, pipeline_status: newStatus, status: newStatus.toLowerCase() } : l
+    ));
+
     // Use existing 'status' column and try pipeline_status if it exists
     const { error } = await supabase
       .from('leads')
       .update({
         status: newStatus.toLowerCase(),
-        pipeline_status: newStatus
+        pipeline_status: newStatus,
+        last_activity_at: new Date().toISOString()
       })
       .eq('id', leadId);
 
     if (error) {
+      console.log('Status update error (trying fallback):', error.message);
       // Fallback: just use status column if pipeline_status doesn't exist
-      await supabase
+      const { error: fallbackError } = await supabase
         .from('leads')
         .update({ status: newStatus.toLowerCase() })
         .eq('id', leadId);
+
+      if (fallbackError) {
+        console.error('Fallback also failed:', fallbackError);
+        alert('Failed to update status: ' + fallbackError.message);
+        return;
+      }
     }
 
-    // Try to log activity (silently fail if table doesn't exist)
+    console.log('Status updated successfully to:', newStatus);
+
+    // Try to log activity
     try {
-      await supabase.from('activity_log').insert({
+      await supabase.from('activities').insert({
         lead_id: leadId,
-        activity_type: 'STATUS_CHANGED',
-        old_status: oldStatus,
-        new_status: newStatus,
-        subject: `Status changed from ${oldStatus} to ${newStatus}`
+        activity_type: 'STATUS_CHANGE',
+        outcome: `${oldStatus} -> ${newStatus}`,
+        created_at: new Date().toISOString()
       });
     } catch (e) {
-      // activity_log table may not exist yet
+      // activities table may not exist yet
     }
-
-    // Update local state
-    setAllLeads(allLeads.map(l =>
-      l.id === leadId ? { ...l, pipeline_status: newStatus, status: newStatus.toLowerCase() } : l
-    ));
   };
 
   // Log activity (call, text, email, etc.)
@@ -1157,6 +1253,33 @@ export default function LandLeadsAdminPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
+      {/* Toast Notification */}
+      {toast && (
+        <div className={`fixed top-4 right-4 z-50 px-6 py-4 rounded-xl shadow-2xl transform transition-all duration-300 animate-slide-in ${
+          toast.type === 'success' ? 'bg-green-600 border border-green-400' : 'bg-red-600 border border-red-400'
+        }`}>
+          <div className="flex items-center gap-3">
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+              toast.type === 'success' ? 'bg-green-500' : 'bg-red-500'
+            }`}>
+              {toast.type === 'success' ? (
+                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : (
+                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              )}
+            </div>
+            <div>
+              <div className="font-bold text-white">{toast.leadName}</div>
+              <div className="text-sm text-white/90">{toast.message}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="bg-slate-800/50 backdrop-blur-sm border-b border-slate-700/50 px-6 py-4 sticky top-0 z-10">
         <div className="flex items-center justify-between">
@@ -1209,236 +1332,142 @@ export default function LandLeadsAdminPage() {
         {/* DAILY RUNDOWN TAB */}
         {activeTab === 'daily-rundown' && (
           <div className="space-y-6">
-            {/* Terminal-style Action Feed */}
-            <div className="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden font-mono">
-              <div className="bg-slate-800 px-4 py-2 border-b border-slate-700 flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-red-500"></div>
-                <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
-                <div className="w-3 h-3 rounded-full bg-green-500"></div>
-                <span className="ml-2 text-slate-400 text-sm">Daily Rundown - {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</span>
+            {/* Today's Action List */}
+            <div className="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden">
+              <div className="bg-slate-800 px-4 py-3 border-b border-slate-700 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                  <span className="font-semibold">Today's Actions - {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</span>
+                </div>
+                <span className="text-slate-400 text-sm">{completedToday.size} completed today</span>
               </div>
-              <div className="p-4 max-h-[300px] overflow-y-auto space-y-2">
+              <div className="divide-y divide-slate-800">
                 {(() => {
-                  // Build action items
-                  const actionItems = [];
-
-                  // Critical leads (new < 1 hour) - CALL IMMEDIATELY
-                  allLeads.filter(l => calculateTemperature(l) === 'CRITICAL').forEach(lead => {
-                    actionItems.push({
-                      priority: 0,
-                      type: 'CRITICAL',
-                      lead,
-                      action: 'CALL NOW',
-                      reason: 'New lead - call within 5 minutes'
+                  // Get leads that need action (NEW or haven't been contacted today)
+                  const actionLeads = allLeads
+                    .filter(l => {
+                      const status = getLeadStatus(l);
+                      // Show: NEW leads, CONTACTED leads not done today, WORKING leads
+                      return !completedToday.has(l.id) &&
+                             status !== 'DEAD' &&
+                             status !== 'CLOSED' &&
+                             status !== 'LONG_TERM';
+                    })
+                    .sort((a, b) => {
+                      // Sort: NEW first, then by created date
+                      const aStatus = getLeadStatus(a);
+                      const bStatus = getLeadStatus(b);
+                      if (aStatus === 'NEW' && bStatus !== 'NEW') return -1;
+                      if (bStatus === 'NEW' && aStatus !== 'NEW') return 1;
+                      return new Date(b.created_at) - new Date(a.created_at);
                     });
-                  });
 
-                  // Hot leads - need follow up today
-                  allLeads.filter(l => calculateTemperature(l) === 'HOT' && calculateTemperature(l) !== 'CRITICAL').forEach(lead => {
-                    actionItems.push({
-                      priority: 1,
-                      type: 'HOT',
-                      lead,
-                      action: 'Follow up call',
-                      reason: 'Hot lead - follow up today'
-                    });
-                  });
-
-                  // Offers out - check for response
-                  allLeads.filter(l => l.status === 'offer_made' || l.pipeline_status === 'OFFER_MADE').forEach(lead => {
-                    actionItems.push({
-                      priority: 2,
-                      type: 'OFFER',
-                      lead,
-                      action: 'Check offer status',
-                      reason: 'Offer pending response'
-                    });
-                  });
-
-                  // Going cold - re-engage
-                  allLeads.filter(l => calculateTemperature(l) === 'COOLING').forEach(lead => {
-                    actionItems.push({
-                      priority: 3,
-                      type: 'COOLING',
-                      lead,
-                      action: 'Re-engage',
-                      reason: 'Going cold - needs attention'
-                    });
-                  });
-
-                  // Sort by priority
-                  actionItems.sort((a, b) => a.priority - b.priority);
-
-                  if (actionItems.length === 0) {
+                  if (actionLeads.length === 0) {
                     return (
-                      <div className="text-slate-500 text-sm">
-                        <span className="text-green-400">$</span> No urgent actions today. All leads are on track.
+                      <div className="p-8 text-center text-slate-400">
+                        All caught up! No pending actions.
                       </div>
                     );
                   }
 
-                  return actionItems.slice(0, 15).map((item, idx) => {
-                    const colors = {
-                      CRITICAL: 'text-red-400 bg-red-500/20 border-red-500/50',
-                      HOT: 'text-orange-400 bg-orange-500/20 border-orange-500/50',
-                      OFFER: 'text-purple-400 bg-purple-500/20 border-purple-500/50',
-                      COOLING: 'text-blue-400 bg-blue-500/20 border-blue-500/50'
+                  return actionLeads.slice(0, 20).map((lead) => {
+                    const status = getLeadStatus(lead);
+                    const isLoading = actionInProgress?.leadId === lead.id;
+                    const statusColors = {
+                      NEW: 'bg-green-500/20 text-green-400 border-green-500/50',
+                      CONTACTED: 'bg-blue-500/20 text-blue-400 border-blue-500/50',
+                      WORKING: 'bg-purple-500/20 text-purple-400 border-purple-500/50'
                     };
-                    const color = colors[item.type] || 'text-slate-400';
 
                     return (
-                      <div key={idx} className="flex items-center gap-3 text-sm group">
-                        <span className="text-green-400">$</span>
-                        <span className={`px-2 py-0.5 rounded border text-xs font-bold ${color}`}>
-                          {item.type}
-                        </span>
-                        <span className="text-white font-semibold px-2 py-0.5 bg-slate-800 rounded border border-slate-600">
-                          {item.lead.full_name || item.lead.name || 'Unknown'}
-                        </span>
-                        <span className="text-slate-400">-</span>
-                        <span className="text-yellow-300">{item.action}</span>
-                        <span className="text-slate-500 text-xs hidden group-hover:inline">({item.reason})</span>
-                        <div className="ml-auto flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            onClick={() => quickLogActivity(item.lead.id, 'NO_ANSWER')}
-                            className="px-2 py-0.5 bg-slate-700 hover:bg-slate-600 rounded text-xs"
-                          >
-                            NA
-                          </button>
-                          <button
-                            onClick={() => quickLogActivity(item.lead.id, 'SPOKE')}
-                            className="px-2 py-0.5 bg-green-600 hover:bg-green-500 rounded text-xs"
-                          >
-                            Done
-                          </button>
-                          <button
-                            onClick={() => {
-                              setSelectedLead(item.lead);
-                              setDetailsModalOpen(true);
-                            }}
-                            className="px-2 py-0.5 bg-blue-600 hover:bg-blue-500 rounded text-xs"
-                          >
-                            View
-                          </button>
+                      <div key={lead.id} className={`p-4 hover:bg-slate-800/50 transition-all ${isLoading ? 'opacity-50' : ''}`}>
+                        <div className="flex items-center gap-4">
+                          {/* Status + Name */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className={`px-2 py-0.5 rounded border text-xs font-bold ${statusColors[status] || 'bg-slate-500/20 text-slate-400'}`}>
+                                {status}
+                              </span>
+                              <span className="font-semibold text-white truncate">
+                                {lead.full_name || lead.name || 'Unknown'}
+                              </span>
+                              <span className="text-slate-500 text-xs">
+                                {timeAgo(lead.created_at)}
+                              </span>
+                            </div>
+                            <div className="text-sm text-slate-400">
+                              {lead.property_county || lead.county}, {lead.property_state || lead.state} - {lead.acres || lead.acreage || '?'} acres
+                            </div>
+                            <div className="text-sm text-slate-500">
+                              {lead.phone || 'No phone'}
+                            </div>
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => quickLogActivity(lead.id, 'NO_ANSWER')}
+                              disabled={isLoading}
+                              className="px-3 py-2 bg-slate-700 hover:bg-slate-600 active:scale-95 rounded text-sm font-medium transition-all disabled:opacity-50"
+                            >
+                              No Answer
+                            </button>
+                            <button
+                              onClick={() => {
+                                markDoneForToday(lead.id, 'SPOKE');
+                                if (getLeadStatus(lead) === 'NEW') {
+                                  updateLeadStatus(lead.id, 'CONTACTED');
+                                }
+                              }}
+                              disabled={isLoading}
+                              className="px-3 py-2 bg-green-600 hover:bg-green-500 active:scale-95 rounded text-sm font-medium transition-all disabled:opacity-50"
+                            >
+                              Spoke
+                            </button>
+                            <button
+                              onClick={() => updateLeadStatus(lead.id, 'NURTURE')}
+                              disabled={isLoading}
+                              className="px-3 py-2 bg-slate-700 hover:bg-yellow-600 active:scale-95 rounded text-sm font-medium transition-all disabled:opacity-50"
+                              title="Move to long-term follow up"
+                            >
+                              Later
+                            </button>
+                            <button
+                              onClick={() => {
+                                setSelectedLead(lead);
+                                setDetailsModalOpen(true);
+                              }}
+                              className="px-3 py-2 bg-blue-600 hover:bg-blue-500 active:scale-95 rounded text-sm font-medium transition-all"
+                            >
+                              View
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );
                   });
                 })()}
-                <div className="text-slate-600 text-sm mt-2">
-                  <span className="text-green-400">$</span> <span className="animate-pulse">_</span>
-                </div>
               </div>
             </div>
 
-            {/* Quick Stats Row */}
-            <div className="grid grid-cols-5 gap-3">
-              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-center">
-                <div className="text-2xl font-bold text-red-400">{allLeads.filter(l => calculateTemperature(l) === 'CRITICAL').length}</div>
-                <div className="text-xs text-red-300">Critical</div>
+            {/* Stats Row */}
+            <div className="grid grid-cols-4 gap-4">
+              <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 text-center">
+                <div className="text-3xl font-bold text-green-400">{allLeads.filter(l => getLeadStatus(l) === 'NEW').length}</div>
+                <div className="text-sm text-green-300">New - Need Contact</div>
               </div>
-              <div className="bg-orange-500/10 border border-orange-500/30 rounded-lg p-3 text-center">
-                <div className="text-2xl font-bold text-orange-400">{allLeads.filter(l => calculateTemperature(l) === 'HOT').length}</div>
-                <div className="text-xs text-orange-300">Hot</div>
+              <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 text-center">
+                <div className="text-3xl font-bold text-blue-400">{allLeads.filter(l => getLeadStatus(l) === 'CONTACTED').length}</div>
+                <div className="text-sm text-blue-300">Contacted</div>
               </div>
-              <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 text-center">
-                <div className="text-2xl font-bold text-yellow-400">{allLeads.filter(l => calculateTemperature(l) === 'WARM').length}</div>
-                <div className="text-xs text-yellow-300">Warm</div>
+              <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4 text-center">
+                <div className="text-3xl font-bold text-purple-400">{allLeads.filter(l => getLeadStatus(l) === 'WORKING').length}</div>
+                <div className="text-sm text-purple-300">Working Deals</div>
               </div>
-              <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-3 text-center">
-                <div className="text-2xl font-bold text-purple-400">{allLeads.filter(l => l.status === 'offer_made' || l.pipeline_status === 'OFFER_MADE').length}</div>
-                <div className="text-xs text-purple-300">Offers Out</div>
+              <div className="bg-slate-500/10 border border-slate-500/30 rounded-lg p-4 text-center">
+                <div className="text-3xl font-bold text-slate-400">{allLeads.filter(l => getLeadStatus(l) === 'LONG_TERM').length}</div>
+                <div className="text-sm text-slate-300">Long-Term</div>
               </div>
-              <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3 text-center">
-                <div className="text-2xl font-bold text-blue-400">{allLeads.filter(l => calculateTemperature(l) === 'COOLING').length}</div>
-                <div className="text-xs text-blue-300">Going Cold</div>
-              </div>
-            </div>
-
-            {/* Lead Cards Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-              {(() => {
-                // Sort leads by temperature priority
-                const tempOrder = { CRITICAL: 0, HOT: 1, WARM: 2, COOLING: 3, COLD: 4 };
-                const sortedLeads = [...allLeads]
-                  .filter(l => l.status !== 'dead' && l.pipeline_status !== 'DEAD')
-                  .sort((a, b) => tempOrder[calculateTemperature(a)] - tempOrder[calculateTemperature(b)]);
-
-                return sortedLeads.map((lead) => {
-                  const temp = calculateTemperature(lead);
-                  const tempConfig = TEMPERATURE_CONFIG[temp];
-
-                  return (
-                    <div
-                      key={lead.id}
-                      className={`bg-slate-800/50 border rounded-xl p-4 hover:shadow-lg transition-all ${tempConfig.border}`}
-                    >
-                      {/* Header */}
-                      <div className="flex items-start justify-between mb-3">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className={`px-2 py-0.5 rounded text-xs font-bold ${tempConfig.text} ${tempConfig.bg.replace('from-', 'bg-').split(' ')[0]}`}>
-                              {temp}
-                            </span>
-                            <span className="font-semibold text-white">
-                              {lead.full_name || lead.name || 'Unknown'}
-                            </span>
-                          </div>
-                          <div className="text-sm text-slate-400 mt-1">
-                            {lead.property_county || lead.county}, {lead.property_state || lead.state} - {lead.acres || lead.acreage || '?'} acres
-                          </div>
-                        </div>
-                        <select
-                          value={lead.pipeline_status || lead.status?.toUpperCase() || 'NEW'}
-                          onChange={(e) => updateLeadStatus(lead.id, e.target.value)}
-                          className="bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-white"
-                        >
-                          {PIPELINE_STATUSES.map(status => (
-                            <option key={status.value} value={status.value}>{status.label}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* Contact Info */}
-                      <div className="text-sm text-slate-400 mb-3">
-                        <div>{lead.phone || 'No phone'}</div>
-                        <div>{lead.email || 'No email'}</div>
-                      </div>
-
-                      {/* Quick Actions */}
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => quickLogActivity(lead.id, 'NO_ANSWER')}
-                          className="flex-1 px-2 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-xs text-slate-300"
-                        >
-                          No Answer
-                        </button>
-                        <button
-                          onClick={() => quickLogActivity(lead.id, 'LEFT_VM')}
-                          className="flex-1 px-2 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-xs text-slate-300"
-                        >
-                          Left VM
-                        </button>
-                        <button
-                          onClick={() => quickLogActivity(lead.id, 'SPOKE')}
-                          className="flex-1 px-2 py-1.5 bg-green-600 hover:bg-green-500 rounded text-xs text-white"
-                        >
-                          Spoke
-                        </button>
-                        <button
-                          onClick={() => {
-                            setSelectedLead(lead);
-                            setDetailsModalOpen(true);
-                          }}
-                          className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-xs text-white"
-                        >
-                          View
-                        </button>
-                      </div>
-                    </div>
-                  );
-                });
-              })()}
             </div>
           </div>
         )}
