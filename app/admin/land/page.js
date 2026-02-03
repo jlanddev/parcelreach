@@ -39,6 +39,21 @@ export default function LandLeadsAdminPage() {
   const [toast, setToast] = useState(null); // { message, type, leadName }
   const [actionInProgress, setActionInProgress] = useState(null); // { leadId, action }
   const [completedToday, setCompletedToday] = useState(new Set()); // Lead IDs completed today
+  const [recentActivity, setRecentActivity] = useState([]); // Live activity feed
+  const [lastUpdated, setLastUpdated] = useState(new Date());
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Add to activity feed
+  const addActivity = (leadName, action, type = 'success') => {
+    const activity = {
+      id: Date.now(),
+      leadName,
+      action,
+      type,
+      time: new Date()
+    };
+    setRecentActivity(prev => [activity, ...prev].slice(0, 10)); // Keep last 10
+  };
 
   // Show toast notification
   const showToast = (message, type = 'success', leadName = '') => {
@@ -119,6 +134,19 @@ export default function LandLeadsAdminPage() {
     if (hrs < 24) return `${hrs}h ago`;
     const days = Math.floor(hrs / 24);
     return `${days}d ago`;
+  };
+
+  // Open lead details modal and fetch notes
+  const openLeadDetails = async (lead) => {
+    // Fetch notes for this lead
+    const { data: notes } = await supabase
+      .from('lead_notes')
+      .select('*')
+      .eq('lead_id', lead.id)
+      .order('created_at', { ascending: false });
+
+    setSelectedLead({ ...lead, notes: notes || [] });
+    setDetailsModalOpen(true);
   };
 
   // Quick log activity (one-tap)
@@ -1433,10 +1461,7 @@ export default function LandLeadsAdminPage() {
                               Later
                             </button>
                             <button
-                              onClick={() => {
-                                setSelectedLead(lead);
-                                setDetailsModalOpen(true);
-                              }}
+                              onClick={() => openLeadDetails(lead)}
                               className="px-3 py-2 bg-blue-600 hover:bg-blue-500 active:scale-95 rounded text-sm font-medium transition-all"
                             >
                               View
@@ -1963,8 +1988,7 @@ export default function LandLeadsAdminPage() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          setSelectedLead(lead);
-                          setDetailsModalOpen(true);
+                          openLeadDetails(lead);
                         }}
                         className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold rounded-lg transition-colors"
                       >
@@ -2684,6 +2708,170 @@ export default function LandLeadsAdminPage() {
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* Activity Log & Calendar */}
+            <div className="mt-6 border-t border-slate-700 pt-6">
+              <h4 className="text-lg font-bold mb-4">Activity Log</h4>
+
+              {/* Quick Log Buttons */}
+              <div className="flex gap-2 mb-4">
+                <button
+                  onClick={async () => {
+                    const { data: { user } } = await supabase.auth.getUser();
+                    await supabase.from('lead_notes').insert({
+                      lead_id: selectedLead.id,
+                      user_id: user?.id,
+                      content: '[CALL] No Answer',
+                      mentioned_users: []
+                    });
+                    await supabase.from('leads').update({ last_activity_at: new Date().toISOString() }).eq('id', selectedLead.id);
+                    showToast('No Answer logged', 'success', selectedLead.full_name || selectedLead.name);
+                    // Refresh notes
+                    const { data: notes } = await supabase.from('lead_notes').select('*').eq('lead_id', selectedLead.id).order('created_at', { ascending: false });
+                    setSelectedLead({ ...selectedLead, notes });
+                  }}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 active:scale-95 rounded-lg text-sm font-medium transition-all"
+                >
+                  Log: No Answer
+                </button>
+                <button
+                  onClick={async () => {
+                    const { data: { user } } = await supabase.auth.getUser();
+                    await supabase.from('lead_notes').insert({
+                      lead_id: selectedLead.id,
+                      user_id: user?.id,
+                      content: '[CALL] Left Voicemail',
+                      mentioned_users: []
+                    });
+                    await supabase.from('leads').update({ last_activity_at: new Date().toISOString() }).eq('id', selectedLead.id);
+                    showToast('Voicemail logged', 'success', selectedLead.full_name || selectedLead.name);
+                    const { data: notes } = await supabase.from('lead_notes').select('*').eq('lead_id', selectedLead.id).order('created_at', { ascending: false });
+                    setSelectedLead({ ...selectedLead, notes });
+                  }}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 active:scale-95 rounded-lg text-sm font-medium transition-all"
+                >
+                  Log: Left VM
+                </button>
+                <button
+                  onClick={async () => {
+                    const { data: { user } } = await supabase.auth.getUser();
+                    await supabase.from('lead_notes').insert({
+                      lead_id: selectedLead.id,
+                      user_id: user?.id,
+                      content: '[CALL] Spoke with owner',
+                      mentioned_users: []
+                    });
+                    await supabase.from('leads').update({
+                      last_activity_at: new Date().toISOString(),
+                      status: 'contacted',
+                      pipeline_status: 'CONTACTED'
+                    }).eq('id', selectedLead.id);
+                    showToast('Call logged - Status updated to Contacted', 'success', selectedLead.full_name || selectedLead.name);
+                    const { data: notes } = await supabase.from('lead_notes').select('*').eq('lead_id', selectedLead.id).order('created_at', { ascending: false });
+                    setSelectedLead({ ...selectedLead, notes, status: 'contacted', pipeline_status: 'CONTACTED' });
+                  }}
+                  className="px-4 py-2 bg-green-600 hover:bg-green-500 active:scale-95 rounded-lg text-sm font-medium transition-all"
+                >
+                  Log: Spoke
+                </button>
+                <button
+                  onClick={async () => {
+                    const { data: { user } } = await supabase.auth.getUser();
+                    await supabase.from('lead_notes').insert({
+                      lead_id: selectedLead.id,
+                      user_id: user?.id,
+                      content: '[TEXT] Sent text message',
+                      mentioned_users: []
+                    });
+                    await supabase.from('leads').update({ last_activity_at: new Date().toISOString() }).eq('id', selectedLead.id);
+                    showToast('Text logged', 'success', selectedLead.full_name || selectedLead.name);
+                    const { data: notes } = await supabase.from('lead_notes').select('*').eq('lead_id', selectedLead.id).order('created_at', { ascending: false });
+                    setSelectedLead({ ...selectedLead, notes });
+                  }}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 active:scale-95 rounded-lg text-sm font-medium transition-all"
+                >
+                  Log: Text
+                </button>
+              </div>
+
+              {/* Add Note */}
+              <div className="flex gap-2 mb-4">
+                <input
+                  type="text"
+                  placeholder="Add a note..."
+                  id="newNoteInput"
+                  className="flex-1 px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  onKeyDown={async (e) => {
+                    if (e.key === 'Enter' && e.target.value.trim()) {
+                      const { data: { user } } = await supabase.auth.getUser();
+                      await supabase.from('lead_notes').insert({
+                        lead_id: selectedLead.id,
+                        user_id: user?.id,
+                        content: e.target.value,
+                        mentioned_users: []
+                      });
+                      e.target.value = '';
+                      showToast('Note added', 'success', selectedLead.full_name || selectedLead.name);
+                      const { data: notes } = await supabase.from('lead_notes').select('*').eq('lead_id', selectedLead.id).order('created_at', { ascending: false });
+                      setSelectedLead({ ...selectedLead, notes });
+                    }
+                  }}
+                />
+                <button
+                  onClick={async () => {
+                    const input = document.getElementById('newNoteInput');
+                    if (input && input.value.trim()) {
+                      const { data: { user } } = await supabase.auth.getUser();
+                      await supabase.from('lead_notes').insert({
+                        lead_id: selectedLead.id,
+                        user_id: user?.id,
+                        content: input.value,
+                        mentioned_users: []
+                      });
+                      input.value = '';
+                      showToast('Note added', 'success', selectedLead.full_name || selectedLead.name);
+                      const { data: notes } = await supabase.from('lead_notes').select('*').eq('lead_id', selectedLead.id).order('created_at', { ascending: false });
+                      setSelectedLead({ ...selectedLead, notes });
+                    }
+                  }}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium"
+                >
+                  Add
+                </button>
+              </div>
+
+              {/* Activity Timeline */}
+              <div className="bg-slate-900/50 rounded-lg border border-slate-700 max-h-64 overflow-y-auto">
+                {selectedLead.notes && selectedLead.notes.length > 0 ? (
+                  <div className="divide-y divide-slate-800">
+                    {selectedLead.notes.map((note, idx) => (
+                      <div key={idx} className="p-3 hover:bg-slate-800/50">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <p className="text-white text-sm">{note.content}</p>
+                          </div>
+                          <span className="text-xs text-slate-500 ml-2 whitespace-nowrap">
+                            {new Date(note.created_at).toLocaleDateString()} {new Date(note.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-8 text-center text-slate-500">
+                    No activity logged yet. Use the buttons above to log calls, texts, or notes.
+                  </div>
+                )}
+              </div>
+
+              {/* Lead Created Info */}
+              <div className="mt-4 text-sm text-slate-500">
+                Lead created: {new Date(selectedLead.created_at).toLocaleDateString()} at {new Date(selectedLead.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                {selectedLead.last_activity_at && (
+                  <span className="ml-4">Last activity: {timeAgo(selectedLead.last_activity_at)}</span>
+                )}
+              </div>
             </div>
 
             {/* Buttons */}
