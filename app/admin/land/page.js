@@ -25,6 +25,30 @@ export default function LandLeadsAdminPage() {
   const [isAssigning, setIsAssigning] = useState(false);
   const [leadAssignments, setLeadAssignments] = useState({}); // leadId -> array of {teamId, assigned_at}
 
+  // CRM States
+  const [activityModalOpen, setActivityModalOpen] = useState(false);
+  const [activityType, setActivityType] = useState('CALL_OUTBOUND');
+  const [activityLeadId, setActivityLeadId] = useState(null);
+  const [activityNotes, setActivityNotes] = useState('');
+  const [callOutcome, setCallOutcome] = useState('connected');
+  const [callbackDate, setCallbackDate] = useState('');
+  const [callbackTime, setCallbackTime] = useState('');
+  const [loggingActivity, setLoggingActivity] = useState(false);
+  const [leadActivities, setLeadActivities] = useState({}); // leadId -> activities array
+
+  // Pipeline status options
+  const PIPELINE_STATUSES = [
+    { value: 'NEW', label: 'New', color: 'green' },
+    { value: 'CONTACTED', label: 'Contacted', color: 'blue' },
+    { value: 'QUALIFYING', label: 'Qualifying', color: 'purple' },
+    { value: 'OFFER_MADE', label: 'Offer Made', color: 'orange' },
+    { value: 'NEGOTIATING', label: 'Negotiating', color: 'yellow' },
+    { value: 'UNDER_CONTRACT', label: 'Under Contract', color: 'cyan' },
+    { value: 'CLOSED', label: 'Closed', color: 'emerald' },
+    { value: 'DEAD', label: 'Dead', color: 'red' },
+    { value: 'NURTURE', label: 'Nurture', color: 'slate' }
+  ];
+
   // Create Lead states
   const mapContainer = useRef(null);
   const map = useRef(null);
@@ -120,6 +144,120 @@ export default function LandLeadsAdminPage() {
     setAllLeads(leadsData || []);
     setLeadAssignments(assignmentsByLead);
     setLoading(false);
+  };
+
+  // Update lead pipeline status
+  const updateLeadStatus = async (leadId, newStatus) => {
+    const lead = allLeads.find(l => l.id === leadId);
+    const oldStatus = lead?.pipeline_status || 'NEW';
+
+    const { error } = await supabase
+      .from('leads')
+      .update({
+        pipeline_status: newStatus,
+        last_activity_at: new Date().toISOString()
+      })
+      .eq('id', leadId);
+
+    if (!error) {
+      // Log status change
+      await supabase.from('activity_log').insert({
+        lead_id: leadId,
+        activity_type: 'STATUS_CHANGED',
+        old_status: oldStatus,
+        new_status: newStatus,
+        subject: `Status changed from ${oldStatus} to ${newStatus}`
+      });
+
+      // Update local state
+      setAllLeads(allLeads.map(l =>
+        l.id === leadId ? { ...l, pipeline_status: newStatus, last_activity_at: new Date().toISOString() } : l
+      ));
+    }
+  };
+
+  // Log activity (call, text, email, etc.)
+  const logActivity = async () => {
+    if (!activityLeadId) return;
+    setLoggingActivity(true);
+
+    try {
+      const activityData = {
+        lead_id: activityLeadId,
+        activity_type: activityType,
+        body: activityNotes,
+        call_outcome: activityType.includes('CALL') ? callOutcome : null,
+        activity_date: new Date().toISOString()
+      };
+
+      const { error } = await supabase.from('activity_log').insert(activityData);
+
+      if (!error) {
+        // Update lead's last_activity_at and contact count
+        const lead = allLeads.find(l => l.id === activityLeadId);
+        const updates = {
+          last_activity_at: new Date().toISOString(),
+          contact_count: (lead?.contact_count || 0) + 1
+        };
+
+        // If first contact, set first_contact_at
+        if (!lead?.first_contact_at) {
+          updates.first_contact_at = new Date().toISOString();
+        }
+
+        // If connected call, update last_contact_at
+        if (activityType.includes('CALL') && callOutcome === 'connected') {
+          updates.last_contact_at = new Date().toISOString();
+        }
+
+        // Auto-update status if still NEW
+        if (!lead?.pipeline_status || lead.pipeline_status === 'NEW') {
+          updates.pipeline_status = 'CONTACTED';
+        }
+
+        await supabase.from('leads').update(updates).eq('id', activityLeadId);
+
+        // Set callback if provided
+        if (callbackDate && callbackTime) {
+          const callbackDateTime = new Date(`${callbackDate}T${callbackTime}`);
+          await supabase.from('leads').update({
+            next_callback_at: callbackDateTime.toISOString(),
+            callback_notes: activityNotes
+          }).eq('id', activityLeadId);
+
+          // Create scheduled task
+          await supabase.from('scheduled_tasks').insert({
+            lead_id: activityLeadId,
+            task_type: 'callback',
+            title: `Callback: ${lead?.name || lead?.full_name || 'Lead'}`,
+            description: activityNotes,
+            due_at: callbackDateTime.toISOString(),
+            priority: 'high'
+          });
+        }
+
+        // Refresh data
+        fetchAllData();
+
+        // Reset form
+        setActivityModalOpen(false);
+        setActivityNotes('');
+        setCallbackDate('');
+        setCallbackTime('');
+        setActivityLeadId(null);
+      }
+    } catch (err) {
+      console.error('Error logging activity:', err);
+    }
+
+    setLoggingActivity(false);
+  };
+
+  // Quick action to open activity modal
+  const openActivityModal = (leadId, type) => {
+    setActivityLeadId(leadId);
+    setActivityType(type);
+    setActivityModalOpen(true);
   };
 
   const handleViewDashboard = (orgId) => {
@@ -1168,9 +1306,30 @@ export default function LandLeadsAdminPage() {
                           </span>
                         )}
                       </div>
-                      <span className="px-2 py-1 bg-green-500/20 text-green-400 text-xs font-semibold rounded whitespace-nowrap ml-2">
-                        NEW
-                      </span>
+                      <select
+                        value={lead.pipeline_status || 'NEW'}
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          updateLeadStatus(lead.id, e.target.value);
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        className={`px-2 py-1 text-xs font-semibold rounded cursor-pointer border-0 focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                          (lead.pipeline_status || 'NEW') === 'NEW' ? 'bg-green-500/20 text-green-400' :
+                          lead.pipeline_status === 'CONTACTED' ? 'bg-blue-500/20 text-blue-400' :
+                          lead.pipeline_status === 'QUALIFYING' ? 'bg-purple-500/20 text-purple-400' :
+                          lead.pipeline_status === 'OFFER_MADE' ? 'bg-orange-500/20 text-orange-400' :
+                          lead.pipeline_status === 'NEGOTIATING' ? 'bg-yellow-500/20 text-yellow-400' :
+                          lead.pipeline_status === 'UNDER_CONTRACT' ? 'bg-cyan-500/20 text-cyan-400' :
+                          lead.pipeline_status === 'CLOSED' ? 'bg-emerald-500/20 text-emerald-400' :
+                          lead.pipeline_status === 'DEAD' ? 'bg-red-500/20 text-red-400' :
+                          lead.pipeline_status === 'NURTURE' ? 'bg-slate-500/20 text-slate-400' :
+                          'bg-green-500/20 text-green-400'
+                        }`}
+                      >
+                        {PIPELINE_STATUSES.map(status => (
+                          <option key={status.value} value={status.value}>{status.label}</option>
+                        ))}
+                      </select>
                     </div>
 
                     {/* Property Location */}
@@ -1368,8 +1527,80 @@ export default function LandLeadsAdminPage() {
                       )}
                     </div>
 
+                    {/* Quick CRM Actions */}
+                    <div className="mt-3 pt-3 border-t border-slate-700/50">
+                      <div className="flex gap-1 mb-2">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openActivityModal(lead.id, 'CALL_OUTBOUND');
+                          }}
+                          title="Log Call"
+                          className="flex-1 px-2 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                          </svg>
+                          Call
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openActivityModal(lead.id, 'TEXT_SENT');
+                          }}
+                          title="Log Text"
+                          className="flex-1 px-2 py-1.5 bg-green-600/20 hover:bg-green-600/40 text-green-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                          </svg>
+                          Text
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openActivityModal(lead.id, 'EMAIL_SENT');
+                          }}
+                          title="Log Email"
+                          className="flex-1 px-2 py-1.5 bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                          </svg>
+                          Email
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openActivityModal(lead.id, 'NOTE_ADDED');
+                          }}
+                          title="Add Note"
+                          className="flex-1 px-2 py-1.5 bg-slate-600/20 hover:bg-slate-600/40 text-slate-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                          Note
+                        </button>
+                      </div>
+                      {/* Last Activity Indicator */}
+                      {lead.last_activity_at && (
+                        <div className="text-xs text-slate-500 mb-2">
+                          Last activity: {new Date(lead.last_activity_at).toLocaleDateString()} at {new Date(lead.last_activity_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                        </div>
+                      )}
+                      {lead.next_callback_at && new Date(lead.next_callback_at) > new Date() && (
+                        <div className="text-xs text-orange-400 mb-2 flex items-center gap-1">
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          Callback: {new Date(lead.next_callback_at).toLocaleDateString()} at {new Date(lead.next_callback_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                        </div>
+                      )}
+                    </div>
+
                     {/* Actions */}
-                    <div className="mt-4 pt-4 border-t border-slate-700/50 flex gap-2">
+                    <div className="mt-2 pt-2 border-t border-slate-700/50 flex gap-2">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -2676,6 +2907,168 @@ export default function LandLeadsAdminPage() {
                     </svg>
                     Attach Map
                   </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Activity Modal */}
+      {activityModalOpen && activityLeadId && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => {
+            setActivityModalOpen(false);
+            setActivityLeadId(null);
+            setActivityNotes('');
+            setCallbackDate('');
+            setCallbackTime('');
+          }}
+        >
+          <div
+            className="bg-slate-800 rounded-xl border border-slate-700 max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
+              {activityType === 'CALL_OUTBOUND' && (
+                <>
+                  <svg className="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                  </svg>
+                  Log Call
+                </>
+              )}
+              {activityType === 'TEXT_SENT' && (
+                <>
+                  <svg className="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  </svg>
+                  Log Text
+                </>
+              )}
+              {activityType === 'EMAIL_SENT' && (
+                <>
+                  <svg className="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                  </svg>
+                  Log Email
+                </>
+              )}
+              {activityType === 'NOTE_ADDED' && (
+                <>
+                  <svg className="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                  Add Note
+                </>
+              )}
+            </h3>
+
+            {/* Lead Info */}
+            {(() => {
+              const lead = allLeads.find(l => l.id === activityLeadId);
+              return lead && (
+                <div className="mb-4 p-3 bg-slate-900/50 rounded-lg text-sm">
+                  <div className="font-semibold text-white">{lead.name || lead.full_name || 'Unknown'}</div>
+                  <div className="text-slate-400">{lead.phone || 'No phone'}</div>
+                  <div className="text-slate-500 text-xs">
+                    {lead.property_county || lead.county}, {lead.property_state || lead.state} - {lead.acres || lead.acreage || '?'} acres
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Call Outcome (for call types) */}
+            {activityType.includes('CALL') && (
+              <div className="mb-4">
+                <label className="block text-sm font-semibold text-slate-300 mb-2">Call Outcome</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { value: 'connected', label: 'Connected', color: 'green' },
+                    { value: 'no_answer', label: 'No Answer', color: 'yellow' },
+                    { value: 'voicemail', label: 'Voicemail', color: 'blue' },
+                    { value: 'wrong_number', label: 'Wrong Number', color: 'red' }
+                  ].map(outcome => (
+                    <button
+                      key={outcome.value}
+                      onClick={() => setCallOutcome(outcome.value)}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                        callOutcome === outcome.value
+                          ? `bg-${outcome.color}-600 text-white`
+                          : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                      }`}
+                    >
+                      {outcome.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Notes */}
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-slate-300 mb-2">
+                {activityType === 'NOTE_ADDED' ? 'Note' : 'Notes (optional)'}
+              </label>
+              <textarea
+                value={activityNotes}
+                onChange={(e) => setActivityNotes(e.target.value)}
+                placeholder={activityType === 'NOTE_ADDED' ? 'Enter your note...' : 'What was discussed?'}
+                className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 resize-none"
+                rows={3}
+              />
+            </div>
+
+            {/* Schedule Callback */}
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-slate-300 mb-2">Schedule Callback (optional)</label>
+              <div className="flex gap-2">
+                <input
+                  type="date"
+                  value={callbackDate}
+                  onChange={(e) => setCallbackDate(e.target.value)}
+                  min={new Date().toISOString().split('T')[0]}
+                  className="flex-1 px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                />
+                <input
+                  type="time"
+                  value={callbackTime}
+                  onChange={(e) => setCallbackTime(e.target.value)}
+                  className="w-28 px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
+            </div>
+
+            {/* Buttons */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setActivityModalOpen(false);
+                  setActivityLeadId(null);
+                  setActivityNotes('');
+                  setCallbackDate('');
+                  setCallbackTime('');
+                }}
+                className="flex-1 px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-600 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={logActivity}
+                disabled={loggingActivity || (activityType === 'NOTE_ADDED' && !activityNotes.trim())}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-semibold flex items-center justify-center gap-2"
+              >
+                {loggingActivity ? (
+                  <>
+                    <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Saving...
+                  </>
+                ) : (
+                  'Log Activity'
                 )}
               </button>
             </div>
