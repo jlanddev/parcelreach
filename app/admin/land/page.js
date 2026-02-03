@@ -149,18 +149,27 @@ export default function LandLeadsAdminPage() {
   // Update lead pipeline status
   const updateLeadStatus = async (leadId, newStatus) => {
     const lead = allLeads.find(l => l.id === leadId);
-    const oldStatus = lead?.pipeline_status || 'NEW';
+    const oldStatus = lead?.pipeline_status || lead?.status || 'NEW';
 
+    // Use existing 'status' column and try pipeline_status if it exists
     const { error } = await supabase
       .from('leads')
       .update({
-        pipeline_status: newStatus,
-        last_activity_at: new Date().toISOString()
+        status: newStatus.toLowerCase(),
+        pipeline_status: newStatus
       })
       .eq('id', leadId);
 
-    if (!error) {
-      // Log status change
+    if (error) {
+      // Fallback: just use status column if pipeline_status doesn't exist
+      await supabase
+        .from('leads')
+        .update({ status: newStatus.toLowerCase() })
+        .eq('id', leadId);
+    }
+
+    // Try to log activity (silently fail if table doesn't exist)
+    try {
       await supabase.from('activity_log').insert({
         lead_id: leadId,
         activity_type: 'STATUS_CHANGED',
@@ -168,12 +177,14 @@ export default function LandLeadsAdminPage() {
         new_status: newStatus,
         subject: `Status changed from ${oldStatus} to ${newStatus}`
       });
-
-      // Update local state
-      setAllLeads(allLeads.map(l =>
-        l.id === leadId ? { ...l, pipeline_status: newStatus, last_activity_at: new Date().toISOString() } : l
-      ));
+    } catch (e) {
+      // activity_log table may not exist yet
     }
+
+    // Update local state
+    setAllLeads(allLeads.map(l =>
+      l.id === leadId ? { ...l, pipeline_status: newStatus, status: newStatus.toLowerCase() } : l
+    ));
   };
 
   // Log activity (call, text, email, etc.)
@@ -182,70 +193,55 @@ export default function LandLeadsAdminPage() {
     setLoggingActivity(true);
 
     try {
-      const activityData = {
-        lead_id: activityLeadId,
-        activity_type: activityType,
-        body: activityNotes,
-        call_outcome: activityType.includes('CALL') ? callOutcome : null,
-        activity_date: new Date().toISOString()
-      };
+      const lead = allLeads.find(l => l.id === activityLeadId);
 
-      const { error } = await supabase.from('activity_log').insert(activityData);
-
-      if (!error) {
-        // Update lead's last_activity_at and contact count
-        const lead = allLeads.find(l => l.id === activityLeadId);
-        const updates = {
-          last_activity_at: new Date().toISOString(),
-          contact_count: (lead?.contact_count || 0) + 1
-        };
-
-        // If first contact, set first_contact_at
-        if (!lead?.first_contact_at) {
-          updates.first_contact_at = new Date().toISOString();
-        }
-
-        // If connected call, update last_contact_at
-        if (activityType.includes('CALL') && callOutcome === 'connected') {
-          updates.last_contact_at = new Date().toISOString();
-        }
-
-        // Auto-update status if still NEW
-        if (!lead?.pipeline_status || lead.pipeline_status === 'NEW') {
-          updates.pipeline_status = 'CONTACTED';
-        }
-
-        await supabase.from('leads').update(updates).eq('id', activityLeadId);
-
-        // Set callback if provided
-        if (callbackDate && callbackTime) {
-          const callbackDateTime = new Date(`${callbackDate}T${callbackTime}`);
-          await supabase.from('leads').update({
-            next_callback_at: callbackDateTime.toISOString(),
-            callback_notes: activityNotes
-          }).eq('id', activityLeadId);
-
-          // Create scheduled task
-          await supabase.from('scheduled_tasks').insert({
-            lead_id: activityLeadId,
-            task_type: 'callback',
-            title: `Callback: ${lead?.name || lead?.full_name || 'Lead'}`,
-            description: activityNotes,
-            due_at: callbackDateTime.toISOString(),
-            priority: 'high'
-          });
-        }
-
-        // Refresh data
-        fetchAllData();
-
-        // Reset form
-        setActivityModalOpen(false);
-        setActivityNotes('');
-        setCallbackDate('');
-        setCallbackTime('');
-        setActivityLeadId(null);
+      // Try to log to activity_log table (may not exist yet)
+      try {
+        await supabase.from('activity_log').insert({
+          lead_id: activityLeadId,
+          activity_type: activityType,
+          body: activityNotes,
+          call_outcome: activityType.includes('CALL') ? callOutcome : null,
+          activity_date: new Date().toISOString()
+        });
+      } catch (e) {
+        // Table may not exist - continue anyway
       }
+
+      // Also add to lead_notes as a fallback
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user && activityNotes) {
+        await supabase.from('lead_notes').insert({
+          lead_id: activityLeadId,
+          user_id: user.id,
+          content: `[${activityType}] ${activityNotes}${activityType.includes('CALL') ? ` (${callOutcome})` : ''}`,
+          mentioned_users: []
+        });
+      }
+
+      // Update lead status if still NEW
+      if (!lead?.pipeline_status || lead.pipeline_status === 'NEW' || lead.status === 'new') {
+        await supabase.from('leads').update({ status: 'contacted' }).eq('id', activityLeadId);
+      }
+
+      // Update local state
+      setAllLeads(allLeads.map(l =>
+        l.id === activityLeadId ? {
+          ...l,
+          status: (!lead?.status || lead.status === 'new') ? 'contacted' : l.status,
+          pipeline_status: (!lead?.pipeline_status || lead.pipeline_status === 'NEW') ? 'CONTACTED' : l.pipeline_status
+        } : l
+      ));
+
+      // Refresh data
+      fetchAllData();
+
+      // Reset form
+      setActivityModalOpen(false);
+      setActivityNotes('');
+      setCallbackDate('');
+      setCallbackTime('');
+      setActivityLeadId(null);
     } catch (err) {
       console.error('Error logging activity:', err);
     }
