@@ -2865,6 +2865,82 @@ export default function LandLeadsAdminPage() {
                 )}
               </div>
 
+              {/* Calendar View */}
+              <div className="mt-6">
+                <h4 className="text-lg font-bold mb-3">Activity Calendar</h4>
+                <div className="bg-slate-900/50 rounded-lg border border-slate-700 p-4">
+                  {(() => {
+                    const today = new Date();
+                    const year = today.getFullYear();
+                    const month = today.getMonth();
+                    const firstDay = new Date(year, month, 1).getDay();
+                    const daysInMonth = new Date(year, month + 1, 0).getDate();
+                    const monthName = today.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+                    // Get activity dates from notes
+                    const activityDates = new Set();
+                    if (selectedLead.notes) {
+                      selectedLead.notes.forEach(note => {
+                        const d = new Date(note.created_at);
+                        if (d.getMonth() === month && d.getFullYear() === year) {
+                          activityDates.add(d.getDate());
+                        }
+                      });
+                    }
+                    // Add created date
+                    const createdDate = new Date(selectedLead.created_at);
+                    if (createdDate.getMonth() === month && createdDate.getFullYear() === year) {
+                      activityDates.add(createdDate.getDate());
+                    }
+
+                    const days = [];
+                    // Empty cells before first day
+                    for (let i = 0; i < firstDay; i++) {
+                      days.push(<div key={`empty-${i}`} className="h-8"></div>);
+                    }
+                    // Days of month
+                    for (let day = 1; day <= daysInMonth; day++) {
+                      const isToday = day === today.getDate();
+                      const hasActivity = activityDates.has(day);
+                      days.push(
+                        <div
+                          key={day}
+                          className={`h-8 flex items-center justify-center text-sm rounded ${
+                            isToday ? 'bg-blue-600 text-white font-bold' :
+                            hasActivity ? 'bg-green-600/30 text-green-400 font-semibold' :
+                            'text-slate-400'
+                          }`}
+                        >
+                          {day}
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <>
+                        <div className="text-center font-semibold mb-3">{monthName}</div>
+                        <div className="grid grid-cols-7 gap-1 text-center text-xs text-slate-500 mb-2">
+                          <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+                        </div>
+                        <div className="grid grid-cols-7 gap-1">
+                          {days}
+                        </div>
+                        <div className="flex gap-4 mt-3 text-xs">
+                          <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 rounded bg-blue-600"></div>
+                            <span className="text-slate-400">Today</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 rounded bg-green-600/30"></div>
+                            <span className="text-slate-400">Activity</span>
+                          </div>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+
               {/* Lead Created Info */}
               <div className="mt-4 text-sm text-slate-500">
                 Lead created: {new Date(selectedLead.created_at).toLocaleDateString()} at {new Date(selectedLead.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
