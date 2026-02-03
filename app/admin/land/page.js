@@ -40,6 +40,7 @@ export default function LandLeadsAdminPage() {
   const [actionInProgress, setActionInProgress] = useState(null); // { leadId, action }
   const [completedToday, setCompletedToday] = useState(new Set()); // Lead IDs completed today
   const [recentActivity, setRecentActivity] = useState([]); // Live activity feed
+  const [selectedCalendarDay, setSelectedCalendarDay] = useState(null); // For calendar day click
   const [lastUpdated, setLastUpdated] = useState(new Date());
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -329,6 +330,7 @@ export default function LandLeadsAdminPage() {
   const updateLeadStatus = async (leadId, newStatus) => {
     const lead = allLeads.find(l => l.id === leadId);
     const oldStatus = lead?.pipeline_status || lead?.status || 'NEW';
+    const leadName = lead?.full_name || lead?.name || 'Lead';
 
     console.log('Updating status:', { leadId, oldStatus, newStatus });
 
@@ -336,6 +338,11 @@ export default function LandLeadsAdminPage() {
     setAllLeads(prev => prev.map(l =>
       l.id === leadId ? { ...l, pipeline_status: newStatus, status: newStatus.toLowerCase() } : l
     ));
+
+    // Also update selectedLead if it's the same lead (for modal state)
+    if (selectedLead && selectedLead.id === leadId) {
+      setSelectedLead(prev => ({ ...prev, pipeline_status: newStatus, status: newStatus.toLowerCase() }));
+    }
 
     // Use existing 'status' column and try pipeline_status if it exists
     const { error } = await supabase
@@ -357,12 +364,13 @@ export default function LandLeadsAdminPage() {
 
       if (fallbackError) {
         console.error('Fallback also failed:', fallbackError);
-        alert('Failed to update status: ' + fallbackError.message);
+        showToast('Failed to update status', 'error', leadName);
         return;
       }
     }
 
     console.log('Status updated successfully to:', newStatus);
+    showToast(`Status: ${newStatus}`, 'success', leadName);
 
     // Try to log activity
     try {
@@ -2877,42 +2885,49 @@ export default function LandLeadsAdminPage() {
                     const daysInMonth = new Date(year, month + 1, 0).getDate();
                     const monthName = today.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
-                    // Get activity dates from notes
-                    const activityDates = new Set();
+                    // Get activity by date from notes
+                    const activityByDate = {};
                     if (selectedLead.notes) {
                       selectedLead.notes.forEach(note => {
                         const d = new Date(note.created_at);
                         if (d.getMonth() === month && d.getFullYear() === year) {
-                          activityDates.add(d.getDate());
+                          const dayNum = d.getDate();
+                          if (!activityByDate[dayNum]) activityByDate[dayNum] = [];
+                          activityByDate[dayNum].push(note);
                         }
                       });
                     }
-                    // Add created date
+                    // Add created date as event
                     const createdDate = new Date(selectedLead.created_at);
                     if (createdDate.getMonth() === month && createdDate.getFullYear() === year) {
-                      activityDates.add(createdDate.getDate());
+                      const dayNum = createdDate.getDate();
+                      if (!activityByDate[dayNum]) activityByDate[dayNum] = [];
+                      activityByDate[dayNum].unshift({ content: 'Lead Created', created_at: selectedLead.created_at, isCreated: true });
                     }
 
                     const days = [];
                     // Empty cells before first day
                     for (let i = 0; i < firstDay; i++) {
-                      days.push(<div key={`empty-${i}`} className="h-8"></div>);
+                      days.push(<div key={`empty-${i}`} className="h-10"></div>);
                     }
                     // Days of month
                     for (let day = 1; day <= daysInMonth; day++) {
                       const isToday = day === today.getDate();
-                      const hasActivity = activityDates.has(day);
+                      const hasActivity = activityByDate[day] && activityByDate[day].length > 0;
+                      const isSelected = selectedCalendarDay === day;
                       days.push(
-                        <div
+                        <button
                           key={day}
-                          className={`h-8 flex items-center justify-center text-sm rounded ${
-                            isToday ? 'bg-blue-600 text-white font-bold' :
-                            hasActivity ? 'bg-green-600/30 text-green-400 font-semibold' :
-                            'text-slate-400'
+                          onClick={() => setSelectedCalendarDay(isSelected ? null : day)}
+                          className={`h-10 flex items-center justify-center text-sm rounded cursor-pointer transition-all ${
+                            isSelected ? 'ring-2 ring-white scale-110 z-10' :
+                            isToday ? 'bg-blue-600 text-white font-bold hover:bg-blue-500' :
+                            hasActivity ? 'bg-green-600/30 text-green-400 font-semibold hover:bg-green-600/50' :
+                            'text-slate-400 hover:bg-slate-700'
                           }`}
                         >
                           {day}
-                        </div>
+                        </button>
                       );
                     }
 
@@ -2925,6 +2940,35 @@ export default function LandLeadsAdminPage() {
                         <div className="grid grid-cols-7 gap-1">
                           {days}
                         </div>
+
+                        {/* Selected Day Detail */}
+                        {selectedCalendarDay && (
+                          <div className="mt-4 p-4 bg-slate-800 rounded-lg border border-slate-600">
+                            <div className="flex items-center justify-between mb-3">
+                              <h5 className="font-bold text-lg">
+                                {new Date(year, month, selectedCalendarDay).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                              </h5>
+                              <button onClick={() => setSelectedCalendarDay(null)} className="text-slate-400 hover:text-white">X</button>
+                            </div>
+                            {activityByDate[selectedCalendarDay] && activityByDate[selectedCalendarDay].length > 0 ? (
+                              <div className="space-y-2">
+                                {activityByDate[selectedCalendarDay].map((item, idx) => (
+                                  <div key={idx} className={`p-3 rounded ${item.isCreated ? 'bg-blue-600/20 border border-blue-500/50' : 'bg-slate-700/50'}`}>
+                                    <div className="flex justify-between items-start">
+                                      <p className="text-white">{item.content}</p>
+                                      <span className="text-xs text-slate-400 ml-2">
+                                        {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                      </span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-slate-500">No activity on this day</p>
+                            )}
+                          </div>
+                        )}
+
                         <div className="flex gap-4 mt-3 text-xs">
                           <div className="flex items-center gap-1">
                             <div className="w-3 h-3 rounded bg-blue-600"></div>
@@ -2934,6 +2978,7 @@ export default function LandLeadsAdminPage() {
                             <div className="w-3 h-3 rounded bg-green-600/30"></div>
                             <span className="text-slate-400">Activity</span>
                           </div>
+                          <span className="text-slate-500 ml-auto">Click a day to see details</span>
                         </div>
                       </>
                     );
