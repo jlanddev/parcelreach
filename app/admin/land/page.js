@@ -1222,7 +1222,7 @@ export default function LandLeadsAdminPage() {
                     } ${criticalLeads.length > 0 ? 'bg-gradient-to-br from-red-500/30 to-red-600/30 border-red-500 animate-pulse' : 'bg-slate-800/50 border-slate-700/50'}`}
                   >
                     <div className="text-3xl font-bold text-red-400">{criticalLeads.length}</div>
-                    <div className="text-sm font-semibold text-red-300">🔥 CRITICAL</div>
+                    <div className="text-sm font-semibold text-red-300">CRITICAL</div>
                     <div className="text-xs text-slate-400 mt-1">New &lt; 1 hour</div>
                   </button>
                 );
@@ -1239,7 +1239,7 @@ export default function LandLeadsAdminPage() {
                     } bg-gradient-to-br from-orange-500/20 to-orange-600/20 border-orange-500/50`}
                   >
                     <div className="text-3xl font-bold text-orange-400">{hotLeads.length}</div>
-                    <div className="text-sm font-semibold text-orange-300">📞 CALL NOW</div>
+                    <div className="text-sm font-semibold text-orange-300">CALL NOW</div>
                     <div className="text-xs text-slate-400 mt-1">Hot leads</div>
                   </button>
                 );
@@ -1256,7 +1256,7 @@ export default function LandLeadsAdminPage() {
                     } bg-gradient-to-br from-yellow-500/20 to-yellow-600/20 border-yellow-500/50`}
                   >
                     <div className="text-3xl font-bold text-yellow-400">{warmLeads.length}</div>
-                    <div className="text-sm font-semibold text-yellow-300">📋 FOLLOW UP</div>
+                    <div className="text-sm font-semibold text-yellow-300">FOLLOW UP</div>
                     <div className="text-xs text-slate-400 mt-1">Warm leads</div>
                   </button>
                 );
@@ -1273,7 +1273,7 @@ export default function LandLeadsAdminPage() {
                     } bg-gradient-to-br from-purple-500/20 to-purple-600/20 border-purple-500/50`}
                   >
                     <div className="text-3xl font-bold text-purple-400">{offerLeads.length}</div>
-                    <div className="text-sm font-semibold text-purple-300">💰 OFFERS OUT</div>
+                    <div className="text-sm font-semibold text-purple-300">OFFERS OUT</div>
                     <div className="text-xs text-slate-400 mt-1">Awaiting response</div>
                   </button>
                 );
@@ -1290,7 +1290,7 @@ export default function LandLeadsAdminPage() {
                     } bg-gradient-to-br from-blue-500/20 to-blue-600/20 border-blue-500/50`}
                   >
                     <div className="text-3xl font-bold text-blue-400">{coolingLeads.length}</div>
-                    <div className="text-sm font-semibold text-blue-300">❄️ GOING COLD</div>
+                    <div className="text-sm font-semibold text-blue-300">GOING COLD</div>
                     <div className="text-xs text-slate-400 mt-1">7-14 days inactive</div>
                   </button>
                 );
@@ -1307,7 +1307,7 @@ export default function LandLeadsAdminPage() {
                     } bg-gradient-to-br from-slate-500/20 to-slate-600/20 border-slate-500/50`}
                   >
                     <div className="text-3xl font-bold text-slate-400">{coldLeads.length}</div>
-                    <div className="text-sm font-semibold text-slate-300">💀 COLD/DEAD</div>
+                    <div className="text-sm font-semibold text-slate-300">COLD/DEAD</div>
                     <div className="text-xs text-slate-400 mt-1">14+ days inactive</div>
                   </button>
                 );
@@ -1409,28 +1409,28 @@ export default function LandLeadsAdminPage() {
                                 className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs text-slate-300"
                                 title="No Answer"
                               >
-                                ❌
+                                NA
                               </button>
                               <button
                                 onClick={() => quickLogActivity(lead.id, 'LEFT_VM')}
                                 className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs text-slate-300"
                                 title="Left Voicemail"
                               >
-                                📞
+                                VM
                               </button>
                               <button
                                 onClick={() => quickLogActivity(lead.id, 'SPOKE')}
                                 className="px-2 py-1 bg-green-600 hover:bg-green-500 rounded text-xs text-white"
                                 title="Spoke"
                               >
-                                ✅
+                                Spoke
                               </button>
                               <button
                                 onClick={() => quickLogActivity(lead.id, 'TEXTED')}
                                 className="px-2 py-1 bg-blue-600 hover:bg-blue-500 rounded text-xs text-white"
                                 title="Texted"
                               >
-                                💬
+                                Text
                               </button>
                             </div>
 
