@@ -14,7 +14,7 @@ export default function LandLeadsAdminPage() {
   const [allLeads, setAllLeads] = useState([]);
   const [selectedOrg, setSelectedOrg] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('organizations');
+  const [activeTab, setActiveTab] = useState('daily-rundown');
   const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [detailsModalOpen, setDetailsModalOpen] = useState(false);
   const [selectedLead, setSelectedLead] = useState(null);
@@ -35,6 +35,72 @@ export default function LandLeadsAdminPage() {
   const [callbackTime, setCallbackTime] = useState('');
   const [loggingActivity, setLoggingActivity] = useState(false);
   const [leadActivities, setLeadActivities] = useState({}); // leadId -> activities array
+  const [rundownFilter, setRundownFilter] = useState(null); // For Daily Rundown tile clicks
+
+  // Temperature calculation based on lead age and activity
+  const calculateTemperature = (lead) => {
+    const now = new Date();
+    const createdAt = new Date(lead.created_at);
+    const lastActivity = lead.last_activity_at ? new Date(lead.last_activity_at) : null;
+    const hoursSinceCreation = (now - createdAt) / (1000 * 60 * 60);
+    const daysSinceActivity = lastActivity ? (now - lastActivity) / (1000 * 60 * 60 * 24) : null;
+
+    // CRITICAL: New lead < 1 hour
+    if (hoursSinceCreation < 1) return 'CRITICAL';
+    // HOT: New lead 1-4 hours OR has scheduled action due today
+    if (hoursSinceCreation < 4) return 'HOT';
+    // Check days since activity for older leads
+    if (daysSinceActivity !== null) {
+      if (daysSinceActivity < 2) return 'HOT';
+      if (daysSinceActivity < 7) return 'WARM';
+      if (daysSinceActivity < 14) return 'COOLING';
+      return 'COLD';
+    }
+    // No activity yet - use creation time
+    const daysSinceCreation = hoursSinceCreation / 24;
+    if (daysSinceCreation < 1) return 'HOT';
+    if (daysSinceCreation < 7) return 'WARM';
+    if (daysSinceCreation < 14) return 'COOLING';
+    return 'COLD';
+  };
+
+  // Temperature display config
+  const TEMPERATURE_CONFIG = {
+    CRITICAL: { color: 'red', bg: 'from-red-500/30 to-red-600/30', border: 'border-red-500', text: 'text-red-400', pulse: true },
+    HOT: { color: 'orange', bg: 'from-orange-500/20 to-orange-600/20', border: 'border-orange-500/50', text: 'text-orange-400', pulse: false },
+    WARM: { color: 'yellow', bg: 'from-yellow-500/20 to-yellow-600/20', border: 'border-yellow-500/50', text: 'text-yellow-400', pulse: false },
+    COOLING: { color: 'blue', bg: 'from-blue-500/20 to-blue-600/20', border: 'border-blue-500/50', text: 'text-blue-400', pulse: false },
+    COLD: { color: 'slate', bg: 'from-slate-500/20 to-slate-600/20', border: 'border-slate-500/50', text: 'text-slate-400', pulse: false }
+  };
+
+  // Quick log activity (one-tap)
+  const quickLogActivity = async (leadId, outcome) => {
+    const lead = allLeads.find(l => l.id === leadId);
+    const { data: { user } } = await supabase.auth.getUser();
+
+    // Log to lead_notes
+    if (user) {
+      await supabase.from('lead_notes').insert({
+        lead_id: leadId,
+        user_id: user.id,
+        content: `[CALL] ${outcome}`,
+        mentioned_users: []
+      });
+    }
+
+    // Update lead based on outcome
+    const updates = { last_activity_at: new Date().toISOString() };
+    if (outcome === 'SPOKE' && (!lead?.status || lead.status === 'new')) {
+      updates.status = 'contacted';
+    }
+
+    await supabase.from('leads').update(updates).eq('id', leadId);
+
+    // Update local state
+    setAllLeads(allLeads.map(l =>
+      l.id === leadId ? { ...l, ...updates } : l
+    ));
+  };
 
   // Pipeline status options
   const PIPELINE_STATUSES = [
@@ -1111,7 +1177,7 @@ export default function LandLeadsAdminPage() {
       {/* Tabs */}
       <div className="bg-slate-800/30 border-b border-slate-700/50 px-6">
         <div className="flex gap-4">
-          {['organizations', 'ppc-inflow', 'all-leads', 'unassigned', 'create-lead'].map((tab) => (
+          {['daily-rundown', 'organizations', 'ppc-inflow', 'all-leads', 'unassigned', 'create-lead'].map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -1121,12 +1187,17 @@ export default function LandLeadsAdminPage() {
                   : 'border-transparent text-slate-400 hover:text-white'
               }`}
             >
+              {tab === 'daily-rundown' && (
+                <svg className="w-4 h-4 inline-block mr-1 -mt-0.5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                </svg>
+              )}
               {tab === 'ppc-inflow' && (
                 <svg className="w-4 h-4 inline-block mr-1 -mt-0.5" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M3 13h2v8H3v-8zm4-6h2v14H7V7zm4-4h2v18h-2V3zm4 9h2v9h-2v-9zm4-3h2v12h-2V9z"/>
                 </svg>
               )}
-              {tab.replace('-', ' ')}
+              {tab === 'daily-rundown' ? 'Daily Rundown' : tab.replace('-', ' ')}
               {tab === 'unassigned' && ` (${unassignedLeads.length})`}
               {tab === 'ppc-inflow' && ` (${allLeads.filter(l => l.source?.includes('Haven Ground')).length})`}
             </button>
@@ -1135,6 +1206,266 @@ export default function LandLeadsAdminPage() {
       </div>
 
       <div className="p-6">
+        {/* DAILY RUNDOWN TAB */}
+        {activeTab === 'daily-rundown' && (
+          <div className="space-y-6">
+            {/* Priority Tiles */}
+            <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+              {/* CRITICAL - New leads < 1 hour */}
+              {(() => {
+                const criticalLeads = allLeads.filter(l => calculateTemperature(l) === 'CRITICAL');
+                return (
+                  <button
+                    onClick={() => setRundownFilter(rundownFilter === 'CRITICAL' ? null : 'CRITICAL')}
+                    className={`p-4 rounded-xl border-2 transition-all text-left ${
+                      rundownFilter === 'CRITICAL' ? 'ring-2 ring-red-500 ring-offset-2 ring-offset-slate-900' : ''
+                    } ${criticalLeads.length > 0 ? 'bg-gradient-to-br from-red-500/30 to-red-600/30 border-red-500 animate-pulse' : 'bg-slate-800/50 border-slate-700/50'}`}
+                  >
+                    <div className="text-3xl font-bold text-red-400">{criticalLeads.length}</div>
+                    <div className="text-sm font-semibold text-red-300">🔥 CRITICAL</div>
+                    <div className="text-xs text-slate-400 mt-1">New &lt; 1 hour</div>
+                  </button>
+                );
+              })()}
+
+              {/* CALL NOW - Hot leads needing action */}
+              {(() => {
+                const hotLeads = allLeads.filter(l => calculateTemperature(l) === 'HOT');
+                return (
+                  <button
+                    onClick={() => setRundownFilter(rundownFilter === 'HOT' ? null : 'HOT')}
+                    className={`p-4 rounded-xl border transition-all text-left ${
+                      rundownFilter === 'HOT' ? 'ring-2 ring-orange-500 ring-offset-2 ring-offset-slate-900' : ''
+                    } bg-gradient-to-br from-orange-500/20 to-orange-600/20 border-orange-500/50`}
+                  >
+                    <div className="text-3xl font-bold text-orange-400">{hotLeads.length}</div>
+                    <div className="text-sm font-semibold text-orange-300">📞 CALL NOW</div>
+                    <div className="text-xs text-slate-400 mt-1">Hot leads</div>
+                  </button>
+                );
+              })()}
+
+              {/* FOLLOW UP - Warm leads */}
+              {(() => {
+                const warmLeads = allLeads.filter(l => calculateTemperature(l) === 'WARM');
+                return (
+                  <button
+                    onClick={() => setRundownFilter(rundownFilter === 'WARM' ? null : 'WARM')}
+                    className={`p-4 rounded-xl border transition-all text-left ${
+                      rundownFilter === 'WARM' ? 'ring-2 ring-yellow-500 ring-offset-2 ring-offset-slate-900' : ''
+                    } bg-gradient-to-br from-yellow-500/20 to-yellow-600/20 border-yellow-500/50`}
+                  >
+                    <div className="text-3xl font-bold text-yellow-400">{warmLeads.length}</div>
+                    <div className="text-sm font-semibold text-yellow-300">📋 FOLLOW UP</div>
+                    <div className="text-xs text-slate-400 mt-1">Warm leads</div>
+                  </button>
+                );
+              })()}
+
+              {/* OFFERS OUT */}
+              {(() => {
+                const offerLeads = allLeads.filter(l => l.status === 'offer_made' || l.pipeline_status === 'OFFER_MADE');
+                return (
+                  <button
+                    onClick={() => setRundownFilter(rundownFilter === 'OFFER' ? null : 'OFFER')}
+                    className={`p-4 rounded-xl border transition-all text-left ${
+                      rundownFilter === 'OFFER' ? 'ring-2 ring-purple-500 ring-offset-2 ring-offset-slate-900' : ''
+                    } bg-gradient-to-br from-purple-500/20 to-purple-600/20 border-purple-500/50`}
+                  >
+                    <div className="text-3xl font-bold text-purple-400">{offerLeads.length}</div>
+                    <div className="text-sm font-semibold text-purple-300">💰 OFFERS OUT</div>
+                    <div className="text-xs text-slate-400 mt-1">Awaiting response</div>
+                  </button>
+                );
+              })()}
+
+              {/* GOING COLD */}
+              {(() => {
+                const coolingLeads = allLeads.filter(l => calculateTemperature(l) === 'COOLING');
+                return (
+                  <button
+                    onClick={() => setRundownFilter(rundownFilter === 'COOLING' ? null : 'COOLING')}
+                    className={`p-4 rounded-xl border transition-all text-left ${
+                      rundownFilter === 'COOLING' ? 'ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-900' : ''
+                    } bg-gradient-to-br from-blue-500/20 to-blue-600/20 border-blue-500/50`}
+                  >
+                    <div className="text-3xl font-bold text-blue-400">{coolingLeads.length}</div>
+                    <div className="text-sm font-semibold text-blue-300">❄️ GOING COLD</div>
+                    <div className="text-xs text-slate-400 mt-1">7-14 days inactive</div>
+                  </button>
+                );
+              })()}
+
+              {/* DEAD / COLD */}
+              {(() => {
+                const coldLeads = allLeads.filter(l => calculateTemperature(l) === 'COLD' || l.status === 'dead' || l.pipeline_status === 'DEAD');
+                return (
+                  <button
+                    onClick={() => setRundownFilter(rundownFilter === 'COLD' ? null : 'COLD')}
+                    className={`p-4 rounded-xl border transition-all text-left ${
+                      rundownFilter === 'COLD' ? 'ring-2 ring-slate-500 ring-offset-2 ring-offset-slate-900' : ''
+                    } bg-gradient-to-br from-slate-500/20 to-slate-600/20 border-slate-500/50`}
+                  >
+                    <div className="text-3xl font-bold text-slate-400">{coldLeads.length}</div>
+                    <div className="text-sm font-semibold text-slate-300">💀 COLD/DEAD</div>
+                    <div className="text-xs text-slate-400 mt-1">14+ days inactive</div>
+                  </button>
+                );
+              })()}
+            </div>
+
+            {/* Filtered Leads List */}
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
+              <div className="p-4 border-b border-slate-700/50 flex items-center justify-between">
+                <h3 className="text-xl font-bold">
+                  {rundownFilter ? `${rundownFilter} Leads` : 'All Active Leads'}
+                  {rundownFilter && (
+                    <button
+                      onClick={() => setRundownFilter(null)}
+                      className="ml-3 text-sm text-slate-400 hover:text-white"
+                    >
+                      ✕ Clear filter
+                    </button>
+                  )}
+                </h3>
+                <div className="text-sm text-slate-400">
+                  {(() => {
+                    const filteredLeads = rundownFilter
+                      ? allLeads.filter(l => {
+                          if (rundownFilter === 'OFFER') return l.status === 'offer_made' || l.pipeline_status === 'OFFER_MADE';
+                          return calculateTemperature(l) === rundownFilter;
+                        })
+                      : allLeads.filter(l => l.status !== 'dead' && l.pipeline_status !== 'DEAD');
+                    return `${filteredLeads.length} leads`;
+                  })()}
+                </div>
+              </div>
+              <div className="divide-y divide-slate-700/50 max-h-[600px] overflow-y-auto">
+                {(() => {
+                  let filteredLeads = rundownFilter
+                    ? allLeads.filter(l => {
+                        if (rundownFilter === 'OFFER') return l.status === 'offer_made' || l.pipeline_status === 'OFFER_MADE';
+                        return calculateTemperature(l) === rundownFilter;
+                      })
+                    : allLeads.filter(l => l.status !== 'dead' && l.pipeline_status !== 'DEAD');
+
+                  // Sort by temperature priority
+                  const tempOrder = { CRITICAL: 0, HOT: 1, WARM: 2, COOLING: 3, COLD: 4 };
+                  filteredLeads = filteredLeads.sort((a, b) => tempOrder[calculateTemperature(a)] - tempOrder[calculateTemperature(b)]);
+
+                  return filteredLeads.map((lead) => {
+                    const temp = calculateTemperature(lead);
+                    const tempConfig = TEMPERATURE_CONFIG[temp];
+                    const timeSince = lead.created_at ? (() => {
+                      const mins = Math.floor((new Date() - new Date(lead.created_at)) / 60000);
+                      if (mins < 60) return `${mins}m ago`;
+                      const hrs = Math.floor(mins / 60);
+                      if (hrs < 24) return `${hrs}h ago`;
+                      const days = Math.floor(hrs / 24);
+                      return `${days}d ago`;
+                    })() : '';
+
+                    return (
+                      <div
+                        key={lead.id}
+                        className={`p-4 hover:bg-slate-700/30 transition-colors ${tempConfig.pulse ? 'animate-pulse' : ''}`}
+                      >
+                        <div className="flex items-center gap-4">
+                          {/* Temperature Badge */}
+                          <div className={`w-16 h-16 rounded-xl flex flex-col items-center justify-center bg-gradient-to-br ${tempConfig.bg} border ${tempConfig.border}`}>
+                            <span className={`text-xs font-bold ${tempConfig.text}`}>{temp}</span>
+                            <span className="text-[10px] text-slate-400">{timeSince}</span>
+                          </div>
+
+                          {/* Lead Info */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-white truncate">
+                                {lead.full_name || lead.name || 'Unknown'}
+                              </span>
+                              <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                                PIPELINE_STATUSES.find(s => s.value === (lead.pipeline_status || lead.status?.toUpperCase()))?.color === 'green' ? 'bg-green-500/20 text-green-400' :
+                                PIPELINE_STATUSES.find(s => s.value === (lead.pipeline_status || lead.status?.toUpperCase()))?.color === 'blue' ? 'bg-blue-500/20 text-blue-400' :
+                                PIPELINE_STATUSES.find(s => s.value === (lead.pipeline_status || lead.status?.toUpperCase()))?.color === 'orange' ? 'bg-orange-500/20 text-orange-400' :
+                                'bg-slate-500/20 text-slate-400'
+                              }`}>
+                                {lead.pipeline_status || lead.status || 'NEW'}
+                              </span>
+                            </div>
+                            <div className="text-sm text-slate-400 truncate">
+                              {lead.property_county || lead.county}, {lead.property_state || lead.state} • {lead.acres || lead.acreage || '?'} acres
+                            </div>
+                            <div className="text-sm text-slate-500">
+                              {lead.phone || 'No phone'} • {lead.email || 'No email'}
+                            </div>
+                          </div>
+
+                          {/* Quick Actions */}
+                          <div className="flex items-center gap-2">
+                            {/* One-tap outcomes */}
+                            <div className="flex gap-1">
+                              <button
+                                onClick={() => quickLogActivity(lead.id, 'NO_ANSWER')}
+                                className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs text-slate-300"
+                                title="No Answer"
+                              >
+                                ❌
+                              </button>
+                              <button
+                                onClick={() => quickLogActivity(lead.id, 'LEFT_VM')}
+                                className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs text-slate-300"
+                                title="Left Voicemail"
+                              >
+                                📞
+                              </button>
+                              <button
+                                onClick={() => quickLogActivity(lead.id, 'SPOKE')}
+                                className="px-2 py-1 bg-green-600 hover:bg-green-500 rounded text-xs text-white"
+                                title="Spoke"
+                              >
+                                ✅
+                              </button>
+                              <button
+                                onClick={() => quickLogActivity(lead.id, 'TEXTED')}
+                                className="px-2 py-1 bg-blue-600 hover:bg-blue-500 rounded text-xs text-white"
+                                title="Texted"
+                              >
+                                💬
+                              </button>
+                            </div>
+
+                            {/* View Details */}
+                            <button
+                              onClick={() => {
+                                setSelectedLead(lead);
+                                setDetailsModalOpen(true);
+                              }}
+                              className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sm text-white"
+                            >
+                              View
+                            </button>
+
+                            {/* Status Dropdown */}
+                            <select
+                              value={lead.pipeline_status || lead.status?.toUpperCase() || 'NEW'}
+                              onChange={(e) => updateLeadStatus(lead.id, e.target.value)}
+                              className="bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-sm text-white"
+                            >
+                              {PIPELINE_STATUSES.map(status => (
+                                <option key={status.value} value={status.value}>{status.label}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ORGANIZATIONS TAB */}
         {activeTab === 'organizations' && (
           <div className="space-y-6">
