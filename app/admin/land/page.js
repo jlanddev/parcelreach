@@ -113,17 +113,42 @@ export default function LandLeadsAdminPage() {
     }
   };
 
-  // Simple lead status helper
-  const getLeadStatus = (lead) => {
-    const status = (lead.pipeline_status || lead.status || 'new').toUpperCase();
-    // Map to simple categories
-    if (status === 'NEW' || status === 'ATTEMPTING') return 'NEW';
-    if (status === 'CONTACTED' || status === 'QUALIFYING') return 'CONTACTED';
-    if (['OFFER_MADE', 'NEGOTIATING', 'UNDER_CONTRACT'].includes(status)) return 'WORKING';
-    if (status === 'NURTURE' || status === 'LONG_TERM') return 'LONG_TERM';
-    if (status === 'CLOSED') return 'CLOSED';
-    if (status === 'DEAD') return 'DEAD';
-    return 'NEW';
+  // Smart lead status - auto-calculates based on time and activity
+  const getSmartStatus = (lead) => {
+    const manualStatus = (lead.pipeline_status || lead.status || '').toUpperCase();
+    const now = new Date();
+    const createdAt = new Date(lead.created_at);
+    const hoursSinceCreated = (now - createdAt) / (1000 * 60 * 60);
+
+    // ALWAYS respect manual status overrides (except for stale NEW leads)
+    // If user explicitly set a status, use it
+    if (['CONTACTED', 'CONTACTING', 'OFFER_SENT', 'OFFER_MADE', 'NEGOTIATING',
+         'UNDER_CONTRACT', 'CLOSED', 'DEAD', 'NURTURE', 'QUALIFYING'].includes(manualStatus)) {
+      return manualStatus === 'OFFER_MADE' ? 'OFFER_SENT' : manualStatus;
+    }
+
+    // For NEW or empty status, auto-calculate based on age
+    // NEW = less than 48 hours old
+    if (hoursSinceCreated < 48) {
+      return 'NEW';
+    }
+
+    // Older than 48 hours with no status set = NEEDS ATTENTION
+    return 'NEEDS_ATTENTION';
+  };
+
+  // Status display config
+  const STATUS_CONFIG = {
+    NEW: { label: 'New', color: 'bg-green-500/20 text-green-400 border-green-500/50' },
+    NEEDS_ATTENTION: { label: 'Needs Attention', color: 'bg-red-500/20 text-red-400 border-red-500/50' },
+    CONTACTING: { label: 'Contacting', color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50' },
+    CONTACTED: { label: 'Contacted', color: 'bg-blue-500/20 text-blue-400 border-blue-500/50' },
+    OFFER_SENT: { label: 'Offer Sent', color: 'bg-purple-500/20 text-purple-400 border-purple-500/50' },
+    NEGOTIATING: { label: 'Negotiating', color: 'bg-orange-500/20 text-orange-400 border-orange-500/50' },
+    UNDER_CONTRACT: { label: 'Under Contract', color: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50' },
+    CLOSED: { label: 'Closed', color: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50' },
+    DEAD: { label: 'Dead', color: 'bg-slate-500/20 text-slate-400 border-slate-500/50' },
+    NURTURE: { label: 'Nurture', color: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/50' }
   };
 
   // How long ago helper
@@ -216,17 +241,17 @@ export default function LandLeadsAdminPage() {
     }
   };
 
-  // Pipeline status options
+  // Pipeline status options (manual overrides)
   const PIPELINE_STATUSES = [
-    { value: 'NEW', label: 'New', color: 'green' },
-    { value: 'CONTACTED', label: 'Contacted', color: 'blue' },
-    { value: 'QUALIFYING', label: 'Qualifying', color: 'purple' },
-    { value: 'OFFER_MADE', label: 'Offer Made', color: 'orange' },
-    { value: 'NEGOTIATING', label: 'Negotiating', color: 'yellow' },
-    { value: 'UNDER_CONTRACT', label: 'Under Contract', color: 'cyan' },
-    { value: 'CLOSED', label: 'Closed', color: 'emerald' },
-    { value: 'DEAD', label: 'Dead', color: 'red' },
-    { value: 'NURTURE', label: 'Nurture', color: 'slate' }
+    { value: 'NEW', label: 'New' },
+    { value: 'CONTACTING', label: 'Contacting' },
+    { value: 'CONTACTED', label: 'Contacted' },
+    { value: 'OFFER_SENT', label: 'Offer Sent' },
+    { value: 'NEGOTIATING', label: 'Negotiating' },
+    { value: 'UNDER_CONTRACT', label: 'Under Contract' },
+    { value: 'CLOSED', label: 'Closed' },
+    { value: 'DEAD', label: 'Dead' },
+    { value: 'NURTURE', label: 'Nurture' }
   ];
 
   // Create Lead states
@@ -1379,22 +1404,22 @@ export default function LandLeadsAdminPage() {
               </div>
               <div className="divide-y divide-slate-800">
                 {(() => {
-                  // Get leads that need action (NEW or haven't been contacted today)
+                  // Get leads sorted by smart status priority
+                  const statusPriority = { NEEDS_ATTENTION: 0, NEW: 1, CONTACTING: 2, CONTACTED: 3, OFFER_SENT: 4, NEGOTIATING: 5 };
                   const actionLeads = allLeads
                     .filter(l => {
-                      const status = getLeadStatus(l);
-                      // Show: NEW leads, CONTACTED leads not done today, WORKING leads
+                      const status = getSmartStatus(l);
+                      // Show all active leads (not closed, dead, nurture, or under contract)
                       return !completedToday.has(l.id) &&
-                             status !== 'DEAD' &&
-                             status !== 'CLOSED' &&
-                             status !== 'LONG_TERM';
+                             !['DEAD', 'CLOSED', 'NURTURE', 'UNDER_CONTRACT'].includes(status);
                     })
                     .sort((a, b) => {
-                      // Sort: NEW first, then by created date
-                      const aStatus = getLeadStatus(a);
-                      const bStatus = getLeadStatus(b);
-                      if (aStatus === 'NEW' && bStatus !== 'NEW') return -1;
-                      if (bStatus === 'NEW' && aStatus !== 'NEW') return 1;
+                      // Sort by priority: NEEDS_ATTENTION first, then NEW, then others
+                      const aStatus = getSmartStatus(a);
+                      const bStatus = getSmartStatus(b);
+                      const aPriority = statusPriority[aStatus] ?? 99;
+                      const bPriority = statusPriority[bStatus] ?? 99;
+                      if (aPriority !== bPriority) return aPriority - bPriority;
                       return new Date(b.created_at) - new Date(a.created_at);
                     });
 
@@ -1406,23 +1431,19 @@ export default function LandLeadsAdminPage() {
                     );
                   }
 
-                  return actionLeads.slice(0, 20).map((lead) => {
-                    const status = getLeadStatus(lead);
+                  return actionLeads.slice(0, 25).map((lead) => {
+                    const status = getSmartStatus(lead);
+                    const statusInfo = STATUS_CONFIG[status] || STATUS_CONFIG.NEW;
                     const isLoading = actionInProgress?.leadId === lead.id;
-                    const statusColors = {
-                      NEW: 'bg-green-500/20 text-green-400 border-green-500/50',
-                      CONTACTED: 'bg-blue-500/20 text-blue-400 border-blue-500/50',
-                      WORKING: 'bg-purple-500/20 text-purple-400 border-purple-500/50'
-                    };
 
                     return (
-                      <div key={lead.id} className={`p-4 hover:bg-slate-800/50 transition-all ${isLoading ? 'opacity-50' : ''}`}>
+                      <div key={lead.id} className={`p-4 hover:bg-slate-800/50 transition-all ${isLoading ? 'opacity-50' : ''} ${status === 'NEEDS_ATTENTION' ? 'bg-red-900/10' : ''}`}>
                         <div className="flex items-center gap-4">
                           {/* Status + Name */}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-1">
-                              <span className={`px-2 py-0.5 rounded border text-xs font-bold ${statusColors[status] || 'bg-slate-500/20 text-slate-400'}`}>
-                                {status}
+                              <span className={`px-2 py-0.5 rounded border text-xs font-bold ${statusInfo.color}`}>
+                                {statusInfo.label}
                               </span>
                               <span className="font-semibold text-white truncate">
                                 {lead.full_name || lead.name || 'Unknown'}
@@ -1430,6 +1451,11 @@ export default function LandLeadsAdminPage() {
                               <span className="text-slate-500 text-xs">
                                 {timeAgo(lead.created_at)}
                               </span>
+                              {lead.last_activity_at && (
+                                <span className="text-slate-600 text-xs">
+                                  (last touch: {timeAgo(lead.last_activity_at)})
+                                </span>
+                              )}
                             </div>
                             <div className="text-sm text-slate-400">
                               {lead.property_county || lead.county}, {lead.property_state || lead.state} - {lead.acres || lead.acreage || '?'} acres
@@ -1451,7 +1477,8 @@ export default function LandLeadsAdminPage() {
                             <button
                               onClick={() => {
                                 markDoneForToday(lead.id, 'SPOKE');
-                                if (getLeadStatus(lead) === 'NEW') {
+                                const status = getSmartStatus(lead);
+                                if (['NEW', 'NEEDS_ATTENTION', 'CONTACTING'].includes(status)) {
                                   updateLeadStatus(lead.id, 'CONTACTED');
                                 }
                               }}
@@ -1484,22 +1511,26 @@ export default function LandLeadsAdminPage() {
             </div>
 
             {/* Stats Row */}
-            <div className="grid grid-cols-4 gap-4">
+            <div className="grid grid-cols-5 gap-4">
+              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-center">
+                <div className="text-3xl font-bold text-red-400">{allLeads.filter(l => getSmartStatus(l) === 'NEEDS_ATTENTION').length}</div>
+                <div className="text-sm text-red-300">Needs Attention</div>
+              </div>
               <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 text-center">
-                <div className="text-3xl font-bold text-green-400">{allLeads.filter(l => getLeadStatus(l) === 'NEW').length}</div>
-                <div className="text-sm text-green-300">New - Need Contact</div>
+                <div className="text-3xl font-bold text-green-400">{allLeads.filter(l => getSmartStatus(l) === 'NEW').length}</div>
+                <div className="text-sm text-green-300">New (&lt;48hrs)</div>
+              </div>
+              <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 text-center">
+                <div className="text-3xl font-bold text-yellow-400">{allLeads.filter(l => getSmartStatus(l) === 'CONTACTING').length}</div>
+                <div className="text-sm text-yellow-300">Contacting</div>
               </div>
               <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 text-center">
-                <div className="text-3xl font-bold text-blue-400">{allLeads.filter(l => getLeadStatus(l) === 'CONTACTED').length}</div>
+                <div className="text-3xl font-bold text-blue-400">{allLeads.filter(l => getSmartStatus(l) === 'CONTACTED').length}</div>
                 <div className="text-sm text-blue-300">Contacted</div>
               </div>
               <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4 text-center">
-                <div className="text-3xl font-bold text-purple-400">{allLeads.filter(l => getLeadStatus(l) === 'WORKING').length}</div>
+                <div className="text-3xl font-bold text-purple-400">{allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING', 'UNDER_CONTRACT'].includes(getSmartStatus(l))).length}</div>
                 <div className="text-sm text-purple-300">Working Deals</div>
-              </div>
-              <div className="bg-slate-500/10 border border-slate-500/30 rounded-lg p-4 text-center">
-                <div className="text-3xl font-bold text-slate-400">{allLeads.filter(l => getLeadStatus(l) === 'LONG_TERM').length}</div>
-                <div className="text-sm text-slate-300">Long-Term</div>
               </div>
             </div>
           </div>
@@ -1671,6 +1702,21 @@ export default function LandLeadsAdminPage() {
                             {lead.form_data.position}
                           </span>
                         )}
+                        {/* Smart Status Badge + Lead Age */}
+                        {(() => {
+                          const smartStatus = getSmartStatus(lead);
+                          const statusInfo = STATUS_CONFIG[smartStatus] || STATUS_CONFIG.NEW;
+                          return (
+                            <div className="flex items-center gap-2">
+                              <span className={`inline-block px-2 py-0.5 text-xs font-semibold rounded border ${statusInfo.color}`}>
+                                {statusInfo.label}
+                              </span>
+                              <span className="text-xs text-slate-500">
+                                {timeAgo(lead.created_at)}
+                              </span>
+                            </div>
+                          );
+                        })()}
                       </div>
                       <select
                         value={lead.pipeline_status || 'NEW'}
@@ -1679,18 +1725,7 @@ export default function LandLeadsAdminPage() {
                           updateLeadStatus(lead.id, e.target.value);
                         }}
                         onClick={(e) => e.stopPropagation()}
-                        className={`px-2 py-1 text-xs font-semibold rounded cursor-pointer border-0 focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                          (lead.pipeline_status || 'NEW') === 'NEW' ? 'bg-green-500/20 text-green-400' :
-                          lead.pipeline_status === 'CONTACTED' ? 'bg-blue-500/20 text-blue-400' :
-                          lead.pipeline_status === 'QUALIFYING' ? 'bg-purple-500/20 text-purple-400' :
-                          lead.pipeline_status === 'OFFER_MADE' ? 'bg-orange-500/20 text-orange-400' :
-                          lead.pipeline_status === 'NEGOTIATING' ? 'bg-yellow-500/20 text-yellow-400' :
-                          lead.pipeline_status === 'UNDER_CONTRACT' ? 'bg-cyan-500/20 text-cyan-400' :
-                          lead.pipeline_status === 'CLOSED' ? 'bg-emerald-500/20 text-emerald-400' :
-                          lead.pipeline_status === 'DEAD' ? 'bg-red-500/20 text-red-400' :
-                          lead.pipeline_status === 'NURTURE' ? 'bg-slate-500/20 text-slate-400' :
-                          'bg-green-500/20 text-green-400'
-                        }`}
+                        className="px-2 py-1 text-xs font-semibold rounded cursor-pointer border border-slate-600 bg-slate-800 text-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
                       >
                         {PIPELINE_STATUSES.map(status => (
                           <option key={status.value} value={status.value}>{status.label}</option>
