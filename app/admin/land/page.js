@@ -1404,8 +1404,8 @@ export default function LandLeadsAdminPage() {
               </div>
               <div className="divide-y divide-slate-800">
                 {(() => {
-                  // Get leads sorted by smart status priority
-                  const statusPriority = { NEEDS_ATTENTION: 0, NEW: 1, CONTACTING: 2, CONTACTED: 3, OFFER_SENT: 4, NEGOTIATING: 5 };
+                  // Get leads sorted by priority - NEW first (hot leads), then needs attention
+                  const statusPriority = { NEW: 0, NEEDS_ATTENTION: 1, CONTACTING: 2, CONTACTED: 3, OFFER_SENT: 4, NEGOTIATING: 5 };
                   const actionLeads = allLeads
                     .filter(l => {
                       const status = getSmartStatus(l);
@@ -1414,12 +1414,13 @@ export default function LandLeadsAdminPage() {
                              !['DEAD', 'CLOSED', 'NURTURE', 'UNDER_CONTRACT'].includes(status);
                     })
                     .sort((a, b) => {
-                      // Sort by priority: NEEDS_ATTENTION first, then NEW, then others
+                      // Sort by priority: NEW first (fresh leads are hot), then NEEDS_ATTENTION, then others
                       const aStatus = getSmartStatus(a);
                       const bStatus = getSmartStatus(b);
                       const aPriority = statusPriority[aStatus] ?? 99;
                       const bPriority = statusPriority[bStatus] ?? 99;
                       if (aPriority !== bPriority) return aPriority - bPriority;
+                      // Within same priority, newest first
                       return new Date(b.created_at) - new Date(a.created_at);
                     });
 
@@ -1677,11 +1678,78 @@ export default function LandLeadsAdminPage() {
                 .map((lead) => (
                   <div
                     key={lead.id}
-                    className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6 hover:border-blue-500/50 hover:shadow-xl hover:shadow-blue-500/10 transition-all"
+                    className="bg-slate-800/50 border border-slate-700/50 rounded-xl overflow-hidden hover:border-blue-500/50 hover:shadow-xl hover:shadow-blue-500/10 transition-all"
                   >
-                    {/* Header */}
-                    <div className="flex items-start justify-between mb-4">
-                      <div className="flex-1">
+                    {/* NEXT TOUCH POINT BANNER - Always at TOP */}
+                    {(() => {
+                      const hasCallback = lead.next_callback_at && new Date(lead.next_callback_at) > new Date();
+                      const isOverdue = lead.next_callback_at && new Date(lead.next_callback_at) < new Date();
+                      const smartStatus = getSmartStatus(lead);
+                      const needsAction = smartStatus === 'NEW' || smartStatus === 'NEEDS_ATTENTION';
+
+                      if (hasCallback) {
+                        return (
+                          <div className="bg-orange-500/30 border-b border-orange-500/50 px-4 py-3 flex items-center gap-2">
+                            <svg className="w-5 h-5 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span className="font-semibold text-orange-300">
+                              Next Touch: {new Date(lead.next_callback_at).toLocaleDateString()} at {new Date(lead.next_callback_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                            </span>
+                          </div>
+                        );
+                      } else if (isOverdue) {
+                        return (
+                          <div className="bg-red-500/30 border-b border-red-500/50 px-4 py-3 flex items-center gap-2">
+                            <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                            <span className="font-semibold text-red-300">
+                              OVERDUE: Was due {new Date(lead.next_callback_at).toLocaleDateString()}
+                            </span>
+                          </div>
+                        );
+                      } else if (needsAction) {
+                        return (
+                          <div className={`${smartStatus === 'NEW' ? 'bg-green-500/30 border-green-500/50' : 'bg-red-500/30 border-red-500/50'} border-b px-4 py-3 flex items-center gap-2`}>
+                            <svg className={`w-5 h-5 ${smartStatus === 'NEW' ? 'text-green-400' : 'text-red-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                            </svg>
+                            <span className={`font-semibold ${smartStatus === 'NEW' ? 'text-green-300' : 'text-red-300'}`}>
+                              {smartStatus === 'NEW' ? 'NEW LEAD - Contact Now!' : 'NEEDS ATTENTION - Follow Up!'}
+                            </span>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+
+                    <div className="p-5">
+                      {/* STATUS DROPDOWN - Prominent at top */}
+                      <div className="mb-4">
+                        {(() => {
+                          const smartStatus = getSmartStatus(lead);
+                          const statusInfo = STATUS_CONFIG[smartStatus] || STATUS_CONFIG.NEW;
+                          return (
+                            <select
+                              value={smartStatus}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                updateLeadStatus(lead.id, e.target.value);
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              className={`w-full px-4 py-2.5 text-sm font-bold rounded-lg cursor-pointer border-2 focus:outline-none focus:ring-2 focus:ring-blue-500 ${statusInfo.color}`}
+                            >
+                              {PIPELINE_STATUSES.map(status => (
+                                <option key={status.value} value={status.value}>{status.label}</option>
+                              ))}
+                            </select>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Owner Name & Time */}
+                      <div className="mb-4">
                         <input
                           type="text"
                           value={lead.name || lead.full_name || ''}
@@ -1694,44 +1762,11 @@ export default function LandLeadsAdminPage() {
                               setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, name: e.target.value, full_name: e.target.value} : l));
                             }
                           }}
-                          className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-white font-semibold text-lg focus:outline-none focus:border-blue-500/50 mb-1"
+                          className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-2 text-white font-semibold text-lg focus:outline-none focus:border-blue-500/50"
                           placeholder="Owner name"
                         />
-                        {lead.form_data?.position && (
-                          <span className="inline-block px-2 py-0.5 bg-blue-500/20 text-blue-400 text-xs font-medium rounded capitalize">
-                            {lead.form_data.position}
-                          </span>
-                        )}
-                        {/* Smart Status Badge + Lead Age */}
-                        {(() => {
-                          const smartStatus = getSmartStatus(lead);
-                          const statusInfo = STATUS_CONFIG[smartStatus] || STATUS_CONFIG.NEW;
-                          return (
-                            <div className="flex items-center gap-2">
-                              <span className={`inline-block px-2 py-0.5 text-xs font-semibold rounded border ${statusInfo.color}`}>
-                                {statusInfo.label}
-                              </span>
-                              <span className="text-xs text-slate-500">
-                                {timeAgo(lead.created_at)}
-                              </span>
-                            </div>
-                          );
-                        })()}
+                        <div className="mt-1 text-xs text-slate-500">Lead received {timeAgo(lead.created_at)}</div>
                       </div>
-                      <select
-                        value={lead.pipeline_status || 'NEW'}
-                        onChange={(e) => {
-                          e.stopPropagation();
-                          updateLeadStatus(lead.id, e.target.value);
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                        className="px-2 py-1 text-xs font-semibold rounded cursor-pointer border border-slate-600 bg-slate-800 text-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      >
-                        {PIPELINE_STATUSES.map(status => (
-                          <option key={status.value} value={status.value}>{status.label}</option>
-                        ))}
-                      </select>
-                    </div>
 
                     {/* Property Location */}
                     <div className="space-y-2 mb-3 pb-3 border-b border-slate-700/50">
@@ -1990,14 +2025,6 @@ export default function LandLeadsAdminPage() {
                           Last activity: {new Date(lead.last_activity_at).toLocaleDateString()} at {new Date(lead.last_activity_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                         </div>
                       )}
-                      {lead.next_callback_at && new Date(lead.next_callback_at) > new Date() && (
-                        <div className="text-xs text-orange-400 mb-2 flex items-center gap-1">
-                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                          Callback: {new Date(lead.next_callback_at).toLocaleDateString()} at {new Date(lead.next_callback_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                        </div>
-                      )}
                     </div>
 
                     {/* Actions */}
@@ -2055,6 +2082,7 @@ export default function LandLeadsAdminPage() {
                     <div className="mt-2 text-xs text-slate-500 text-center">
                       {new Date(lead.created_at).toLocaleString()}
                     </div>
+                    </div>{/* End p-5 wrapper */}
                   </div>
                 ))}
             </div>
