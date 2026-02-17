@@ -1900,10 +1900,10 @@ export default function LandLeadsAdminPage() {
                             <span className="text-slate-300">{lead.form_data.namesOnDeed}</span>
                           </div>
                         )}
-                        {lead.form_data?.whySelling && (
+                        {lead.form_data?.priceRange && (
                           <div className="col-span-2 mt-1 pt-1 border-t border-slate-700/30">
-                            <span className="text-slate-500">Why Selling:</span>{' '}
-                            <span className="text-cyan-400 italic">{lead.form_data.whySelling}</span>
+                            <span className="text-slate-500">Price Range:</span>{' '}
+                            <span className="text-green-400 font-semibold">{lead.form_data.priceRange.replace(/-/g, ' ').replace('plus', '+').replace('under', 'Under ').replace('k', 'K').replace('m', 'M')}</span>
                           </div>
                         )}
                       </div>
