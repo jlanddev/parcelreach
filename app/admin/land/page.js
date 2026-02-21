@@ -44,6 +44,20 @@ export default function LandLeadsAdminPage() {
   const [lastUpdated, setLastUpdated] = useState(new Date());
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  // Session Analytics states
+  const [analyticsSubTab, setAnalyticsSubTab] = useState('live-feed');
+  const [liveSessions, setLiveSessions] = useState([]);
+  const [funnelData, setFunnelData] = useState([]);
+  const [allTrackingSessions, setAllTrackingSessions] = useState([]);
+  const [selectedReplaySession, setSelectedReplaySession] = useState(null);
+  const [replayEvents, setReplayEvents] = useState(null);
+  const [replayLoading, setReplayLoading] = useState(false);
+  const [heatmapStep, setHeatmapStep] = useState(1);
+  const [heatmapClicks, setHeatmapClicks] = useState([]);
+  const [analyticsDateRange, setAnalyticsDateRange] = useState('7d');
+  const replayContainerRef = useRef(null);
+  const replayPlayerRef = useRef(null);
+
   // Add to activity feed
   const addActivity = (leadName, action, type = 'success') => {
     const activity = {
@@ -1312,6 +1326,203 @@ export default function LandLeadsAdminPage() {
   const unassignedLeads = allLeads.filter(l => !leadAssignments[l.id] || leadAssignments[l.id].length === 0);
   const assignedLeads = allLeads.filter(l => leadAssignments[l.id] && leadAssignments[l.id].length > 0);
 
+  // ============================================================
+  // Session Analytics — data fetching & realtime
+  // ============================================================
+
+  const STEP_LABELS = {
+    1: 'Relationship', 2: 'Acreage', 3: 'Home on Property', 4: 'Listed w/ Realtor',
+    5: 'Inherited', 6: 'Owned 4+ Yrs', 7: 'Honest Statement', 8: 'Why Selling',
+    9: 'State', 10: 'County', 11: 'Address', 12: 'Name',
+    13: 'Names on Deed', 14: 'Email', 15: 'Phone', 16: 'OTP Verify',
+  };
+
+  // Fetch funnel data (step events aggregated)
+  const fetchFunnelData = async (days = 7) => {
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    const { data: sessions } = await supabase
+      .from('tracking_sessions')
+      .select('session_id, max_step_reached, completed, disqualified, disqualified_at_step, started_at')
+      .gte('started_at', since.toISOString());
+    if (!sessions) return;
+
+    const steps = [];
+    for (let i = 1; i <= 16; i++) {
+      const reached = sessions.filter(s => s.max_step_reached >= i).length;
+      const dqHere = sessions.filter(s => s.disqualified && s.disqualified_at_step === i).length;
+      steps.push({ step: i, label: STEP_LABELS[i], reached, dqHere });
+    }
+    setFunnelData(steps);
+  };
+
+  // Fetch all sessions for the replay list
+  const fetchTrackingSessions = async (days = 7) => {
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    const { data } = await supabase
+      .from('tracking_sessions')
+      .select('*')
+      .gte('started_at', since.toISOString())
+      .order('started_at', { ascending: false })
+      .limit(200);
+    if (data) setAllTrackingSessions(data);
+  };
+
+  // Fetch heatmap click data for a given step
+  const fetchHeatmapClicks = async (step) => {
+    const days = analyticsDateRange === '7d' ? 7 : analyticsDateRange === '30d' ? 30 : 1;
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    const { data } = await supabase
+      .from('tracking_click_events')
+      .select('x_percent, y_percent, element_tag, element_text')
+      .eq('step_number', step)
+      .gte('clicked_at', since.toISOString())
+      .limit(5000);
+    if (data) setHeatmapClicks(data);
+  };
+
+  // Load rrweb recording for replay
+  const loadReplaySession = async (session) => {
+    setSelectedReplaySession(session);
+    setReplayEvents(null);
+    setReplayLoading(true);
+
+    try {
+      // List all chunks for this session
+      const { data: files } = await supabase.storage
+        .from('session-recordings')
+        .list(session.session_id, { sortBy: { column: 'name', order: 'asc' } });
+
+      if (!files || files.length === 0) {
+        setReplayLoading(false);
+        return;
+      }
+
+      let allEvents = [];
+      for (const file of files) {
+        const { data: blob } = await supabase.storage
+          .from('session-recordings')
+          .download(`${session.session_id}/${file.name}`);
+        if (!blob) continue;
+
+        let text;
+        if (file.name.endsWith('.gz')) {
+          // Decompress gzip
+          const ds = new DecompressionStream('gzip');
+          const decompressed = blob.stream().pipeThrough(ds);
+          text = await new Response(decompressed).text();
+        } else {
+          text = await blob.text();
+        }
+        const events = JSON.parse(text);
+        allEvents = allEvents.concat(events);
+      }
+
+      setReplayEvents(allEvents);
+    } catch (err) {
+      console.error('Failed to load replay:', err);
+    } finally {
+      setReplayLoading(false);
+    }
+  };
+
+  // Initialize rrweb player when events are loaded
+  useEffect(() => {
+    if (!replayEvents || !replayContainerRef.current || replayEvents.length === 0) return;
+
+    // Clear previous player
+    replayContainerRef.current.innerHTML = '';
+
+    import('rrweb-player').then(({ default: RrwebPlayer }) => {
+      // Also import CSS
+      import('rrweb-player/dist/style.css').catch(() => {});
+      replayPlayerRef.current = new RrwebPlayer({
+        target: replayContainerRef.current,
+        props: {
+          events: replayEvents,
+          width: 900,
+          height: 550,
+          autoPlay: false,
+          showController: true,
+          speedOption: [1, 2, 4, 8],
+        },
+      });
+    }).catch(err => console.error('Failed to init rrweb-player:', err));
+
+    return () => {
+      if (replayPlayerRef.current) {
+        replayPlayerRef.current = null;
+      }
+    };
+  }, [replayEvents]);
+
+  // Supabase Realtime subscription for live sessions
+  useEffect(() => {
+    if (activeTab !== 'session-analytics') return;
+
+    // Initial fetch of active sessions
+    const fetchLive = async () => {
+      const cutoff = new Date(Date.now() - 30000).toISOString(); // active within 30s
+      const { data } = await supabase
+        .from('tracking_sessions')
+        .select('*')
+        .eq('is_active', true)
+        .gte('last_heartbeat_at', cutoff)
+        .order('last_heartbeat_at', { ascending: false });
+      if (data) setLiveSessions(data);
+    };
+    fetchLive();
+
+    // Subscribe to changes
+    const channel = supabase
+      .channel('tracking-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tracking_sessions' }, (payload) => {
+        if (payload.eventType === 'INSERT') {
+          setLiveSessions(prev => [payload.new, ...prev]);
+        } else if (payload.eventType === 'UPDATE') {
+          setLiveSessions(prev => {
+            const updated = prev.map(s => s.session_id === payload.new.session_id ? payload.new : s);
+            // Remove inactive sessions
+            return updated.filter(s => s.is_active && new Date(s.last_heartbeat_at) > new Date(Date.now() - 30000));
+          });
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [activeTab]);
+
+  // Fetch analytics data when tab becomes active or date range changes
+  useEffect(() => {
+    if (activeTab !== 'session-analytics') return;
+    const days = analyticsDateRange === '7d' ? 7 : analyticsDateRange === '30d' ? 30 : 1;
+    fetchFunnelData(days);
+    fetchTrackingSessions(days);
+  }, [activeTab, analyticsDateRange]);
+
+  // Fetch heatmap clicks when step changes
+  useEffect(() => {
+    if (activeTab === 'session-analytics' && analyticsSubTab === 'heatmaps') {
+      fetchHeatmapClicks(heatmapStep);
+    }
+  }, [activeTab, analyticsSubTab, heatmapStep, analyticsDateRange]);
+
+  // Time ago helper for analytics
+  const analyticsTimeAgo = (dateStr) => {
+    const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+    if (seconds < 60) return `${seconds}s ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
       {/* Toast Notification */}
@@ -1359,9 +1570,9 @@ export default function LandLeadsAdminPage() {
       </div>
 
       {/* Tabs */}
-      <div className="bg-slate-800/30 border-b border-slate-700/50 px-6">
-        <div className="flex gap-4">
-          {['daily-rundown', 'organizations', 'ppc-inflow', 'all-leads', 'unassigned', 'create-lead'].map((tab) => (
+      <div className="bg-slate-800/30 border-b border-slate-700/50 px-6 overflow-x-auto">
+        <div className="flex gap-4 min-w-max">
+          {['daily-rundown', 'organizations', 'ppc-inflow', 'all-leads', 'unassigned', 'create-lead', 'session-analytics'].map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -1381,7 +1592,12 @@ export default function LandLeadsAdminPage() {
                   <path d="M3 13h2v8H3v-8zm4-6h2v14H7V7zm4-4h2v18h-2V3zm4 9h2v9h-2v-9zm4-3h2v12h-2V9z"/>
                 </svg>
               )}
-              {tab === 'daily-rundown' ? 'Daily Rundown' : tab.replace('-', ' ')}
+              {tab === 'session-analytics' && (
+                <svg className="w-4 h-4 inline-block mr-1 -mt-0.5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M11 7h2v10h-2zm4 4h2v6h-2zM7 9h2v8H7zm12-7H5c-1.1 0-2 .9-2 2v18l4-4h13c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
+                </svg>
+              )}
+              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'session-analytics' ? 'Session Analytics' : tab.replace('-', ' ')}
               {tab === 'unassigned' && ` (${unassignedLeads.length})`}
               {tab === 'ppc-inflow' && ` (${allLeads.filter(l => l.source?.includes('Haven Ground')).length})`}
             </button>
@@ -2607,6 +2823,291 @@ export default function LandLeadsAdminPage() {
                 )}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* SESSION ANALYTICS TAB */}
+        {activeTab === 'session-analytics' && (
+          <div className="space-y-4">
+            {/* Date range + sub-tab navigation */}
+            <div className="flex items-center justify-between">
+              <div className="flex gap-2">
+                {['live-feed', 'funnel', 'replay', 'heatmaps'].map((sub) => (
+                  <button
+                    key={sub}
+                    onClick={() => setAnalyticsSubTab(sub)}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      analyticsSubTab === sub
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700'
+                    }`}
+                  >
+                    {sub === 'live-feed' ? 'Live Feed' : sub === 'funnel' ? 'Funnel' : sub === 'replay' ? 'Session Replay' : 'Heatmaps'}
+                  </button>
+                ))}
+              </div>
+              {analyticsSubTab !== 'live-feed' && (
+                <select
+                  value={analyticsDateRange}
+                  onChange={(e) => setAnalyticsDateRange(e.target.value)}
+                  className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
+                >
+                  <option value="1d">Today</option>
+                  <option value="7d">Last 7 days</option>
+                  <option value="30d">Last 30 days</option>
+                </select>
+              )}
+            </div>
+
+            {/* ===== LIVE FEED ===== */}
+            {analyticsSubTab === 'live-feed' && (
+              <div className="space-y-4">
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse"></div>
+                  <h3 className="text-lg font-semibold">{liveSessions.length} Active Visitor{liveSessions.length !== 1 ? 's' : ''}</h3>
+                </div>
+                {liveSessions.length === 0 ? (
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-12 text-center">
+                    <p className="text-slate-400 text-lg">No active visitors right now</p>
+                    <p className="text-slate-500 text-sm mt-2">Sessions appear here in real-time as visitors fill out the form</p>
+                  </div>
+                ) : (
+                  <div className="grid gap-3">
+                    {liveSessions.map((s) => (
+                      <div key={s.session_id} className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-4 flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                          <div className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse"></div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">Step {s.max_step_reached}</span>
+                              <span className="text-slate-400 text-sm">— {STEP_LABELS[s.max_step_reached] || 'Unknown'}</span>
+                            </div>
+                            <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
+                              <span>{s.device_type || 'unknown'}</span>
+                              <span>{s.utm_source ? `via ${s.utm_source}` : 'direct'}</span>
+                              <span>started {analyticsTimeAgo(s.started_at)}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {s.visitor_id?.slice(0, 12)}...
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ===== FUNNEL ===== */}
+            {analyticsSubTab === 'funnel' && (
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Step-by-Step Conversion Funnel</h3>
+                {funnelData.length === 0 ? (
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-12 text-center">
+                    <p className="text-slate-400">No session data for this period</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {funnelData.map((step, idx) => {
+                      const maxReached = funnelData[0]?.reached || 1;
+                      const pct = maxReached > 0 ? ((step.reached / maxReached) * 100).toFixed(1) : 0;
+                      const dropOff = idx > 0 && funnelData[idx - 1].reached > 0
+                        ? (((funnelData[idx - 1].reached - step.reached) / funnelData[idx - 1].reached) * 100).toFixed(1)
+                        : 0;
+                      return (
+                        <div key={step.step} className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-3">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-slate-500 w-6">#{step.step}</span>
+                              <span className="font-medium text-sm">{step.label}</span>
+                            </div>
+                            <div className="flex items-center gap-4 text-xs">
+                              <span className="text-slate-300">{step.reached} reached</span>
+                              {idx > 0 && dropOff > 0 && (
+                                <span className="text-red-400">-{dropOff}% drop</span>
+                              )}
+                              {step.dqHere > 0 && (
+                                <span className="text-orange-400">{step.dqHere} DQ'd</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-blue-500 rounded-full transition-all duration-500"
+                              style={{ width: `${pct}%` }}
+                            ></div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ===== SESSION REPLAY ===== */}
+            {analyticsSubTab === 'replay' && (
+              <div className="space-y-4">
+                {!selectedReplaySession ? (
+                  <>
+                    <h3 className="text-lg font-semibold">Session Recordings</h3>
+                    {allTrackingSessions.length === 0 ? (
+                      <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-12 text-center">
+                        <p className="text-slate-400">No recorded sessions for this period</p>
+                      </div>
+                    ) : (
+                      <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-slate-700 text-slate-400 text-xs uppercase">
+                              <th className="text-left p-3">Session</th>
+                              <th className="text-left p-3">Device</th>
+                              <th className="text-left p-3">Max Step</th>
+                              <th className="text-left p-3">Outcome</th>
+                              <th className="text-left p-3">Source</th>
+                              <th className="text-left p-3">Date</th>
+                              <th className="text-left p-3">Recording</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {allTrackingSessions.map((s) => (
+                              <tr key={s.session_id} className="border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors">
+                                <td className="p-3 font-mono text-xs">{s.session_id?.slice(0, 16)}...</td>
+                                <td className="p-3 capitalize">{s.device_type || '—'}</td>
+                                <td className="p-3">
+                                  <span className="font-medium">{s.max_step_reached}</span>
+                                  <span className="text-slate-500 ml-1 text-xs">{STEP_LABELS[s.max_step_reached]}</span>
+                                </td>
+                                <td className="p-3">
+                                  {s.completed ? (
+                                    <span className="text-green-400 text-xs font-bold">Completed</span>
+                                  ) : s.disqualified ? (
+                                    <span className="text-orange-400 text-xs font-bold">DQ @ Step {s.disqualified_at_step}</span>
+                                  ) : (
+                                    <span className="text-slate-500 text-xs">Abandoned</span>
+                                  )}
+                                </td>
+                                <td className="p-3 text-xs">{s.utm_source || 'direct'}</td>
+                                <td className="p-3 text-xs text-slate-400">{analyticsTimeAgo(s.started_at)}</td>
+                                <td className="p-3">
+                                  {s.recording_event_count > 0 ? (
+                                    <button
+                                      onClick={() => loadReplaySession(s)}
+                                      className="px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded text-xs font-medium transition-colors"
+                                    >
+                                      Watch
+                                    </button>
+                                  ) : (
+                                    <span className="text-slate-600 text-xs">No recording</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-4">
+                      <button
+                        onClick={() => { setSelectedReplaySession(null); setReplayEvents(null); }}
+                        className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm transition-colors"
+                      >
+                        Back to list
+                      </button>
+                      <div>
+                        <span className="font-medium">Session:</span>
+                        <span className="text-slate-400 ml-2 font-mono text-sm">{selectedReplaySession.session_id?.slice(0, 20)}...</span>
+                        <span className="text-slate-500 ml-3 text-sm">
+                          {selectedReplaySession.device_type} | Max step: {selectedReplaySession.max_step_reached} | {selectedReplaySession.recording_event_count} events
+                        </span>
+                      </div>
+                    </div>
+                    <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-4 flex items-center justify-center min-h-[600px]">
+                      {replayLoading ? (
+                        <div className="flex items-center gap-3 text-slate-400">
+                          <svg className="animate-spin h-6 w-6" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Loading recording...
+                        </div>
+                      ) : replayEvents && replayEvents.length > 0 ? (
+                        <div ref={replayContainerRef} className="w-full flex justify-center"></div>
+                      ) : replayEvents && replayEvents.length === 0 ? (
+                        <p className="text-slate-500">No recording events found for this session</p>
+                      ) : (
+                        <p className="text-slate-500">Select a session to replay</p>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* ===== HEATMAPS ===== */}
+            {analyticsSubTab === 'heatmaps' && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold">Click Heatmap</h3>
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm text-slate-400">Step:</label>
+                    <select
+                      value={heatmapStep}
+                      onChange={(e) => setHeatmapStep(parseInt(e.target.value))}
+                      className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white"
+                    >
+                      {Array.from({ length: 16 }, (_, i) => i + 1).map((s) => (
+                        <option key={s} value={s}>Step {s} — {STEP_LABELS[s]}</option>
+                      ))}
+                    </select>
+                    <span className="text-xs text-slate-500 ml-2">{heatmapClicks.length} clicks</span>
+                  </div>
+                </div>
+                <div
+                  className="relative bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden"
+                  style={{ width: '100%', paddingBottom: '60%' }}
+                >
+                  {heatmapClicks.length === 0 ? (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <p className="text-slate-500">No click data for Step {heatmapStep} in this period</p>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Grid overlay for reference */}
+                      <div className="absolute inset-0 opacity-10">
+                        {[25, 50, 75].map((pct) => (
+                          <div key={`v${pct}`} className="absolute top-0 bottom-0 border-l border-slate-400" style={{ left: `${pct}%` }}></div>
+                        ))}
+                        {[25, 50, 75].map((pct) => (
+                          <div key={`h${pct}`} className="absolute left-0 right-0 border-t border-slate-400" style={{ top: `${pct}%` }}></div>
+                        ))}
+                      </div>
+                      {/* Click dots */}
+                      {heatmapClicks.map((c, i) => (
+                        <div
+                          key={i}
+                          className="absolute w-3 h-3 rounded-full bg-red-500/40 border border-red-500/60"
+                          style={{
+                            left: `${c.x_percent}%`,
+                            top: `${c.y_percent}%`,
+                            transform: 'translate(-50%, -50%)',
+                          }}
+                          title={`${c.element_tag}: ${c.element_text || '(no text)'}`}
+                        ></div>
+                      ))}
+                      {/* Step label overlay */}
+                      <div className="absolute top-3 left-3 bg-black/60 backdrop-blur-sm rounded px-3 py-1.5">
+                        <span className="text-sm font-medium">Step {heatmapStep}: {STEP_LABELS[heatmapStep]}</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
