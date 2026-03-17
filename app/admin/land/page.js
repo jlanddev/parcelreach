@@ -1961,9 +1961,10 @@ export default function LandLeadsAdminPage() {
                     const lead = allLeads.find(l => l.id === task.lead_id);
                     const leadName = lead?.full_name || lead?.name || 'Unknown';
                     const dueTime = new Date(task.due_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                    const isOverdue = new Date(task.due_at) < new Date();
-                    const taskTypeLabel = task.task_type === 'callback' ? 'Callback' : task.task_type === 'follow_up' ? 'Follow Up' : task.task_type === 'send_offer' ? 'Send Offer' : task.task_type;
-                    const taskTypeColor = task.task_type === 'callback' ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : task.task_type === 'follow_up' ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50' : 'bg-purple-500/20 text-purple-400 border-purple-500/50';
+                    const isNewLead = task.title?.startsWith('NEW LEAD') || task.priority === 'high';
+                    const isOverdue = !isNewLead && new Date(task.due_at) < new Date();
+                    const taskTypeLabel = isNewLead ? 'New Lead' : task.task_type === 'callback' ? 'Callback' : task.task_type === 'follow_up' ? 'Follow Up' : task.task_type === 'send_offer' ? 'Send Offer' : task.task_type;
+                    const taskTypeColor = isNewLead ? 'bg-green-500/20 text-green-400 border-green-500/50' : task.task_type === 'callback' ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : task.task_type === 'follow_up' ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50' : 'bg-purple-500/20 text-purple-400 border-purple-500/50';
 
                     return (
                       <div key={task.id} className={`p-4 hover:bg-slate-800/50 transition-all ${isOverdue ? 'bg-red-900/10' : ''}`}>
