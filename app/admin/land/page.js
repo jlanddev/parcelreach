@@ -632,8 +632,8 @@ export default function LandLeadsAdminPage() {
     const [h, m] = parsed.split(':').map(Number);
     oldDate.setHours(h, m, 0, 0);
     const newDueAt = oldDate.toISOString();
-    await supabase.from('scheduled_tasks').update({ due_at: newDueAt }).eq('id', taskId);
-    setScheduledTasks(prev => prev.map(t => t.id === taskId ? { ...t, due_at: newDueAt } : t));
+    await supabase.from('scheduled_tasks').update({ due_at: newDueAt, updated_at: new Date().toISOString() }).eq('id', taskId);
+    setScheduledTasks(prev => prev.map(t => t.id === taskId ? { ...t, due_at: newDueAt, updated_at: new Date().toISOString() } : t));
     setEditingTaskTime(null);
     showToast(`Rescheduled to ${oldDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`, 'success');
   };
@@ -1979,7 +1979,8 @@ export default function LandLeadsAdminPage() {
                     const leadName = lead?.full_name || lead?.name || 'Unknown';
                     const dueTime = new Date(task.due_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                     const isNewLead = task.title?.startsWith('NEW LEAD') || task.priority === 'high';
-                    const isOverdue = !isNewLead && new Date(task.due_at) < new Date();
+                    const wasRescheduled = task.updated_at && new Date(task.updated_at) > new Date(task.created_at);
+                    const isOverdue = !isNewLead && !wasRescheduled && new Date(task.due_at) < new Date();
                     const taskTypeLabel = isNewLead ? 'New Lead' : task.task_type === 'callback' ? 'Callback' : task.task_type === 'follow_up' ? 'Follow Up' : task.task_type === 'send_offer' ? 'Send Offer' : task.task_type;
                     const taskTypeColor = isNewLead ? 'bg-green-500/20 text-green-400 border-green-500/50' : task.task_type === 'callback' ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : task.task_type === 'follow_up' ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50' : 'bg-purple-500/20 text-purple-400 border-purple-500/50';
 
