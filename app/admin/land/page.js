@@ -42,6 +42,7 @@ export default function LandLeadsAdminPage() {
   const [recentActivity, setRecentActivity] = useState([]); // Live activity feed
   const [selectedCalendarDay, setSelectedCalendarDay] = useState(null); // For calendar day click
   const [rundownVisibleCount, setRundownVisibleCount] = useState(20);
+  const [ppcSearch, setPpcSearch] = useState('');
   const [lastUpdated, setLastUpdated] = useState(new Date());
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -2081,10 +2082,39 @@ export default function LandLeadsAdminPage() {
               </div>
             </div>
 
+            {/* PPC Search */}
+            <div className="relative">
+              <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input
+                type="text"
+                value={ppcSearch}
+                onChange={(e) => setPpcSearch(e.target.value)}
+                placeholder="Search leads by name, phone, county, state, email..."
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-10 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+              />
+              {ppcSearch && (
+                <button onClick={() => setPpcSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              )}
+            </div>
+
             {/* PPC Leads Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
               {allLeads
                 .filter(l => l.source?.includes('Haven Ground'))
+                .filter(l => {
+                  if (!ppcSearch.trim()) return true;
+                  const q = ppcSearch.toLowerCase();
+                  return (l.full_name || l.name || '').toLowerCase().includes(q) ||
+                    (l.phone || '').toLowerCase().includes(q) ||
+                    (l.email || '').toLowerCase().includes(q) ||
+                    (l.property_county || l.county || '').toLowerCase().includes(q) ||
+                    (l.property_state || l.state || '').toLowerCase().includes(q) ||
+                    (l.form_data?.streetAddress || '').toLowerCase().includes(q);
+                })
                 .map((lead) => (
                   <div
                     key={lead.id}
