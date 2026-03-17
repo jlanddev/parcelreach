@@ -417,7 +417,7 @@ export default function LandLeadsAdminPage() {
         task_type: 'callback',
         title: `NEW LEAD: ${l.full_name || l.name || 'Unknown'}`,
         description: `New lead - contact same day`,
-        due_at: (() => { const eod = new Date(); eod.setHours(17, 0, 0, 0); return eod > new Date() ? eod.toISOString() : new Date().toISOString(); })(),
+        due_at: (() => { const eod = new Date(); eod.setHours(17, 0, 0, 0); return eod > new Date() ? getAvailableTime(eod).toISOString() : getAvailableTime(new Date()).toISOString(); })(),
         status: 'pending',
         priority: 'high'
       }));
@@ -573,7 +573,9 @@ export default function LandLeadsAdminPage() {
       const { data: { user } } = await supabase.auth.getUser();
       const lead = allLeads.find(l => l.id === scheduleLeadId);
       const leadName = lead?.full_name || lead?.name || 'Lead';
-      const dueAt = new Date(`${scheduleDate}T${scheduleTime}`).toISOString();
+      const desired = new Date(`${scheduleDate}T${scheduleTime}`);
+      const slot = getAvailableTime(desired);
+      const dueAt = slot.toISOString();
       const title = scheduleType === 'callback'
         ? `Callback: ${leadName}`
         : `Send Offer: ${leadName}`;
@@ -592,7 +594,7 @@ export default function LandLeadsAdminPage() {
       if (error) throw error;
 
       setScheduledTasks(prev => [...prev, data]);
-      showToast(`Scheduled ${scheduleType === 'callback' ? 'callback' : 'offer'} for ${new Date(dueAt).toLocaleDateString()}`, 'success', leadName);
+      showToast(`Scheduled ${scheduleType === 'callback' ? 'callback' : 'offer'} for ${slot.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}`, 'success', leadName);
       setScheduleModalOpen(false);
     } catch (err) {
       console.error('Error saving scheduled task:', err);
@@ -622,6 +624,21 @@ export default function LandLeadsAdminPage() {
     }
   };
 
+  // Find next available time slot (no double-booking). Bumps by 15 min if conflict.
+  const getAvailableTime = (desiredDate) => {
+    const desired = new Date(desiredDate);
+    const maxAttempts = 20; // check up to 5 hours of 15-min slots
+    for (let i = 0; i < maxAttempts; i++) {
+      const checkTime = new Date(desired.getTime() + i * 15 * 60 * 1000);
+      const conflict = scheduledTasks.some(t => {
+        const existing = new Date(t.due_at);
+        return Math.abs(existing.getTime() - checkTime.getTime()) < 15 * 60 * 1000; // within 15 min
+      });
+      if (!conflict) return checkTime;
+    }
+    return desired; // fallback
+  };
+
   // Update a task's scheduled time
   const updateTaskTime = async (taskId, newTimeStr) => {
     const parsed = parseTimeInput(newTimeStr);
@@ -631,6 +648,9 @@ export default function LandLeadsAdminPage() {
     const oldDate = new Date(task.due_at);
     const [h, m] = parsed.split(':').map(Number);
     oldDate.setHours(h, m, 0, 0);
+    // Check for conflicts (exclude self)
+    const conflict = scheduledTasks.some(t => t.id !== taskId && Math.abs(new Date(t.due_at).getTime() - oldDate.getTime()) < 15 * 60 * 1000);
+    if (conflict) { showToast('Time conflict — another task is within 15 min of that slot', 'error'); setEditingTaskTime(null); return; }
     const newDueAt = oldDate.toISOString();
     await supabase.from('scheduled_tasks').update({ due_at: newDueAt, updated_at: new Date().toISOString() }).eq('id', taskId);
     setScheduledTasks(prev => prev.map(t => t.id === taskId ? { ...t, due_at: newDueAt, updated_at: new Date().toISOString() } : t));
@@ -665,13 +685,14 @@ export default function LandLeadsAdminPage() {
     if ((count || 0) >= 2) {
       // 2+ VMs today → schedule for tomorrow morning
       const tmrw = new Date(tomorrowStart); tmrw.setHours(9, 0, 0, 0);
+      const slot = getAvailableTime(tmrw);
       const { data: newTask } = await supabase.from('scheduled_tasks').insert({
         lead_id: task.lead_id, created_by: user?.id, task_type: 'callback',
         title: `Callback: ${leadName}`, description: '2 VMs yesterday - try again',
-        due_at: tmrw.toISOString(), status: 'pending', priority: 'normal'
+        due_at: slot.toISOString(), status: 'pending', priority: 'normal'
       }).select().single();
       if (newTask) setScheduledTasks(prev => [...prev, newTask]);
-      showToast(`2 VMs today → scheduled for tomorrow 9 AM`, 'success', leadName);
+      showToast(`2 VMs today → scheduled ${slot.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}`, 'success', leadName);
     } else {
       // Schedule retry: 2 hours later, but never past 6 PM. If past 6 PM, bump to tomorrow 9 AM.
       const retryTime = new Date();
@@ -679,23 +700,25 @@ export default function LandLeadsAdminPage() {
       const sixPM = new Date(); sixPM.setHours(18, 0, 0, 0);
 
       if (retryTime <= sixPM) {
+        const slot = getAvailableTime(retryTime);
         const { data: newTask } = await supabase.from('scheduled_tasks').insert({
           lead_id: task.lead_id, created_by: user?.id, task_type: 'callback',
           title: `Callback: ${leadName}`, description: 'VM earlier - retry',
-          due_at: retryTime.toISOString(), status: 'pending', priority: 'normal'
+          due_at: slot.toISOString(), status: 'pending', priority: 'normal'
         }).select().single();
         if (newTask) setScheduledTasks(prev => [...prev, newTask]);
-        showToast(`VM logged → retry at ${retryTime.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})}`, 'success', leadName);
+        showToast(`VM logged → retry at ${slot.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})}`, 'success', leadName);
       } else {
         // Past 6 PM cutoff, schedule tomorrow 9 AM
         const tmrw = new Date(tomorrowStart); tmrw.setHours(9, 0, 0, 0);
+        const slot = getAvailableTime(tmrw);
         const { data: newTask } = await supabase.from('scheduled_tasks').insert({
           lead_id: task.lead_id, created_by: user?.id, task_type: 'callback',
           title: `Callback: ${leadName}`, description: 'VM today - retry tomorrow',
-          due_at: tmrw.toISOString(), status: 'pending', priority: 'normal'
+          due_at: slot.toISOString(), status: 'pending', priority: 'normal'
         }).select().single();
         if (newTask) setScheduledTasks(prev => [...prev, newTask]);
-        showToast(`VM logged → too late today, scheduled tomorrow 9 AM`, 'success', leadName);
+        showToast(`VM logged → scheduled ${slot.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}`, 'success', leadName);
       }
     }
   };
@@ -719,13 +742,14 @@ export default function LandLeadsAdminPage() {
 
     // Schedule follow-up tomorrow
     const tmrw = new Date(); tmrw.setHours(0,0,0,0); tmrw.setDate(tmrw.getDate() + 1); tmrw.setHours(10, 0, 0, 0);
+    const slot = getAvailableTime(tmrw);
     const { data: newTask } = await supabase.from('scheduled_tasks').insert({
       lead_id: task.lead_id, created_by: user?.id, task_type: 'follow_up',
       title: `Follow Up: ${leadName}`, description: 'Sent text yesterday - follow up',
-      due_at: tmrw.toISOString(), status: 'pending', priority: 'normal'
+      due_at: slot.toISOString(), status: 'pending', priority: 'normal'
     }).select().single();
     if (newTask) setScheduledTasks(prev => [...prev, newTask]);
-    showToast(`Message logged → follow-up tomorrow 10 AM`, 'success', leadName);
+    showToast(`Message logged → follow-up ${slot.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}`, 'success', leadName);
   };
 
   const openConvoComplete = (task) => {
@@ -771,14 +795,15 @@ export default function LandLeadsAdminPage() {
 
       // Schedule follow-up if date provided
       if (convoScheduleDate && convoScheduleTime) {
-        const dueAt = new Date(`${convoScheduleDate}T${convoScheduleTime}`).toISOString();
+        const desired = new Date(`${convoScheduleDate}T${convoScheduleTime}`);
+        const slot = getAvailableTime(desired);
         const { data: newTask } = await supabase.from('scheduled_tasks').insert({
           lead_id: convoCompleteTask.lead_id, created_by: user?.id, task_type: 'follow_up',
           title: `Follow Up: ${leadName}`, description: convoNotes.trim() ? `Last convo: ${convoNotes}` : 'Follow up from conversation',
-          due_at: dueAt, status: 'pending', priority: 'normal'
+          due_at: slot.toISOString(), status: 'pending', priority: 'normal'
         }).select().single();
         if (newTask) setScheduledTasks(prev => [...prev, newTask]);
-        showToast(`Conversation logged → follow-up scheduled`, 'success', leadName);
+        showToast(`Conversation logged → follow-up ${slot.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}`, 'success', leadName);
       } else {
         showToast(`Conversation logged`, 'success', leadName);
       }
@@ -1979,8 +2004,7 @@ export default function LandLeadsAdminPage() {
                     const leadName = lead?.full_name || lead?.name || 'Unknown';
                     const dueTime = new Date(task.due_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                     const isNewLead = task.title?.startsWith('NEW LEAD') || task.priority === 'high';
-                    const wasRescheduled = task.updated_at && new Date(task.updated_at) > new Date(task.created_at);
-                    const isOverdue = !isNewLead && !wasRescheduled && new Date(task.due_at) < new Date();
+                    const isOverdue = !isNewLead && new Date(task.due_at) < new Date();
                     const taskTypeLabel = isNewLead ? 'New Lead' : task.task_type === 'callback' ? 'Callback' : task.task_type === 'follow_up' ? 'Follow Up' : task.task_type === 'send_offer' ? 'Send Offer' : task.task_type;
                     const taskTypeColor = isNewLead ? 'bg-green-500/20 text-green-400 border-green-500/50' : task.task_type === 'callback' ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : task.task_type === 'follow_up' ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50' : 'bg-purple-500/20 text-purple-400 border-purple-500/50';
 
