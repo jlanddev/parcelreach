@@ -43,6 +43,12 @@ export default function LandLeadsAdminPage() {
   const [selectedCalendarDay, setSelectedCalendarDay] = useState(null); // For calendar day click
   const [rundownVisibleCount, setRundownVisibleCount] = useState(20);
   const [ppcSearch, setPpcSearch] = useState('');
+  const [convoCompleteTask, setConvoCompleteTask] = useState(null);
+  const [convoNotes, setConvoNotes] = useState('');
+  const [convoModalOpen, setConvoModalOpen] = useState(false);
+  const [convoScheduleDate, setConvoScheduleDate] = useState('');
+  const [convoScheduleTime, setConvoScheduleTime] = useState('');
+  const [convoSaving, setConvoSaving] = useState(false);
   const [calendarModalOpen, setCalendarModalOpen] = useState(false);
   const [calendarLead, setCalendarLead] = useState(null);
   const [calendarMonth, setCalendarMonth] = useState(new Date().getMonth());
@@ -674,14 +680,6 @@ export default function LandLeadsAdminPage() {
     if (newTask) setScheduledTasks(prev => [...prev, newTask]);
     showToast(`Message logged → follow-up tomorrow 10 AM`, 'success', leadName);
   };
-
-  // Rundown action: Conversation Complete → open notes + schedule
-  const [convoCompleteTask, setConvoCompleteTask] = useState(null);
-  const [convoNotes, setConvoNotes] = useState('');
-  const [convoModalOpen, setConvoModalOpen] = useState(false);
-  const [convoScheduleDate, setConvoScheduleDate] = useState('');
-  const [convoScheduleTime, setConvoScheduleTime] = useState('');
-  const [convoSaving, setConvoSaving] = useState(false);
 
   const openConvoComplete = (task) => {
     const lead = allLeads.find(l => l.id === task.lead_id);
