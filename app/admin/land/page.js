@@ -746,6 +746,24 @@ export default function LandLeadsAdminPage() {
     }
   };
 
+  // Parse typed time like "2pm", "10:30am", "14:00", "3:30 PM" into "HH:MM" 24h format
+  const parseTimeInput = (val) => {
+    if (!val) return '';
+    const s = val.trim().toLowerCase().replace(/\s+/g, '');
+    // Already HH:MM format
+    if (/^\d{1,2}:\d{2}$/.test(s)) return s.padStart(5, '0');
+    // Match patterns like 2pm, 2:30pm, 10am, 10:30am
+    const m = s.match(/^(\d{1,2}):?(\d{2})?\s*(am|pm)?$/);
+    if (!m) return '';
+    let h = parseInt(m[1], 10);
+    const min = m[2] ? parseInt(m[2], 10) : 0;
+    const ampm = m[3];
+    if (ampm === 'pm' && h < 12) h += 12;
+    if (ampm === 'am' && h === 12) h = 0;
+    if (h > 23 || min > 59) return '';
+    return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+  };
+
   // Open big calendar modal for a lead
   const openCalendarModal = async (lead) => {
     // Fetch notes for this lead
@@ -4735,11 +4753,13 @@ export default function LandLeadsAdminPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1">Time</label>
+                  <label className="block text-xs text-slate-500 mb-1">Time (e.g. 2pm, 10:30am)</label>
                   <input
-                    type="time"
+                    type="text"
                     value={convoScheduleTime}
                     onChange={(e) => setConvoScheduleTime(e.target.value)}
+                    onBlur={(e) => { const p = parseTimeInput(e.target.value); if (p) setConvoScheduleTime(p); }}
+                    placeholder="2:00pm"
                     className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
                   />
                 </div>
@@ -4821,11 +4841,13 @@ export default function LandLeadsAdminPage() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">Time</label>
+                <label className="block text-sm font-medium text-slate-300 mb-1">Time (e.g. 2pm)</label>
                 <input
-                  type="time"
+                  type="text"
                   value={scheduleTime}
                   onChange={(e) => setScheduleTime(e.target.value)}
+                  onBlur={(e) => { const p = parseTimeInput(e.target.value); if (p) setScheduleTime(p); }}
+                  placeholder="2:00pm"
                   className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
                 />
               </div>
@@ -4981,9 +5003,11 @@ export default function LandLeadsAdminPage() {
                   className="flex-1 px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
                 />
                 <input
-                  type="time"
+                  type="text"
                   value={callbackTime}
                   onChange={(e) => setCallbackTime(e.target.value)}
+                  onBlur={(e) => { const p = parseTimeInput(e.target.value); if (p) setCallbackTime(p); }}
+                  placeholder="2pm"
                   className="w-28 px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
                 />
               </div>
