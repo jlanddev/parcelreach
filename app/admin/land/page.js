@@ -415,7 +415,7 @@ export default function LandLeadsAdminPage() {
         task_type: 'callback',
         title: `NEW LEAD: ${l.full_name || l.name || 'Unknown'}`,
         description: `New lead - contact same day`,
-        due_at: new Date().toISOString(),
+        due_at: (() => { const eod = new Date(); eod.setHours(17, 0, 0, 0); return eod > new Date() ? eod.toISOString() : new Date().toISOString(); })(),
         status: 'pending',
         priority: 'high'
       }));
@@ -631,7 +631,8 @@ export default function LandLeadsAdminPage() {
       lead_id: task.lead_id, user_id: user?.id,
       content: '[VM] Left Voicemail', mentioned_users: []
     });
-    await supabase.from('leads').update({ last_activity_at: new Date().toISOString() }).eq('id', task.lead_id);
+    await supabase.from('leads').update({ last_activity_at: new Date().toISOString(), status: 'contacting', pipeline_status: 'CONTACTING' }).eq('id', task.lead_id);
+    setAllLeads(prev => prev.map(l => l.id === task.lead_id ? { ...l, last_activity_at: new Date().toISOString(), status: 'contacting', pipeline_status: 'CONTACTING' } : l));
 
     // Count VMs today for this lead
     const todayStart = new Date(); todayStart.setHours(0,0,0,0);
@@ -692,7 +693,8 @@ export default function LandLeadsAdminPage() {
       lead_id: task.lead_id, user_id: user?.id,
       content: '[TEXT] Sent text message', mentioned_users: []
     });
-    await supabase.from('leads').update({ last_activity_at: new Date().toISOString() }).eq('id', task.lead_id);
+    await supabase.from('leads').update({ last_activity_at: new Date().toISOString(), status: 'contacting', pipeline_status: 'CONTACTING' }).eq('id', task.lead_id);
+    setAllLeads(prev => prev.map(l => l.id === task.lead_id ? { ...l, last_activity_at: new Date().toISOString(), status: 'contacting', pipeline_status: 'CONTACTING' } : l));
 
     // Complete this task
     await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id }).eq('id', task.id);
@@ -744,6 +746,7 @@ export default function LandLeadsAdminPage() {
         last_activity_at: new Date().toISOString(),
         status: 'contacted', pipeline_status: 'CONTACTED'
       }).eq('id', convoCompleteTask.lead_id);
+      setAllLeads(prev => prev.map(l => l.id === convoCompleteTask.lead_id ? { ...l, last_activity_at: new Date().toISOString(), status: 'contacted', pipeline_status: 'CONTACTED' } : l));
 
       // Complete current task
       await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id }).eq('id', convoCompleteTask.id);
