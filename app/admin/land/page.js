@@ -655,13 +655,12 @@ export default function LandLeadsAdminPage() {
       if (newTask) setScheduledTasks(prev => [...prev, newTask]);
       showToast(`2 VMs today → scheduled for tomorrow 9 AM`, 'success', leadName);
     } else {
-      // Schedule retry for later today (3 hours from now or 3 PM, whichever is later)
-      const later = new Date();
-      const threePM = new Date(); threePM.setHours(15, 0, 0, 0);
-      later.setHours(later.getHours() + 3);
-      const retryTime = later > threePM ? later : threePM;
-      // Only schedule if still today
-      if (retryTime < tomorrowStart) {
+      // Schedule retry: 2 hours later, but never past 6 PM. If past 6 PM, bump to tomorrow 9 AM.
+      const retryTime = new Date();
+      retryTime.setHours(retryTime.getHours() + 2);
+      const sixPM = new Date(); sixPM.setHours(18, 0, 0, 0);
+
+      if (retryTime <= sixPM) {
         const { data: newTask } = await supabase.from('scheduled_tasks').insert({
           lead_id: task.lead_id, created_by: user?.id, task_type: 'callback',
           title: `Callback: ${leadName}`, description: 'VM earlier - retry',
@@ -670,15 +669,15 @@ export default function LandLeadsAdminPage() {
         if (newTask) setScheduledTasks(prev => [...prev, newTask]);
         showToast(`VM logged → retry at ${retryTime.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})}`, 'success', leadName);
       } else {
-        // Too late today, schedule tomorrow
+        // Past 6 PM cutoff, schedule tomorrow 9 AM
         const tmrw = new Date(tomorrowStart); tmrw.setHours(9, 0, 0, 0);
         const { data: newTask } = await supabase.from('scheduled_tasks').insert({
           lead_id: task.lead_id, created_by: user?.id, task_type: 'callback',
-          title: `Callback: ${leadName}`, description: 'VM - retry tomorrow',
+          title: `Callback: ${leadName}`, description: 'VM today - retry tomorrow',
           due_at: tmrw.toISOString(), status: 'pending', priority: 'normal'
         }).select().single();
         if (newTask) setScheduledTasks(prev => [...prev, newTask]);
-        showToast(`VM logged → scheduled tomorrow 9 AM`, 'success', leadName);
+        showToast(`VM logged → too late today, scheduled tomorrow 9 AM`, 'success', leadName);
       }
     }
   };
