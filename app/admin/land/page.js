@@ -43,6 +43,11 @@ export default function LandLeadsAdminPage() {
   const [selectedCalendarDay, setSelectedCalendarDay] = useState(null); // For calendar day click
   const [rundownVisibleCount, setRundownVisibleCount] = useState(20);
   const [ppcSearch, setPpcSearch] = useState('');
+  const [calendarModalOpen, setCalendarModalOpen] = useState(false);
+  const [calendarLead, setCalendarLead] = useState(null);
+  const [calendarMonth, setCalendarMonth] = useState(new Date().getMonth());
+  const [calendarYear, setCalendarYear] = useState(new Date().getFullYear());
+  const [calendarSelectedDay, setCalendarSelectedDay] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(new Date());
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -579,6 +584,17 @@ export default function LandLeadsAdminPage() {
       console.error('Error completing task:', err);
       showToast('Error: ' + err.message, 'error');
     }
+  };
+
+  // Open big calendar modal for a lead
+  const openCalendarModal = async (lead) => {
+    // Fetch notes for this lead
+    const { data: notes } = await supabase.from('lead_notes').select('*').eq('lead_id', lead.id).order('created_at', { ascending: false });
+    setCalendarLead({ ...lead, notes: notes || [] });
+    setCalendarMonth(new Date().getMonth());
+    setCalendarYear(new Date().getFullYear());
+    setCalendarSelectedDay(null);
+    setCalendarModalOpen(true);
   };
 
   const handleViewDashboard = (orgId) => {
@@ -2517,6 +2533,18 @@ export default function LandLeadsAdminPage() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
+                          openCalendarModal(lead);
+                        }}
+                        className="px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        Calendar
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
                           openLeadDetails(lead);
                         }}
                         className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold rounded-lg transition-colors"
@@ -4358,6 +4386,247 @@ export default function LandLeadsAdminPage() {
                   </>
                 )}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Big Calendar Modal */}
+      {calendarModalOpen && calendarLead && (
+        <div
+          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setCalendarModalOpen(false)}
+        >
+          <div
+            className="bg-slate-900 rounded-2xl border border-slate-700 w-full max-w-4xl max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="bg-slate-800 px-6 py-4 border-b border-slate-700 flex items-center justify-between rounded-t-2xl">
+              <div>
+                <h3 className="text-xl font-bold text-white">{calendarLead.full_name || calendarLead.name || 'Lead'}</h3>
+                <p className="text-sm text-slate-400">{calendarLead.phone || 'No phone'} &middot; {calendarLead.property_county || calendarLead.county}, {calendarLead.property_state || calendarLead.state}</p>
+              </div>
+              <button onClick={() => setCalendarModalOpen(false)} className="text-slate-400 hover:text-white text-2xl font-bold">&times;</button>
+            </div>
+
+            <div className="p-6">
+              {/* Month Navigation */}
+              <div className="flex items-center justify-between mb-6">
+                <button
+                  onClick={() => {
+                    if (calendarMonth === 0) { setCalendarMonth(11); setCalendarYear(prev => prev - 1); }
+                    else setCalendarMonth(prev => prev - 1);
+                    setCalendarSelectedDay(null);
+                  }}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-white font-medium transition-colors"
+                >
+                  &larr; Prev
+                </button>
+                <h4 className="text-2xl font-bold text-white">
+                  {new Date(calendarYear, calendarMonth).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                </h4>
+                <button
+                  onClick={() => {
+                    if (calendarMonth === 11) { setCalendarMonth(0); setCalendarYear(prev => prev + 1); }
+                    else setCalendarMonth(prev => prev + 1);
+                    setCalendarSelectedDay(null);
+                  }}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-white font-medium transition-colors"
+                >
+                  Next &rarr;
+                </button>
+              </div>
+
+              {/* Calendar Grid */}
+              {(() => {
+                const firstDay = new Date(calendarYear, calendarMonth, 1).getDay();
+                const daysInMonth = new Date(calendarYear, calendarMonth + 1, 0).getDate();
+                const today = new Date();
+                const isCurrentMonth = today.getMonth() === calendarMonth && today.getFullYear() === calendarYear;
+
+                // Build activity map for this month
+                const dayData = {};
+                // Notes
+                if (calendarLead.notes) {
+                  calendarLead.notes.forEach(note => {
+                    const d = new Date(note.created_at);
+                    if (d.getMonth() === calendarMonth && d.getFullYear() === calendarYear) {
+                      const dayNum = d.getDate();
+                      if (!dayData[dayNum]) dayData[dayNum] = { notes: [], tasks: [] };
+                      dayData[dayNum].notes.push(note);
+                    }
+                  });
+                }
+                // Scheduled tasks
+                scheduledTasks.filter(t => t.lead_id === calendarLead.id).forEach(task => {
+                  const d = new Date(task.due_at);
+                  if (d.getMonth() === calendarMonth && d.getFullYear() === calendarYear) {
+                    const dayNum = d.getDate();
+                    if (!dayData[dayNum]) dayData[dayNum] = { notes: [], tasks: [] };
+                    dayData[dayNum].tasks.push(task);
+                  }
+                });
+                // Lead created
+                const created = new Date(calendarLead.created_at);
+                if (created.getMonth() === calendarMonth && created.getFullYear() === calendarYear) {
+                  const dayNum = created.getDate();
+                  if (!dayData[dayNum]) dayData[dayNum] = { notes: [], tasks: [] };
+                  dayData[dayNum].created = true;
+                }
+
+                const cells = [];
+                for (let i = 0; i < firstDay; i++) {
+                  cells.push(<div key={`e-${i}`} className="h-24 bg-slate-800/30 rounded-lg"></div>);
+                }
+                for (let day = 1; day <= daysInMonth; day++) {
+                  const isToday = isCurrentMonth && day === today.getDate();
+                  const data = dayData[day];
+                  const hasNotes = data?.notes?.length > 0;
+                  const hasTasks = data?.tasks?.length > 0;
+                  const isCreated = data?.created;
+                  const isSelected = calendarSelectedDay === day;
+
+                  cells.push(
+                    <button
+                      key={day}
+                      onClick={() => setCalendarSelectedDay(isSelected ? null : day)}
+                      className={`h-24 rounded-lg p-2 text-left transition-all flex flex-col ${
+                        isSelected ? 'ring-2 ring-blue-500 bg-slate-700' :
+                        isToday ? 'bg-blue-600/20 border border-blue-500/50' :
+                        (hasNotes || hasTasks) ? 'bg-slate-800 hover:bg-slate-700' :
+                        'bg-slate-800/30 hover:bg-slate-800/60'
+                      }`}
+                    >
+                      <span className={`text-sm font-bold ${isToday ? 'text-blue-400' : 'text-slate-300'}`}>{day}</span>
+                      <div className="flex-1 flex flex-col gap-0.5 mt-1 overflow-hidden">
+                        {isCreated && (
+                          <div className="text-[10px] bg-cyan-500/20 text-cyan-400 px-1 rounded truncate">Lead Created</div>
+                        )}
+                        {hasTasks && data.tasks.map((t, i) => (
+                          <div key={i} className="text-[10px] bg-orange-500/20 text-orange-400 px-1 rounded truncate">
+                            {new Date(t.due_at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})} {t.task_type === 'callback' ? 'Callback' : 'Offer'}
+                          </div>
+                        ))}
+                        {hasNotes && (
+                          <div className="text-[10px] bg-green-500/20 text-green-400 px-1 rounded truncate">
+                            {data.notes.length} note{data.notes.length > 1 ? 's' : ''}
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                  );
+                }
+
+                return (
+                  <>
+                    <div className="grid grid-cols-7 gap-1 text-center text-xs text-slate-500 mb-2 font-semibold">
+                      <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+                    </div>
+                    <div className="grid grid-cols-7 gap-1">
+                      {cells}
+                    </div>
+
+                    {/* Selected Day Detail */}
+                    {calendarSelectedDay && (
+                      <div className="mt-6 bg-slate-800 rounded-xl border border-slate-600 p-5">
+                        <div className="flex items-center justify-between mb-4">
+                          <h5 className="text-lg font-bold text-white">
+                            {new Date(calendarYear, calendarMonth, calendarSelectedDay).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                          </h5>
+                          <button onClick={() => setCalendarSelectedDay(null)} className="text-slate-400 hover:text-white text-lg">&times;</button>
+                        </div>
+
+                        {/* Scheduled Tasks for this day */}
+                        {dayData[calendarSelectedDay]?.tasks?.length > 0 && (
+                          <div className="mb-4">
+                            <h6 className="text-sm font-semibold text-orange-400 mb-2 uppercase tracking-wide">Scheduled Tasks</h6>
+                            <div className="space-y-2">
+                              {dayData[calendarSelectedDay].tasks.map((task, idx) => (
+                                <div key={idx} className="p-3 bg-orange-500/10 border border-orange-500/30 rounded-lg flex items-center justify-between">
+                                  <div>
+                                    <span className="text-white font-medium">{task.task_type === 'callback' ? 'Callback' : 'Send Offer'}</span>
+                                    <span className="text-orange-300 text-sm ml-2">at {new Date(task.due_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</span>
+                                    {task.description && <p className="text-slate-400 text-sm mt-1">{task.description}</p>}
+                                  </div>
+                                  <button
+                                    onClick={() => completeScheduledTask(task.id)}
+                                    className="px-3 py-1.5 bg-green-600 hover:bg-green-500 rounded text-sm font-medium transition-colors"
+                                  >
+                                    Done
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Notes for this day */}
+                        {dayData[calendarSelectedDay]?.notes?.length > 0 && (
+                          <div className="mb-4">
+                            <h6 className="text-sm font-semibold text-green-400 mb-2 uppercase tracking-wide">Notes & Activity</h6>
+                            <div className="space-y-2">
+                              {dayData[calendarSelectedDay].notes.map((note, idx) => (
+                                <div key={idx} className="p-3 bg-slate-700/50 rounded-lg">
+                                  <div className="flex justify-between items-start">
+                                    <p className="text-white text-sm">{note.content}</p>
+                                    <span className="text-xs text-slate-500 ml-3 whitespace-nowrap">
+                                      {new Date(note.created_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Created on this day */}
+                        {dayData[calendarSelectedDay]?.created && (
+                          <div className="p-3 bg-cyan-500/10 border border-cyan-500/30 rounded-lg">
+                            <span className="text-cyan-400 font-medium">Lead was created on this day</span>
+                            <span className="text-slate-400 text-sm ml-2">at {new Date(calendarLead.created_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</span>
+                          </div>
+                        )}
+
+                        {/* Nothing */}
+                        {!dayData[calendarSelectedDay] && (
+                          <p className="text-slate-500 text-center py-4">No activity on this day</p>
+                        )}
+
+                        {/* Quick Schedule from calendar */}
+                        <div className="mt-4 pt-4 border-t border-slate-700">
+                          <button
+                            onClick={() => {
+                              setCalendarModalOpen(false);
+                              setScheduleLeadId(calendarLead.id);
+                              setScheduleType('callback');
+                              const dateStr = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}-${String(calendarSelectedDay).padStart(2, '0')}`;
+                              setScheduleDate(dateStr);
+                              setScheduleTime('10:00');
+                              setScheduleNote('');
+                              setScheduleModalOpen(true);
+                            }}
+                            className="w-full px-4 py-2.5 bg-orange-600 hover:bg-orange-500 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                            </svg>
+                            Schedule Task on This Day
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Legend */}
+                    <div className="flex gap-6 mt-4 text-xs">
+                      <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-blue-600/40 border border-blue-500/50"></div><span className="text-slate-400">Today</span></div>
+                      <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-orange-500/30"></div><span className="text-slate-400">Scheduled Task</span></div>
+                      <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-green-500/30"></div><span className="text-slate-400">Notes</span></div>
+                      <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-cyan-500/30"></div><span className="text-slate-400">Lead Created</span></div>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           </div>
         </div>
