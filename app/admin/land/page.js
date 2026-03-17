@@ -49,6 +49,8 @@ export default function LandLeadsAdminPage() {
   const [convoScheduleDate, setConvoScheduleDate] = useState('');
   const [convoScheduleTime, setConvoScheduleTime] = useState('');
   const [convoSaving, setConvoSaving] = useState(false);
+  const [editingTaskTime, setEditingTaskTime] = useState(null); // task id being edited
+  const [editingTimeValue, setEditingTimeValue] = useState('');
   const [calendarModalOpen, setCalendarModalOpen] = useState(false);
   const [calendarLead, setCalendarLead] = useState(null);
   const [calendarMonth, setCalendarMonth] = useState(new Date().getMonth());
@@ -618,6 +620,22 @@ export default function LandLeadsAdminPage() {
       console.error('Error completing task:', err);
       showToast('Error: ' + err.message, 'error');
     }
+  };
+
+  // Update a task's scheduled time
+  const updateTaskTime = async (taskId, newTimeStr) => {
+    const parsed = parseTimeInput(newTimeStr);
+    if (!parsed) { setEditingTaskTime(null); return; }
+    const task = scheduledTasks.find(t => t.id === taskId);
+    if (!task) return;
+    const oldDate = new Date(task.due_at);
+    const [h, m] = parsed.split(':').map(Number);
+    oldDate.setHours(h, m, 0, 0);
+    const newDueAt = oldDate.toISOString();
+    await supabase.from('scheduled_tasks').update({ due_at: newDueAt }).eq('id', taskId);
+    setScheduledTasks(prev => prev.map(t => t.id === taskId ? { ...t, due_at: newDueAt } : t));
+    setEditingTaskTime(null);
+    showToast(`Rescheduled to ${oldDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`, 'success');
   };
 
   // Rundown action: Left Voicemail
@@ -1975,9 +1993,25 @@ export default function LandLeadsAdminPage() {
                                 {taskTypeLabel}
                               </span>
                               <span className="font-semibold text-white truncate">{leadName}</span>
-                              <span className={`text-xs ${isOverdue ? 'text-red-400 font-semibold' : 'text-slate-500'}`}>
-                                {isOverdue ? 'OVERDUE - ' : ''}{dueTime}
-                              </span>
+                              {editingTaskTime === task.id ? (
+                                <input
+                                  type="text"
+                                  defaultValue={dueTime}
+                                  autoFocus
+                                  placeholder="2pm"
+                                  className="w-20 px-1.5 py-0.5 bg-slate-900 border border-blue-500 rounded text-xs text-white focus:outline-none"
+                                  onBlur={(e) => updateTaskTime(task.id, e.target.value)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') updateTaskTime(task.id, e.target.value); if (e.key === 'Escape') setEditingTaskTime(null); }}
+                                />
+                              ) : (
+                                <button
+                                  onClick={() => { setEditingTaskTime(task.id); setEditingTimeValue(dueTime); }}
+                                  className={`text-xs hover:underline cursor-pointer ${isOverdue ? 'text-red-400 font-semibold' : 'text-slate-500 hover:text-blue-400'}`}
+                                  title="Click to reschedule"
+                                >
+                                  {isOverdue ? 'OVERDUE - ' : ''}{dueTime}
+                                </button>
+                              )}
                             </div>
                             {task.description && (
                               <div className="text-sm text-slate-400 mb-1">{task.description}</div>
