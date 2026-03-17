@@ -586,6 +586,166 @@ export default function LandLeadsAdminPage() {
     }
   };
 
+  // Rundown action: Left Voicemail
+  const rundownVM = async (task) => {
+    const lead = allLeads.find(l => l.id === task.lead_id);
+    const leadName = lead?.full_name || lead?.name || 'Lead';
+    const { data: { user } } = await supabase.auth.getUser();
+
+    // Log the VM note
+    await supabase.from('lead_notes').insert({
+      lead_id: task.lead_id, user_id: user?.id,
+      content: '[VM] Left Voicemail', mentioned_users: []
+    });
+    await supabase.from('leads').update({ last_activity_at: new Date().toISOString() }).eq('id', task.lead_id);
+
+    // Count VMs today for this lead
+    const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+    const tomorrowStart = new Date(todayStart); tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+    const { count } = await supabase.from('lead_notes').select('*', { count: 'exact', head: true })
+      .eq('lead_id', task.lead_id).gte('created_at', todayStart.toISOString()).lt('created_at', tomorrowStart.toISOString()).like('content', '%[VM]%');
+
+    // Complete this task
+    await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id }).eq('id', task.id);
+    setScheduledTasks(prev => prev.filter(t => t.id !== task.id));
+
+    if ((count || 0) >= 2) {
+      // 2+ VMs today → schedule for tomorrow morning
+      const tmrw = new Date(tomorrowStart); tmrw.setHours(9, 0, 0, 0);
+      const { data: newTask } = await supabase.from('scheduled_tasks').insert({
+        lead_id: task.lead_id, created_by: user?.id, task_type: 'callback',
+        title: `Callback: ${leadName}`, description: '2 VMs yesterday - try again',
+        due_at: tmrw.toISOString(), status: 'pending', priority: 'normal'
+      }).select().single();
+      if (newTask) setScheduledTasks(prev => [...prev, newTask]);
+      showToast(`2 VMs today → scheduled for tomorrow 9 AM`, 'success', leadName);
+    } else {
+      // Schedule retry for later today (3 hours from now or 3 PM, whichever is later)
+      const later = new Date();
+      const threePM = new Date(); threePM.setHours(15, 0, 0, 0);
+      later.setHours(later.getHours() + 3);
+      const retryTime = later > threePM ? later : threePM;
+      // Only schedule if still today
+      if (retryTime < tomorrowStart) {
+        const { data: newTask } = await supabase.from('scheduled_tasks').insert({
+          lead_id: task.lead_id, created_by: user?.id, task_type: 'callback',
+          title: `Callback: ${leadName}`, description: 'VM earlier - retry',
+          due_at: retryTime.toISOString(), status: 'pending', priority: 'normal'
+        }).select().single();
+        if (newTask) setScheduledTasks(prev => [...prev, newTask]);
+        showToast(`VM logged → retry at ${retryTime.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})}`, 'success', leadName);
+      } else {
+        // Too late today, schedule tomorrow
+        const tmrw = new Date(tomorrowStart); tmrw.setHours(9, 0, 0, 0);
+        const { data: newTask } = await supabase.from('scheduled_tasks').insert({
+          lead_id: task.lead_id, created_by: user?.id, task_type: 'callback',
+          title: `Callback: ${leadName}`, description: 'VM - retry tomorrow',
+          due_at: tmrw.toISOString(), status: 'pending', priority: 'normal'
+        }).select().single();
+        if (newTask) setScheduledTasks(prev => [...prev, newTask]);
+        showToast(`VM logged → scheduled tomorrow 9 AM`, 'success', leadName);
+      }
+    }
+  };
+
+  // Rundown action: Sent Message → schedule follow-up tomorrow
+  const rundownSentMessage = async (task) => {
+    const lead = allLeads.find(l => l.id === task.lead_id);
+    const leadName = lead?.full_name || lead?.name || 'Lead';
+    const { data: { user } } = await supabase.auth.getUser();
+
+    await supabase.from('lead_notes').insert({
+      lead_id: task.lead_id, user_id: user?.id,
+      content: '[TEXT] Sent text message', mentioned_users: []
+    });
+    await supabase.from('leads').update({ last_activity_at: new Date().toISOString() }).eq('id', task.lead_id);
+
+    // Complete this task
+    await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id }).eq('id', task.id);
+    setScheduledTasks(prev => prev.filter(t => t.id !== task.id));
+
+    // Schedule follow-up tomorrow
+    const tmrw = new Date(); tmrw.setHours(0,0,0,0); tmrw.setDate(tmrw.getDate() + 1); tmrw.setHours(10, 0, 0, 0);
+    const { data: newTask } = await supabase.from('scheduled_tasks').insert({
+      lead_id: task.lead_id, created_by: user?.id, task_type: 'follow_up',
+      title: `Follow Up: ${leadName}`, description: 'Sent text yesterday - follow up',
+      due_at: tmrw.toISOString(), status: 'pending', priority: 'normal'
+    }).select().single();
+    if (newTask) setScheduledTasks(prev => [...prev, newTask]);
+    showToast(`Message logged → follow-up tomorrow 10 AM`, 'success', leadName);
+  };
+
+  // Rundown action: Conversation Complete → open notes + schedule
+  const [convoCompleteTask, setConvoCompleteTask] = useState(null);
+  const [convoNotes, setConvoNotes] = useState('');
+  const [convoModalOpen, setConvoModalOpen] = useState(false);
+  const [convoScheduleDate, setConvoScheduleDate] = useState('');
+  const [convoScheduleTime, setConvoScheduleTime] = useState('');
+  const [convoSaving, setConvoSaving] = useState(false);
+
+  const openConvoComplete = (task) => {
+    const lead = allLeads.find(l => l.id === task.lead_id);
+    setConvoCompleteTask({ ...task, lead });
+    setConvoNotes('');
+    // Default to tomorrow 10 AM
+    const tmrw = new Date(); tmrw.setDate(tmrw.getDate() + 1);
+    setConvoScheduleDate(tmrw.toISOString().split('T')[0]);
+    setConvoScheduleTime('10:00');
+    setConvoModalOpen(true);
+  };
+
+  const saveConvoComplete = async () => {
+    if (!convoCompleteTask) return;
+    setConvoSaving(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const lead = convoCompleteTask.lead;
+      const leadName = lead?.full_name || lead?.name || 'Lead';
+
+      // Log notes
+      if (convoNotes.trim()) {
+        await supabase.from('lead_notes').insert({
+          lead_id: convoCompleteTask.lead_id, user_id: user?.id,
+          content: `[SPOKE] ${convoNotes}`, mentioned_users: []
+        });
+      } else {
+        await supabase.from('lead_notes').insert({
+          lead_id: convoCompleteTask.lead_id, user_id: user?.id,
+          content: '[SPOKE] Conversation completed', mentioned_users: []
+        });
+      }
+      await supabase.from('leads').update({
+        last_activity_at: new Date().toISOString(),
+        status: 'contacted', pipeline_status: 'CONTACTED'
+      }).eq('id', convoCompleteTask.lead_id);
+
+      // Complete current task
+      await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id }).eq('id', convoCompleteTask.id);
+      setScheduledTasks(prev => prev.filter(t => t.id !== convoCompleteTask.id));
+
+      // Schedule follow-up if date provided
+      if (convoScheduleDate && convoScheduleTime) {
+        const dueAt = new Date(`${convoScheduleDate}T${convoScheduleTime}`).toISOString();
+        const { data: newTask } = await supabase.from('scheduled_tasks').insert({
+          lead_id: convoCompleteTask.lead_id, created_by: user?.id, task_type: 'follow_up',
+          title: `Follow Up: ${leadName}`, description: convoNotes.trim() ? `Last convo: ${convoNotes}` : 'Follow up from conversation',
+          due_at: dueAt, status: 'pending', priority: 'normal'
+        }).select().single();
+        if (newTask) setScheduledTasks(prev => [...prev, newTask]);
+        showToast(`Conversation logged → follow-up scheduled`, 'success', leadName);
+      } else {
+        showToast(`Conversation logged`, 'success', leadName);
+      }
+
+      setConvoModalOpen(false);
+    } catch (err) {
+      console.error(err);
+      showToast('Error: ' + err.message, 'error');
+    } finally {
+      setConvoSaving(false);
+    }
+  };
+
   // Open big calendar modal for a lead
   const openCalendarModal = async (lead) => {
     // Fetch notes for this lead
@@ -1713,227 +1873,127 @@ export default function LandLeadsAdminPage() {
         {/* DAILY RUNDOWN TAB */}
         {activeTab === 'daily-rundown' && (
           <div className="space-y-6">
-            {/* Scheduled Tasks for Today */}
-            {(() => {
-              const today = new Date();
-              today.setHours(0, 0, 0, 0);
-              const tomorrow = new Date(today);
-              tomorrow.setDate(tomorrow.getDate() + 1);
-              const todayTasks = scheduledTasks.filter(t => {
-                const due = new Date(t.due_at);
-                return due >= today && due < tomorrow;
-              });
-              if (todayTasks.length === 0) return null;
-              return (
-                <div className="bg-slate-900 rounded-xl border border-orange-500/30 overflow-hidden">
-                  <div className="bg-orange-500/10 px-4 py-3 border-b border-orange-500/30 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <svg className="w-5 h-5 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                      <span className="font-semibold text-orange-300">Scheduled for Today</span>
-                    </div>
-                    <span className="text-orange-400/70 text-sm">{todayTasks.length} task{todayTasks.length !== 1 ? 's' : ''}</span>
-                  </div>
-                  <div className="divide-y divide-slate-800">
-                    {todayTasks.map(task => {
-                      const lead = allLeads.find(l => l.id === task.lead_id);
-                      const leadName = lead?.full_name || lead?.name || 'Unknown';
-                      const dueTime = new Date(task.due_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                      const isOverdue = new Date(task.due_at) < new Date();
-                      return (
-                        <div key={task.id} className={`p-4 hover:bg-slate-800/50 transition-all ${isOverdue ? 'bg-red-900/10' : ''}`}>
-                          <div className="flex items-center gap-4">
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className={`px-2 py-0.5 rounded border text-xs font-bold ${
-                                  task.task_type === 'callback'
-                                    ? 'bg-blue-500/20 text-blue-400 border-blue-500/50'
-                                    : 'bg-purple-500/20 text-purple-400 border-purple-500/50'
-                                }`}>
-                                  {task.task_type === 'callback' ? 'Callback' : 'Send Offer'}
-                                </span>
-                                <span className="font-semibold text-white truncate">{leadName}</span>
-                                <span className={`text-xs ${isOverdue ? 'text-red-400 font-semibold' : 'text-slate-500'}`}>
-                                  {isOverdue ? 'OVERDUE - ' : ''}{dueTime}
-                                </span>
-                              </div>
-                              {task.description && (
-                                <div className="text-sm text-slate-400 truncate">{task.description}</div>
-                              )}
-                              {lead && (
-                                <div className="text-sm text-slate-500">
-                                  {lead.phone || 'No phone'} - {lead.property_county || lead.county}, {lead.property_state || lead.state}
-                                </div>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              {lead && (
-                                <button
-                                  onClick={() => openLeadDetails(lead)}
-                                  className="px-3 py-2 bg-slate-700 hover:bg-slate-600 active:scale-95 rounded text-sm font-medium transition-all"
-                                >
-                                  View
-                                </button>
-                              )}
-                              <button
-                                onClick={() => completeScheduledTask(task.id)}
-                                className="px-3 py-2 bg-green-600 hover:bg-green-500 active:scale-95 rounded text-sm font-medium transition-all"
-                              >
-                                Done
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* Today's Action List */}
+            {/* Daily Schedule - Single Unified Board */}
             <div className="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden">
               <div className="bg-slate-800 px-4 py-3 border-b border-slate-700 flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-3 h-3 rounded-full bg-green-500"></div>
-                  <span className="font-semibold">Today's Actions - {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</span>
-                  <span className="text-slate-500 text-sm">
-                    ({(() => {
-                      const ts = new Date(); ts.setHours(0,0,0,0);
-                      const ttIds = new Set(scheduledTasks.filter(t => { const d = new Date(t.due_at); return d >= ts && d < new Date(ts.getTime()+86400000); }).map(t => t.lead_id));
-                      return allLeads.filter(l => { const s = getSmartStatus(l); if (completedToday.has(l.id)) return false; if (['DEAD','CLOSED','NURTURE','UNDER_CONTRACT'].includes(s)) return false; return new Date(l.created_at) >= ts || ttIds.has(l.id); }).length;
-                    })()} leads)
-                  </span>
+                  <svg className="w-5 h-5 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  <span className="font-semibold text-white text-lg">Daily Schedule - {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</span>
                 </div>
-                <span className="text-slate-400 text-sm">{completedToday.size} completed today</span>
+                <span className="text-slate-400 text-sm">
+                  {(() => {
+                    const ts = new Date(); ts.setHours(0,0,0,0);
+                    const tmrw = new Date(ts); tmrw.setDate(tmrw.getDate() + 1);
+                    return scheduledTasks.filter(t => { const d = new Date(t.due_at); return d >= ts && d < tmrw; }).length;
+                  })()} tasks today
+                </span>
               </div>
               <div className="divide-y divide-slate-800">
                 {(() => {
-                  // Get leads sorted by priority - NEW first (hot leads), then needs attention
-                  const statusPriority = { NEW: 0, NEEDS_ATTENTION: 1, CONTACTING: 2, CONTACTED: 3, OFFER_SENT: 4, NEGOTIATING: 5 };
-                  const todayStart = new Date();
-                  todayStart.setHours(0, 0, 0, 0);
-                  const todayTaskLeadIds = new Set(
-                    scheduledTasks.filter(t => {
-                      const due = new Date(t.due_at);
-                      return due >= todayStart && due < new Date(todayStart.getTime() + 86400000);
-                    }).map(t => t.lead_id)
-                  );
+                  const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+                  const tomorrowStart = new Date(todayStart); tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+                  const todayTasks = scheduledTasks
+                    .filter(t => { const d = new Date(t.due_at); return d >= todayStart && d < tomorrowStart; })
+                    .sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
 
-                  const actionLeads = allLeads
-                    .filter(l => {
-                      const status = getSmartStatus(l);
-                      if (completedToday.has(l.id)) return false;
-                      if (['DEAD', 'CLOSED', 'NURTURE', 'UNDER_CONTRACT'].includes(status)) return false;
-                      return new Date(l.created_at) >= todayStart || todayTaskLeadIds.has(l.id);
-                    })
-                    .sort((a, b) => {
-                      // Sort by priority: NEW first (fresh leads are hot), then NEEDS_ATTENTION, then others
-                      const aStatus = getSmartStatus(a);
-                      const bStatus = getSmartStatus(b);
-                      const aPriority = statusPriority[aStatus] ?? 99;
-                      const bPriority = statusPriority[bStatus] ?? 99;
-                      if (aPriority !== bPriority) return aPriority - bPriority;
-                      // Within same priority, newest first
-                      return new Date(b.created_at) - new Date(a.created_at);
-                    });
-
-                  if (actionLeads.length === 0) {
+                  if (todayTasks.length === 0) {
                     return (
-                      <div className="p-8 text-center text-slate-400">
-                        All caught up! No pending actions.
+                      <div className="p-10 text-center">
+                        <svg className="w-12 h-12 text-slate-600 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <p className="text-slate-400 text-lg font-medium">No tasks scheduled for today</p>
+                        <p className="text-slate-500 text-sm mt-1">Schedule callbacks from PPC Inflow or use the calendar on lead cards</p>
                       </div>
                     );
                   }
 
-                  return (<>
-                    {actionLeads.slice(0, rundownVisibleCount).map((lead) => {
-                    const status = getSmartStatus(lead);
-                    const statusInfo = STATUS_CONFIG[status] || STATUS_CONFIG.NEW;
-                    const isLoading = actionInProgress?.leadId === lead.id;
+                  return todayTasks.slice(0, rundownVisibleCount).map(task => {
+                    const lead = allLeads.find(l => l.id === task.lead_id);
+                    const leadName = lead?.full_name || lead?.name || 'Unknown';
+                    const dueTime = new Date(task.due_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    const isOverdue = new Date(task.due_at) < new Date();
+                    const taskTypeLabel = task.task_type === 'callback' ? 'Callback' : task.task_type === 'follow_up' ? 'Follow Up' : task.task_type === 'send_offer' ? 'Send Offer' : task.task_type;
+                    const taskTypeColor = task.task_type === 'callback' ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : task.task_type === 'follow_up' ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50' : 'bg-purple-500/20 text-purple-400 border-purple-500/50';
 
                     return (
-                      <div key={lead.id} className={`p-4 hover:bg-slate-800/50 transition-all ${isLoading ? 'opacity-50' : ''} ${status === 'NEEDS_ATTENTION' ? 'bg-red-900/10' : ''}`}>
-                        <div className="flex items-center gap-4">
-                          {/* Status + Name */}
+                      <div key={task.id} className={`p-4 hover:bg-slate-800/50 transition-all ${isOverdue ? 'bg-red-900/10' : ''}`}>
+                        <div className="flex items-start gap-4">
+                          {/* Lead Info */}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-1">
-                              <span className={`px-2 py-0.5 rounded border text-xs font-bold ${statusInfo.color}`}>
-                                {statusInfo.label}
+                              <span className={`px-2 py-0.5 rounded border text-xs font-bold ${taskTypeColor}`}>
+                                {taskTypeLabel}
                               </span>
-                              <span className="font-semibold text-white truncate">
-                                {lead.full_name || lead.name || 'Unknown'}
+                              <span className="font-semibold text-white truncate">{leadName}</span>
+                              <span className={`text-xs ${isOverdue ? 'text-red-400 font-semibold' : 'text-slate-500'}`}>
+                                {isOverdue ? 'OVERDUE - ' : ''}{dueTime}
                               </span>
-                              <span className="text-slate-500 text-xs">
-                                {timeAgo(lead.created_at)}
-                              </span>
-                              {lead.last_activity_at && (
-                                <span className="text-slate-600 text-xs">
-                                  (last touch: {timeAgo(lead.last_activity_at)})
-                                </span>
-                              )}
                             </div>
-                            <div className="text-sm text-slate-400">
-                              {lead.property_county || lead.county}, {lead.property_state || lead.state} - {lead.acres || lead.acreage || '?'} acres
-                            </div>
-                            <div className="text-sm text-slate-500">
-                              {lead.phone || 'No phone'}
-                            </div>
+                            {task.description && (
+                              <div className="text-sm text-slate-400 mb-1">{task.description}</div>
+                            )}
+                            {lead && (
+                              <div className="text-sm text-slate-500">
+                                {lead.phone || 'No phone'} &middot; {lead.property_county || lead.county}, {lead.property_state || lead.state} &middot; {lead.acres || lead.acreage || '?'} acres
+                              </div>
+                            )}
                           </div>
 
                           {/* Action Buttons */}
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-shrink-0">
                             <button
-                              onClick={() => quickLogActivity(lead.id, 'NO_ANSWER')}
-                              disabled={isLoading}
-                              className="px-3 py-2 bg-slate-700 hover:bg-slate-600 active:scale-95 rounded text-sm font-medium transition-all disabled:opacity-50"
+                              onClick={() => rundownVM(task)}
+                              className="px-3 py-2 bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-400 active:scale-95 rounded text-sm font-medium transition-all"
+                              title="Left Voicemail - auto-schedules retry"
                             >
-                              No Answer
+                              VM
                             </button>
                             <button
-                              onClick={() => {
-                                markDoneForToday(lead.id, 'SPOKE');
-                                const status = getSmartStatus(lead);
-                                if (['NEW', 'NEEDS_ATTENTION', 'CONTACTING'].includes(status)) {
-                                  updateLeadStatus(lead.id, 'CONTACTED');
-                                }
-                              }}
-                              disabled={isLoading}
-                              className="px-3 py-2 bg-green-600 hover:bg-green-500 active:scale-95 rounded text-sm font-medium transition-all disabled:opacity-50"
+                              onClick={() => rundownSentMessage(task)}
+                              className="px-3 py-2 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 active:scale-95 rounded text-sm font-medium transition-all"
+                              title="Sent text/message - schedules follow-up tomorrow"
+                            >
+                              Sent Msg
+                            </button>
+                            <button
+                              onClick={() => openConvoComplete(task)}
+                              className="px-3 py-2 bg-green-600 hover:bg-green-500 active:scale-95 rounded text-sm font-medium transition-all text-white"
+                              title="Spoke with them - add notes & schedule next"
                             >
                               Spoke
                             </button>
-                            <button
-                              onClick={() => updateLeadStatus(lead.id, 'NURTURE')}
-                              disabled={isLoading}
-                              className="px-3 py-2 bg-slate-700 hover:bg-yellow-600 active:scale-95 rounded text-sm font-medium transition-all disabled:opacity-50"
-                              title="Move to long-term follow up"
-                            >
-                              Later
-                            </button>
-                            <button
-                              onClick={() => openLeadDetails(lead)}
-                              className="px-3 py-2 bg-blue-600 hover:bg-blue-500 active:scale-95 rounded text-sm font-medium transition-all"
-                            >
-                              View
-                            </button>
+                            {lead && (
+                              <button
+                                onClick={() => openLeadDetails(lead)}
+                                className="px-3 py-2 bg-slate-700 hover:bg-slate-600 active:scale-95 rounded text-sm font-medium transition-all"
+                              >
+                                View
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
                     );
-                  })}
-                    {actionLeads.length > rundownVisibleCount && (
-                      <div className="p-4 text-center border-t border-slate-700/50">
-                        <button
-                          onClick={() => setRundownVisibleCount(prev => prev + 20)}
-                          className="px-6 py-2 bg-slate-700 hover:bg-slate-600 active:scale-95 rounded-lg text-sm font-medium transition-all text-slate-300"
-                        >
-                          Show More ({actionLeads.length - rundownVisibleCount} remaining)
-                        </button>
-                      </div>
-                    )}
-                  </>);
+                  });
+                })()}
+                {(() => {
+                  const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+                  const tomorrowStart = new Date(todayStart); tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+                  const total = scheduledTasks.filter(t => { const d = new Date(t.due_at); return d >= todayStart && d < tomorrowStart; }).length;
+                  if (total > rundownVisibleCount) return (
+                    <div className="p-4 text-center border-t border-slate-700/50">
+                      <button
+                        onClick={() => setRundownVisibleCount(prev => prev + 20)}
+                        className="px-6 py-2 bg-slate-700 hover:bg-slate-600 active:scale-95 rounded-lg text-sm font-medium transition-all text-slate-300"
+                      >
+                        Show More ({total - rundownVisibleCount} remaining)
+                      </button>
+                    </div>
+                  );
+                  return null;
                 })()}
               </div>
             </div>
@@ -4627,6 +4687,81 @@ export default function LandLeadsAdminPage() {
                   </>
                 );
               })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Conversation Complete Modal */}
+      {convoModalOpen && convoCompleteTask && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setConvoModalOpen(false)}
+        >
+          <div
+            className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-lg p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-bold text-white mb-1">Conversation Complete</h3>
+            <p className="text-sm text-slate-400 mb-4">
+              {convoCompleteTask.lead?.full_name || convoCompleteTask.lead?.name || 'Lead'} &middot; {convoCompleteTask.lead?.phone || 'No phone'}
+            </p>
+
+            {/* Notes */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-slate-300 mb-2">Notes from conversation</label>
+              <textarea
+                value={convoNotes}
+                onChange={(e) => setConvoNotes(e.target.value)}
+                placeholder="What did you discuss? Any key details, pricing mentioned, next steps..."
+                rows={4}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500 resize-none"
+                autoFocus
+              />
+            </div>
+
+            {/* Schedule Next Follow-up */}
+            <div className="mb-5 bg-slate-900/50 border border-slate-700 rounded-lg p-4">
+              <label className="block text-sm font-semibold text-slate-300 mb-3">Schedule Next Follow-up</label>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Date</label>
+                  <input
+                    type="date"
+                    value={convoScheduleDate}
+                    onChange={(e) => setConvoScheduleDate(e.target.value)}
+                    min={new Date().toISOString().split('T')[0]}
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Time</label>
+                  <input
+                    type="time"
+                    value={convoScheduleTime}
+                    onChange={(e) => setConvoScheduleTime(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-slate-500 mt-2">Leave blank to skip scheduling a follow-up</p>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConvoModalOpen(false)}
+                className="flex-1 px-4 py-2.5 bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveConvoComplete}
+                disabled={convoSaving}
+                className="flex-1 px-4 py-2.5 bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
+              >
+                {convoSaving ? 'Saving...' : 'Save & Complete'}
+              </button>
             </div>
           </div>
         </div>
