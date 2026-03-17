@@ -41,8 +41,19 @@ export default function LandLeadsAdminPage() {
   const [completedToday, setCompletedToday] = useState(new Set()); // Lead IDs completed today
   const [recentActivity, setRecentActivity] = useState([]); // Live activity feed
   const [selectedCalendarDay, setSelectedCalendarDay] = useState(null); // For calendar day click
+  const [rundownVisibleCount, setRundownVisibleCount] = useState(20);
   const [lastUpdated, setLastUpdated] = useState(new Date());
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Schedule Task states
+  const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
+  const [scheduleLeadId, setScheduleLeadId] = useState(null);
+  const [scheduleType, setScheduleType] = useState('callback');
+  const [scheduleDate, setScheduleDate] = useState('');
+  const [scheduleTime, setScheduleTime] = useState('');
+  const [scheduleNote, setScheduleNote] = useState('');
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [scheduledTasks, setScheduledTasks] = useState([]);
 
   // Session Analytics states
   const [analyticsSubTab, setAnalyticsSubTab] = useState('live-feed');
@@ -350,6 +361,13 @@ export default function LandLeadsAdminPage() {
       .select('lead_id, team_id, assigned_at')
       .order('assigned_at', { ascending: false });
 
+    // Fetch scheduled tasks (pending for today and future)
+    const { data: tasksData } = await supabase
+      .from('scheduled_tasks')
+      .select('*')
+      .eq('status', 'pending')
+      .order('due_at', { ascending: true });
+
     // Group assignments by lead_id
     const assignmentsByLead = {};
     assignmentsData?.forEach(assignment => {
@@ -362,6 +380,7 @@ export default function LandLeadsAdminPage() {
     setOrganizations(orgsData || []);
     setAllLeads(leadsData || []);
     setLeadAssignments(assignmentsByLead);
+    setScheduledTasks(tasksData || []);
     setLoading(false);
   };
 
@@ -491,6 +510,74 @@ export default function LandLeadsAdminPage() {
     setActivityLeadId(leadId);
     setActivityType(type);
     setActivityModalOpen(true);
+  };
+
+  // Open schedule modal for a lead
+  const openScheduleModal = (leadId) => {
+    setScheduleLeadId(leadId);
+    setScheduleType('callback');
+    setScheduleDate('');
+    setScheduleTime('');
+    setScheduleNote('');
+    setScheduleModalOpen(true);
+  };
+
+  // Save a scheduled task
+  const saveScheduledTask = async () => {
+    if (!scheduleDate || !scheduleTime) return;
+    setScheduleSaving(true);
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const lead = allLeads.find(l => l.id === scheduleLeadId);
+      const leadName = lead?.full_name || lead?.name || 'Lead';
+      const dueAt = new Date(`${scheduleDate}T${scheduleTime}`).toISOString();
+      const title = scheduleType === 'callback'
+        ? `Callback: ${leadName}`
+        : `Send Offer: ${leadName}`;
+
+      const { data, error } = await supabase.from('scheduled_tasks').insert({
+        lead_id: scheduleLeadId,
+        created_by: user?.id,
+        task_type: scheduleType === 'callback' ? 'callback' : 'send_offer',
+        title,
+        description: scheduleNote || null,
+        due_at: dueAt,
+        status: 'pending',
+        priority: 'normal'
+      }).select().single();
+
+      if (error) throw error;
+
+      setScheduledTasks(prev => [...prev, data]);
+      showToast(`Scheduled ${scheduleType === 'callback' ? 'callback' : 'offer'} for ${new Date(dueAt).toLocaleDateString()}`, 'success', leadName);
+      setScheduleModalOpen(false);
+    } catch (err) {
+      console.error('Error saving scheduled task:', err);
+      showToast('Error scheduling task: ' + err.message, 'error');
+    } finally {
+      setScheduleSaving(false);
+    }
+  };
+
+  // Complete a scheduled task
+  const completeScheduledTask = async (taskId) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const { error } = await supabase.from('scheduled_tasks').update({
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        completed_by: user?.id
+      }).eq('id', taskId);
+
+      if (error) throw error;
+
+      setScheduledTasks(prev => prev.filter(t => t.id !== taskId));
+      showToast('Task completed', 'success');
+    } catch (err) {
+      console.error('Error completing task:', err);
+      showToast('Error: ' + err.message, 'error');
+    }
   };
 
   const handleViewDashboard = (orgId) => {
@@ -1609,12 +1696,98 @@ export default function LandLeadsAdminPage() {
         {/* DAILY RUNDOWN TAB */}
         {activeTab === 'daily-rundown' && (
           <div className="space-y-6">
+            {/* Scheduled Tasks for Today */}
+            {(() => {
+              const today = new Date();
+              today.setHours(0, 0, 0, 0);
+              const tomorrow = new Date(today);
+              tomorrow.setDate(tomorrow.getDate() + 1);
+              const todayTasks = scheduledTasks.filter(t => {
+                const due = new Date(t.due_at);
+                return due >= today && due < tomorrow;
+              });
+              if (todayTasks.length === 0) return null;
+              return (
+                <div className="bg-slate-900 rounded-xl border border-orange-500/30 overflow-hidden">
+                  <div className="bg-orange-500/10 px-4 py-3 border-b border-orange-500/30 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <svg className="w-5 h-5 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
+                      <span className="font-semibold text-orange-300">Scheduled for Today</span>
+                    </div>
+                    <span className="text-orange-400/70 text-sm">{todayTasks.length} task{todayTasks.length !== 1 ? 's' : ''}</span>
+                  </div>
+                  <div className="divide-y divide-slate-800">
+                    {todayTasks.map(task => {
+                      const lead = allLeads.find(l => l.id === task.lead_id);
+                      const leadName = lead?.full_name || lead?.name || 'Unknown';
+                      const dueTime = new Date(task.due_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                      const isOverdue = new Date(task.due_at) < new Date();
+                      return (
+                        <div key={task.id} className={`p-4 hover:bg-slate-800/50 transition-all ${isOverdue ? 'bg-red-900/10' : ''}`}>
+                          <div className="flex items-center gap-4">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className={`px-2 py-0.5 rounded border text-xs font-bold ${
+                                  task.task_type === 'callback'
+                                    ? 'bg-blue-500/20 text-blue-400 border-blue-500/50'
+                                    : 'bg-purple-500/20 text-purple-400 border-purple-500/50'
+                                }`}>
+                                  {task.task_type === 'callback' ? 'Callback' : 'Send Offer'}
+                                </span>
+                                <span className="font-semibold text-white truncate">{leadName}</span>
+                                <span className={`text-xs ${isOverdue ? 'text-red-400 font-semibold' : 'text-slate-500'}`}>
+                                  {isOverdue ? 'OVERDUE - ' : ''}{dueTime}
+                                </span>
+                              </div>
+                              {task.description && (
+                                <div className="text-sm text-slate-400 truncate">{task.description}</div>
+                              )}
+                              {lead && (
+                                <div className="text-sm text-slate-500">
+                                  {lead.phone || 'No phone'} - {lead.property_county || lead.county}, {lead.property_state || lead.state}
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {lead && (
+                                <button
+                                  onClick={() => openLeadDetails(lead)}
+                                  className="px-3 py-2 bg-slate-700 hover:bg-slate-600 active:scale-95 rounded text-sm font-medium transition-all"
+                                >
+                                  View
+                                </button>
+                              )}
+                              <button
+                                onClick={() => completeScheduledTask(task.id)}
+                                className="px-3 py-2 bg-green-600 hover:bg-green-500 active:scale-95 rounded text-sm font-medium transition-all"
+                              >
+                                Done
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Today's Action List */}
             <div className="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden">
               <div className="bg-slate-800 px-4 py-3 border-b border-slate-700 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="w-3 h-3 rounded-full bg-green-500"></div>
                   <span className="font-semibold">Today's Actions - {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</span>
+                  <span className="text-slate-500 text-sm">
+                    ({(() => {
+                      const ts = new Date(); ts.setHours(0,0,0,0);
+                      const ttIds = new Set(scheduledTasks.filter(t => { const d = new Date(t.due_at); return d >= ts && d < new Date(ts.getTime()+86400000); }).map(t => t.lead_id));
+                      return allLeads.filter(l => { const s = getSmartStatus(l); if (completedToday.has(l.id)) return false; if (['DEAD','CLOSED','NURTURE','UNDER_CONTRACT'].includes(s)) return false; return new Date(l.created_at) >= ts || ttIds.has(l.id); }).length;
+                    })()} leads)
+                  </span>
                 </div>
                 <span className="text-slate-400 text-sm">{completedToday.size} completed today</span>
               </div>
@@ -1622,12 +1795,21 @@ export default function LandLeadsAdminPage() {
                 {(() => {
                   // Get leads sorted by priority - NEW first (hot leads), then needs attention
                   const statusPriority = { NEW: 0, NEEDS_ATTENTION: 1, CONTACTING: 2, CONTACTED: 3, OFFER_SENT: 4, NEGOTIATING: 5 };
+                  const todayStart = new Date();
+                  todayStart.setHours(0, 0, 0, 0);
+                  const todayTaskLeadIds = new Set(
+                    scheduledTasks.filter(t => {
+                      const due = new Date(t.due_at);
+                      return due >= todayStart && due < new Date(todayStart.getTime() + 86400000);
+                    }).map(t => t.lead_id)
+                  );
+
                   const actionLeads = allLeads
                     .filter(l => {
                       const status = getSmartStatus(l);
-                      // Show all active leads (not closed, dead, nurture, or under contract)
-                      return !completedToday.has(l.id) &&
-                             !['DEAD', 'CLOSED', 'NURTURE', 'UNDER_CONTRACT'].includes(status);
+                      if (completedToday.has(l.id)) return false;
+                      if (['DEAD', 'CLOSED', 'NURTURE', 'UNDER_CONTRACT'].includes(status)) return false;
+                      return new Date(l.created_at) >= todayStart || todayTaskLeadIds.has(l.id);
                     })
                     .sort((a, b) => {
                       // Sort by priority: NEW first (fresh leads are hot), then NEEDS_ATTENTION, then others
@@ -1648,7 +1830,8 @@ export default function LandLeadsAdminPage() {
                     );
                   }
 
-                  return actionLeads.slice(0, 25).map((lead) => {
+                  return (<>
+                    {actionLeads.slice(0, rundownVisibleCount).map((lead) => {
                     const status = getSmartStatus(lead);
                     const statusInfo = STATUS_CONFIG[status] || STATUS_CONFIG.NEW;
                     const isLoading = actionInProgress?.leadId === lead.id;
@@ -1722,7 +1905,18 @@ export default function LandLeadsAdminPage() {
                         </div>
                       </div>
                     );
-                  });
+                  })}
+                    {actionLeads.length > rundownVisibleCount && (
+                      <div className="p-4 text-center border-t border-slate-700/50">
+                        <button
+                          onClick={() => setRundownVisibleCount(prev => prev + 20)}
+                          className="px-6 py-2 bg-slate-700 hover:bg-slate-600 active:scale-95 rounded-lg text-sm font-medium transition-all text-slate-300"
+                        >
+                          Show More ({actionLeads.length - rundownVisibleCount} remaining)
+                        </button>
+                      </div>
+                    )}
+                  </>);
                 })()}
               </div>
             </div>
@@ -2239,6 +2433,19 @@ export default function LandLeadsAdminPage() {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                           </svg>
                           Note
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openScheduleModal(lead.id);
+                          }}
+                          title="Schedule Task"
+                          className="flex-1 px-2 py-1.5 bg-orange-600/20 hover:bg-orange-600/40 text-orange-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                          Schedule
                         </button>
                       </div>
                       {/* Last Activity Indicator */}
@@ -4120,6 +4327,102 @@ export default function LandLeadsAdminPage() {
                     Attach Map
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Schedule Task Modal */}
+      {scheduleModalOpen && scheduleLeadId && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setScheduleModalOpen(false)}
+        >
+          <div
+            className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-md p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-bold text-white mb-1">Schedule Task</h3>
+            <p className="text-sm text-slate-400 mb-4">
+              {(() => {
+                const lead = allLeads.find(l => l.id === scheduleLeadId);
+                return lead?.full_name || lead?.name || 'Lead';
+              })()}
+            </p>
+
+            {/* Task Type */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-slate-300 mb-2">Type</label>
+              <div className="flex gap-2">
+                {[
+                  { value: 'callback', label: 'Callback' },
+                  { value: 'send_offer', label: 'Send Offer' }
+                ].map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setScheduleType(opt.value)}
+                    className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      scheduleType === opt.value
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Date & Time */}
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1">Date</label>
+                <input
+                  type="date"
+                  value={scheduleDate}
+                  onChange={(e) => setScheduleDate(e.target.value)}
+                  min={new Date().toISOString().split('T')[0]}
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1">Time</label>
+                <input
+                  type="time"
+                  value={scheduleTime}
+                  onChange={(e) => setScheduleTime(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                />
+              </div>
+            </div>
+
+            {/* Note */}
+            <div className="mb-5">
+              <label className="block text-sm font-medium text-slate-300 mb-1">Note (optional)</label>
+              <textarea
+                value={scheduleNote}
+                onChange={(e) => setScheduleNote(e.target.value)}
+                placeholder="Any details..."
+                rows={2}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500 resize-none"
+              />
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setScheduleModalOpen(false)}
+                className="flex-1 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveScheduledTask}
+                disabled={!scheduleDate || !scheduleTime || scheduleSaving}
+                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors"
+              >
+                {scheduleSaving ? 'Saving...' : 'Save'}
               </button>
             </div>
           </div>
