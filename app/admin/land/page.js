@@ -60,6 +60,15 @@ export default function LandLeadsAdminPage() {
   const [lastUpdated, setLastUpdated] = useState(new Date());
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  // Subdivision Inflow states
+  const [subdivSearch, setSubdivSearch] = useState('');
+  const [subdivForm, setSubdivForm] = useState({
+    county: '', state: 'TX', acreage: '', seller_name: '',
+    agent_name: '', agent_phone: '', agent_email: ''
+  });
+  const [subdivCreating, setSubdivCreating] = useState(false);
+  const [subdivFormOpen, setSubdivFormOpen] = useState(false);
+
   // Schedule Task states
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
   const [scheduleLeadId, setScheduleLeadId] = useState(null);
@@ -1667,6 +1676,72 @@ export default function LandLeadsAdminPage() {
     }
   };
 
+  // Create Subdivision Property
+  const handleCreateSubdivision = async () => {
+    if (!subdivForm.county || !subdivForm.state) {
+      showToast('County and State are required', 'error');
+      return;
+    }
+    setSubdivCreating(true);
+    try {
+      const leadToInsert = {
+        full_name: subdivForm.seller_name || 'Unknown Seller',
+        name: subdivForm.seller_name || 'Unknown Seller',
+        property_county: subdivForm.county,
+        county: subdivForm.county,
+        property_state: subdivForm.state,
+        state: subdivForm.state,
+        acres: parseFloat(subdivForm.acreage) || null,
+        acreage: parseFloat(subdivForm.acreage) || null,
+        source: 'subdivision',
+        status: 'new',
+        pipeline_status: 'NEW',
+        form_data: {
+          agentName: subdivForm.agent_name,
+          agentPhone: subdivForm.agent_phone,
+          agentEmail: subdivForm.agent_email
+        },
+        created_at: new Date().toISOString()
+      };
+
+      const { data: leadData, error: leadError } = await supabase
+        .from('leads')
+        .insert([leadToInsert])
+        .select();
+
+      if (leadError) throw leadError;
+
+      if (leadData && leadData.length > 0) {
+        setAllLeads(prev => [leadData[0], ...prev]);
+
+        // Auto-schedule for daily rundown
+        const todayAt5 = new Date();
+        todayAt5.setHours(17, 0, 0, 0);
+        const { data: { user } } = await supabase.auth.getUser();
+        await supabase.from('scheduled_tasks').insert({
+          lead_id: leadData[0].id,
+          title: `NEW LEAD: ${leadToInsert.full_name}`,
+          task_type: 'callback',
+          priority: 'high',
+          status: 'pending',
+          due_at: todayAt5.toISOString(),
+          created_by: user?.id,
+          notes: `Subdivision property - ${subdivForm.county}, ${subdivForm.state} - ${subdivForm.acreage || '?'} acres. Agent: ${subdivForm.agent_name || 'N/A'}`
+        });
+      }
+
+      // Reset form
+      setSubdivForm({ county: '', state: 'TX', acreage: '', seller_name: '', agent_name: '', agent_phone: '', agent_email: '' });
+      setSubdivFormOpen(false);
+      showToast('Subdivision property created!', 'success', subdivForm.seller_name || 'New Property');
+    } catch (error) {
+      console.error('Error creating subdivision lead:', error);
+      showToast('Error: ' + error.message, 'error');
+    } finally {
+      setSubdivCreating(false);
+    }
+  };
+
   // Check lead_assignments table to determine if lead is assigned
   const unassignedLeads = allLeads.filter(l => !leadAssignments[l.id] || leadAssignments[l.id].length === 0);
   const assignedLeads = allLeads.filter(l => leadAssignments[l.id] && leadAssignments[l.id].length > 0);
@@ -1917,7 +1992,7 @@ export default function LandLeadsAdminPage() {
       {/* Tabs */}
       <div className="bg-slate-800/30 border-b border-slate-700/50 px-6 overflow-x-auto">
         <div className="flex gap-4 min-w-max">
-          {['daily-rundown', 'organizations', 'ppc-inflow', 'all-leads', 'unassigned', 'create-lead', 'session-analytics'].map((tab) => (
+          {['daily-rundown', 'organizations', 'ppc-inflow', 'subdivision-inflow', 'all-leads', 'unassigned', 'create-lead', 'session-analytics'].map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -1937,14 +2012,20 @@ export default function LandLeadsAdminPage() {
                   <path d="M3 13h2v8H3v-8zm4-6h2v14H7V7zm4-4h2v18h-2V3zm4 9h2v9h-2v-9zm4-3h2v12h-2V9z"/>
                 </svg>
               )}
+              {tab === 'subdivision-inflow' && (
+                <svg className="w-4 h-4 inline-block mr-1 -mt-0.5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M1 22h4V11H1v11zm6-7h4v7H7v-7zm6-4h4v11h-4V11zm6-5h4v16h-4V6z"/>
+                </svg>
+              )}
               {tab === 'session-analytics' && (
                 <svg className="w-4 h-4 inline-block mr-1 -mt-0.5" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M11 7h2v10h-2zm4 4h2v6h-2zM7 9h2v8H7zm12-7H5c-1.1 0-2 .9-2 2v18l4-4h13c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
                 </svg>
               )}
-              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'session-analytics' ? 'Session Analytics' : tab.replace('-', ' ')}
+              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab.replace('-', ' ')}
               {tab === 'unassigned' && ` (${unassignedLeads.length})`}
               {tab === 'ppc-inflow' && ` (${allLeads.filter(l => l.source?.includes('Haven Ground')).length})`}
+              {tab === 'subdivision-inflow' && ` (${allLeads.filter(l => l.source === 'subdivision').length})`}
             </button>
           ))}
         </div>
@@ -2751,6 +2832,444 @@ export default function LandLeadsAdminPage() {
             {allLeads.filter(l => l.source?.includes('Haven Ground')).length === 0 && (
               <div className="text-center py-12 text-slate-400">
                 No PPC leads yet. Leads from Haven Ground form will appear here.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* SUBDIVISION INFLOW TAB */}
+        {activeTab === 'subdivision-inflow' && (
+          <div className="space-y-6">
+            {/* Subdivision Stats */}
+            <div className="grid grid-cols-4 gap-4">
+              <div className="bg-gradient-to-br from-teal-500/20 to-teal-600/20 border border-teal-500/30 rounded-xl p-6">
+                <div className="text-3xl font-bold text-teal-400">{allLeads.filter(l => l.source === 'subdivision').length}</div>
+                <div className="text-slate-300 text-sm mt-1">Total Subdivision Leads</div>
+              </div>
+              <div className="bg-gradient-to-br from-green-500/20 to-green-600/20 border border-green-500/30 rounded-xl p-6">
+                <div className="text-3xl font-bold text-green-400">{allLeads.filter(l => l.source === 'subdivision' && (getSmartStatus(l) === 'NEW')).length}</div>
+                <div className="text-slate-300 text-sm mt-1">New</div>
+              </div>
+              <div className="bg-gradient-to-br from-yellow-500/20 to-yellow-600/20 border border-yellow-500/30 rounded-xl p-6">
+                <div className="text-3xl font-bold text-yellow-400">{allLeads.filter(l => l.source === 'subdivision' && ['CONTACTING', 'CONTACTED'].includes(getSmartStatus(l))).length}</div>
+                <div className="text-slate-300 text-sm mt-1">In Progress</div>
+              </div>
+              <div className="bg-gradient-to-br from-purple-500/20 to-purple-600/20 border border-purple-500/30 rounded-xl p-6">
+                <div className="text-3xl font-bold text-purple-400">{allLeads.filter(l => l.source === 'subdivision' && new Date(l.created_at) > new Date(Date.now() - 7*24*60*60*1000)).length}</div>
+                <div className="text-slate-300 text-sm mt-1">Last 7 Days</div>
+              </div>
+            </div>
+
+            {/* Search + Add Button Row */}
+            <div className="flex gap-3">
+              <div className="relative flex-1">
+                <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <input
+                  type="text"
+                  value={subdivSearch}
+                  onChange={(e) => setSubdivSearch(e.target.value)}
+                  placeholder="Search by seller name, county, state, agent name..."
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-10 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                />
+                {subdivSearch && (
+                  <button onClick={() => setSubdivSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={() => setSubdivFormOpen(!subdivFormOpen)}
+                className={`px-6 py-3 font-semibold rounded-xl transition-colors flex items-center gap-2 ${subdivFormOpen ? 'bg-red-600 hover:bg-red-500 text-white' : 'bg-teal-600 hover:bg-teal-500 text-white'}`}
+              >
+                {subdivFormOpen ? (
+                  <>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                    Close
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                    Add Property
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Inline Create Form */}
+            {subdivFormOpen && (
+              <div className="bg-slate-800/80 border border-teal-500/30 rounded-xl p-6">
+                <h3 className="text-lg font-bold text-teal-400 mb-4">New Subdivision Property</h3>
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">County *</label>
+                    <input
+                      type="text"
+                      value={subdivForm.county}
+                      onChange={(e) => setSubdivForm({...subdivForm, county: e.target.value})}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-teal-500"
+                      placeholder="e.g. Travis"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">State *</label>
+                    <input
+                      type="text"
+                      value={subdivForm.state}
+                      onChange={(e) => setSubdivForm({...subdivForm, state: e.target.value})}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-teal-500"
+                      placeholder="TX"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Acreage</label>
+                    <input
+                      type="number"
+                      value={subdivForm.acreage}
+                      onChange={(e) => setSubdivForm({...subdivForm, acreage: e.target.value})}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-teal-500"
+                      placeholder="50"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Seller Name</label>
+                    <input
+                      type="text"
+                      value={subdivForm.seller_name}
+                      onChange={(e) => setSubdivForm({...subdivForm, seller_name: e.target.value})}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-teal-500"
+                      placeholder="John Smith"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-4 mb-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Agent Name</label>
+                    <input
+                      type="text"
+                      value={subdivForm.agent_name}
+                      onChange={(e) => setSubdivForm({...subdivForm, agent_name: e.target.value})}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-teal-500"
+                      placeholder="Jane Doe"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Agent Phone</label>
+                    <input
+                      type="tel"
+                      value={subdivForm.agent_phone}
+                      onChange={(e) => setSubdivForm({...subdivForm, agent_phone: e.target.value})}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-teal-500"
+                      placeholder="(512) 555-1234"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Agent Email</label>
+                    <input
+                      type="email"
+                      value={subdivForm.agent_email}
+                      onChange={(e) => setSubdivForm({...subdivForm, agent_email: e.target.value})}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-teal-500"
+                      placeholder="agent@realty.com"
+                    />
+                  </div>
+                </div>
+                <button
+                  onClick={handleCreateSubdivision}
+                  disabled={subdivCreating}
+                  className="px-6 py-2.5 bg-teal-600 hover:bg-teal-500 disabled:bg-slate-700 text-white font-semibold rounded-lg transition-colors"
+                >
+                  {subdivCreating ? 'Creating...' : 'Create Property'}
+                </button>
+              </div>
+            )}
+
+            {/* Subdivision Leads Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+              {allLeads
+                .filter(l => l.source === 'subdivision')
+                .filter(l => {
+                  if (!subdivSearch.trim()) return true;
+                  const q = subdivSearch.toLowerCase();
+                  return (l.full_name || l.name || '').toLowerCase().includes(q) ||
+                    (l.property_county || l.county || '').toLowerCase().includes(q) ||
+                    (l.property_state || l.state || '').toLowerCase().includes(q) ||
+                    (l.form_data?.agentName || '').toLowerCase().includes(q);
+                })
+                .map((lead) => (
+                  <div
+                    key={lead.id}
+                    className="bg-slate-800/50 border border-slate-700/50 rounded-xl overflow-hidden hover:border-teal-500/50 hover:shadow-xl hover:shadow-teal-500/10 transition-all"
+                  >
+                    {/* Pipeline Status Banner */}
+                    {(() => {
+                      const smartStatus = getSmartStatus(lead);
+                      const needsAction = smartStatus === 'NEW' || smartStatus === 'NEEDS_ATTENTION';
+                      if (needsAction) {
+                        return (
+                          <div className={`${smartStatus === 'NEW' ? 'bg-green-500/30 border-green-500/50' : 'bg-red-500/30 border-red-500/50'} border-b px-4 py-3 flex items-center gap-2`}>
+                            <svg className={`w-5 h-5 ${smartStatus === 'NEW' ? 'text-green-400' : 'text-red-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                            </svg>
+                            <span className={`font-semibold ${smartStatus === 'NEW' ? 'text-green-300' : 'text-red-300'}`}>
+                              {smartStatus === 'NEW' ? 'NEW - Contact Agent!' : 'NEEDS ATTENTION'}
+                            </span>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+
+                    <div className="p-5">
+                      {/* Status Dropdown */}
+                      <div className="mb-4">
+                        {(() => {
+                          const smartStatus = getSmartStatus(lead);
+                          const statusInfo = STATUS_CONFIG[smartStatus] || STATUS_CONFIG.NEW;
+                          return (
+                            <select
+                              value={smartStatus}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                updateLeadStatus(lead.id, e.target.value);
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              className={`w-full px-4 py-2.5 text-sm font-bold rounded-lg cursor-pointer border-2 focus:outline-none focus:ring-2 focus:ring-teal-500 ${statusInfo.color}`}
+                            >
+                              {PIPELINE_STATUSES.map(status => (
+                                <option key={status.value} value={status.value}>{status.label}</option>
+                              ))}
+                            </select>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Seller Name (editable) */}
+                      <div className="mb-4">
+                        <input
+                          type="text"
+                          value={lead.name || lead.full_name || ''}
+                          onChange={async (e) => {
+                            const { error } = await supabase
+                              .from('leads')
+                              .update({ name: e.target.value, full_name: e.target.value })
+                              .eq('id', lead.id);
+                            if (!error) {
+                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, name: e.target.value, full_name: e.target.value} : l));
+                            }
+                          }}
+                          className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-2 text-white font-semibold text-lg focus:outline-none focus:border-teal-500/50"
+                          placeholder="Seller name"
+                        />
+                        <div className="mt-1 text-xs text-slate-500">Added {timeAgo(lead.created_at)}</div>
+                      </div>
+
+                      {/* Property Info: County, State, Acreage */}
+                      <div className="space-y-2 mb-3 pb-3 border-b border-slate-700/50">
+                        <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Property</div>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={lead.property_county || lead.county || ''}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={async (e) => {
+                              const { error } = await supabase
+                                .from('leads')
+                                .update({ property_county: e.target.value, county: e.target.value })
+                                .eq('id', lead.id);
+                              if (!error) {
+                                setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, property_county: e.target.value, county: e.target.value} : l));
+                              }
+                            }}
+                            className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-teal-500/50"
+                            placeholder="County"
+                          />
+                          <input
+                            type="text"
+                            value={lead.property_state || lead.state || ''}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={async (e) => {
+                              const { error } = await supabase
+                                .from('leads')
+                                .update({ property_state: e.target.value, state: e.target.value })
+                                .eq('id', lead.id);
+                              if (!error) {
+                                setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, property_state: e.target.value, state: e.target.value} : l));
+                              }
+                            }}
+                            className="w-20 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-teal-500/50"
+                            placeholder="State"
+                          />
+                        </div>
+                        <input
+                          type="text"
+                          value={lead.acres || lead.acreage || ''}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={async (e) => {
+                            const { error } = await supabase
+                              .from('leads')
+                              .update({ acres: parseFloat(e.target.value) || null, acreage: parseFloat(e.target.value) || null })
+                              .eq('id', lead.id);
+                            if (!error) {
+                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, acres: parseFloat(e.target.value) || null, acreage: parseFloat(e.target.value) || null} : l));
+                            }
+                          }}
+                          className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm font-semibold text-teal-400 focus:outline-none focus:border-teal-500/50"
+                          placeholder="Acres"
+                        />
+                      </div>
+
+                      {/* Agent Info */}
+                      <div className="space-y-2 mb-3 pb-3 border-b border-slate-700/50">
+                        <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Agent</div>
+                        <input
+                          type="text"
+                          value={lead.form_data?.agentName || ''}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={async (e) => {
+                            const updatedFormData = { ...lead.form_data, agentName: e.target.value };
+                            const { error } = await supabase
+                              .from('leads')
+                              .update({ form_data: updatedFormData })
+                              .eq('id', lead.id);
+                            if (!error) {
+                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData} : l));
+                            }
+                          }}
+                          className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-teal-500/50"
+                          placeholder="Agent name"
+                        />
+                        <div className="flex items-center gap-2">
+                          <svg className="w-4 h-4 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                          </svg>
+                          {lead.form_data?.agentPhone ? (
+                            <a href={`tel:${lead.form_data.agentPhone}`} className="text-sm text-teal-400 hover:text-teal-300 underline">{lead.form_data.agentPhone}</a>
+                          ) : (
+                            <input
+                              type="tel"
+                              value=""
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={async (e) => {
+                                const updatedFormData = { ...lead.form_data, agentPhone: e.target.value };
+                                const { error } = await supabase
+                                  .from('leads')
+                                  .update({ form_data: updatedFormData })
+                                  .eq('id', lead.id);
+                                if (!error) {
+                                  setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData} : l));
+                                }
+                              }}
+                              className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-teal-500/50"
+                              placeholder="Agent phone"
+                            />
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <svg className="w-4 h-4 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                          </svg>
+                          {lead.form_data?.agentEmail ? (
+                            <a href={`mailto:${lead.form_data.agentEmail}`} className="text-sm text-teal-400 hover:text-teal-300 underline">{lead.form_data.agentEmail}</a>
+                          ) : (
+                            <input
+                              type="email"
+                              value=""
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={async (e) => {
+                                const updatedFormData = { ...lead.form_data, agentEmail: e.target.value };
+                                const { error } = await supabase
+                                  .from('leads')
+                                  .update({ form_data: updatedFormData })
+                                  .eq('id', lead.id);
+                                if (!error) {
+                                  setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData} : l));
+                                }
+                              }}
+                              className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-teal-500/50"
+                              placeholder="Agent email"
+                            />
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="mt-3 pt-3 border-t border-slate-700/50">
+                        <div className="flex gap-1 mb-2">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); openActivityModal(lead.id, 'CALL_OUTBOUND'); }}
+                            title="Log Call"
+                            className="flex-1 px-2 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                            </svg>
+                            Call
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); openActivityModal(lead.id, 'NOTE_ADDED'); }}
+                            title="Add Note"
+                            className="flex-1 px-2 py-1.5 bg-slate-600/20 hover:bg-slate-600/40 text-slate-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                            Note
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); openScheduleModal(lead.id); }}
+                            title="Schedule Task"
+                            className="flex-1 px-2 py-1.5 bg-orange-600/20 hover:bg-orange-600/40 text-orange-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                            Schedule
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Bottom Actions */}
+                      <div className="mt-2 pt-2 border-t border-slate-700/50 flex gap-2">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); openCalendarModal(lead); }}
+                          className="px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                          Calendar
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); openLeadDetails(lead); }}
+                          className="flex-1 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold rounded-lg transition-colors"
+                        >
+                          View Details
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); openScheduleModal(lead.id); }}
+                          className="px-4 py-2 bg-teal-600 hover:bg-teal-500 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          Schedule Task
+                        </button>
+                      </div>
+
+                      {/* Footer */}
+                      <div className="mt-2 text-xs text-slate-500 text-center">
+                        {new Date(lead.created_at).toLocaleString()}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+            </div>
+
+            {allLeads.filter(l => l.source === 'subdivision').length === 0 && (
+              <div className="text-center py-12 text-slate-400">
+                No subdivision leads yet. Click "+ Add Property" to create one.
               </div>
             )}
           </div>
