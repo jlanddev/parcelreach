@@ -78,6 +78,7 @@ export default function LandLeadsAdminPage() {
   const [scheduleNote, setScheduleNote] = useState('');
   const [scheduleSaving, setScheduleSaving] = useState(false);
   const [scheduledTasks, setScheduledTasks] = useState([]);
+  const [editingScheduleTaskId, setEditingScheduleTaskId] = useState(null);
 
   // Session Analytics states
   const [analyticsSubTab, setAnalyticsSubTab] = useState('live-feed');
@@ -571,10 +572,21 @@ export default function LandLeadsAdminPage() {
     setScheduleDate('');
     setScheduleTime('');
     setScheduleNote('');
+    setEditingScheduleTaskId(null);
     setScheduleModalOpen(true);
   };
 
-  // Save a scheduled task
+  // Task type labels used across scheduling
+  const TASK_TYPE_LABELS = {
+    callback: 'Callback',
+    discovery_call: 'Discovery Call',
+    follow_up_call: 'Follow Up Call',
+    send_offer: 'Send Offer',
+    offer_follow_up: 'Offer Follow Up',
+    title_work: 'Title Work Call'
+  };
+
+  // Save a scheduled task (create or edit)
   const saveScheduledTask = async () => {
     if (!scheduleDate || !scheduleTime) return;
     setScheduleSaving(true);
@@ -586,25 +598,42 @@ export default function LandLeadsAdminPage() {
       const desired = new Date(`${scheduleDate}T${scheduleTime}`);
       const slot = getAvailableTime(desired);
       const dueAt = slot.toISOString();
-      const title = scheduleType === 'callback'
-        ? `Callback: ${leadName}`
-        : `Send Offer: ${leadName}`;
+      const title = `${TASK_TYPE_LABELS[scheduleType] || scheduleType}: ${leadName}`;
 
-      const { data, error } = await supabase.from('scheduled_tasks').insert({
-        lead_id: scheduleLeadId,
-        created_by: user?.id,
-        task_type: scheduleType === 'callback' ? 'callback' : 'send_offer',
-        title,
-        description: scheduleNote || null,
-        due_at: dueAt,
-        status: 'pending',
-        priority: 'normal'
-      }).select().single();
+      if (editingScheduleTaskId) {
+        // UPDATE existing task
+        const { data, error } = await supabase.from('scheduled_tasks').update({
+          task_type: scheduleType,
+          title,
+          description: scheduleNote || null,
+          due_at: dueAt,
+          updated_at: new Date().toISOString()
+        }).eq('id', editingScheduleTaskId).select().single();
 
-      if (error) throw error;
+        if (error) throw error;
 
-      setScheduledTasks(prev => [...prev, data]);
-      showToast(`Scheduled ${scheduleType === 'callback' ? 'callback' : 'offer'} for ${slot.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}`, 'success', leadName);
+        setScheduledTasks(prev => prev.map(t => t.id === editingScheduleTaskId ? data : t));
+        showToast(`Updated ${TASK_TYPE_LABELS[scheduleType] || scheduleType} to ${slot.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}`, 'success', leadName);
+      } else {
+        // INSERT new task
+        const { data, error } = await supabase.from('scheduled_tasks').insert({
+          lead_id: scheduleLeadId,
+          created_by: user?.id,
+          task_type: scheduleType,
+          title,
+          description: scheduleNote || null,
+          due_at: dueAt,
+          status: 'pending',
+          priority: 'normal'
+        }).select().single();
+
+        if (error) throw error;
+
+        setScheduledTasks(prev => [...prev, data]);
+        showToast(`Scheduled ${TASK_TYPE_LABELS[scheduleType] || scheduleType} for ${slot.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}`, 'success', leadName);
+      }
+
+      setEditingScheduleTaskId(null);
       setScheduleModalOpen(false);
     } catch (err) {
       console.error('Error saving scheduled task:', err);
@@ -5204,11 +5233,15 @@ export default function LandLeadsAdminPage() {
                         {isCreated && (
                           <div className="text-[10px] bg-cyan-500/20 text-cyan-400 px-1 rounded truncate">Lead Created</div>
                         )}
-                        {hasTasks && data.tasks.map((t, i) => (
-                          <div key={i} className="text-[10px] bg-orange-500/20 text-orange-400 px-1 rounded truncate">
-                            {new Date(t.due_at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})} {t.task_type === 'callback' ? 'Callback' : 'Offer'}
-                          </div>
-                        ))}
+                        {hasTasks && data.tasks.map((t, i) => {
+                          const shortLabels = { callback: 'Callback', follow_up_call: 'Follow Up', send_offer: 'Offer', discovery_call: 'Discovery', offer_follow_up: 'Offer F/U', title_work: 'Title Work' };
+                          const cellColors = { discovery_call: 'bg-cyan-500/20 text-cyan-400', follow_up_call: 'bg-blue-500/20 text-blue-400', send_offer: 'bg-purple-500/20 text-purple-400', offer_follow_up: 'bg-orange-500/20 text-orange-400', title_work: 'bg-emerald-500/20 text-emerald-400', callback: 'bg-slate-500/20 text-slate-400' };
+                          return (
+                            <div key={i} className={`text-[10px] ${cellColors[t.task_type] || 'bg-orange-500/20 text-orange-400'} px-1 rounded truncate`}>
+                              {new Date(t.due_at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})} {shortLabels[t.task_type] || t.task_type}
+                            </div>
+                          );
+                        })}
                         {hasNotes && (
                           <div className="text-[10px] bg-green-500/20 text-green-400 px-1 rounded truncate">
                             {data.notes.length} note{data.notes.length > 1 ? 's' : ''}
@@ -5243,21 +5276,57 @@ export default function LandLeadsAdminPage() {
                           <div className="mb-4">
                             <h6 className="text-sm font-semibold text-orange-400 mb-2 uppercase tracking-wide">Scheduled Tasks</h6>
                             <div className="space-y-2">
-                              {dayData[calendarSelectedDay].tasks.map((task, idx) => (
-                                <div key={idx} className="p-3 bg-orange-500/10 border border-orange-500/30 rounded-lg flex items-center justify-between">
-                                  <div>
-                                    <span className="text-white font-medium">{task.task_type === 'callback' ? 'Callback' : 'Send Offer'}</span>
-                                    <span className="text-orange-300 text-sm ml-2">at {new Date(task.due_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</span>
-                                    {task.description && <p className="text-slate-400 text-sm mt-1">{task.description}</p>}
+                              {dayData[calendarSelectedDay].tasks.map((task, idx) => {
+                                const typeColors = { callback: 'bg-slate-500/20 border-slate-500/30 text-slate-400', follow_up_call: 'bg-blue-500/20 border-blue-500/30 text-blue-400', send_offer: 'bg-purple-500/20 border-purple-500/30 text-purple-400', discovery_call: 'bg-cyan-500/20 border-cyan-500/30 text-cyan-400', offer_follow_up: 'bg-orange-500/20 border-orange-500/30 text-orange-400', title_work: 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400' };
+                                const colors = typeColors[task.task_type] || 'bg-orange-500/20 border-orange-500/30 text-orange-400';
+                                return (
+                                  <div key={idx} className={`p-3 ${colors.split(' ').slice(0, 2).join(' ')} border rounded-lg`}>
+                                    <div className="flex items-center justify-between mb-1">
+                                      <div className="flex items-center gap-2">
+                                        <span className={`text-sm font-bold ${colors.split(' ')[2]}`}>{TASK_TYPE_LABELS[task.task_type] || task.task_type}</span>
+                                        <span className="text-slate-300 text-sm">at {new Date(task.due_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</span>
+                                      </div>
+                                      <div className="flex gap-2">
+                                        <button
+                                          onClick={() => {
+                                            setCalendarModalOpen(false);
+                                            setScheduleLeadId(task.lead_id);
+                                            setScheduleType(task.task_type || 'callback');
+                                            const d = new Date(task.due_at);
+                                            setScheduleDate(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`);
+                                            setScheduleTime(d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', hour12: false}));
+                                            setScheduleNote(task.description || '');
+                                            setEditingScheduleTaskId(task.id);
+                                            setScheduleModalOpen(true);
+                                          }}
+                                          className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 rounded text-sm font-medium transition-colors text-white"
+                                        >
+                                          Edit
+                                        </button>
+                                        <button
+                                          onClick={async () => {
+                                            const { error } = await supabase.from('scheduled_tasks').delete().eq('id', task.id);
+                                            if (!error) {
+                                              setScheduledTasks(prev => prev.filter(t => t.id !== task.id));
+                                              showToast('Task deleted', 'success');
+                                            }
+                                          }}
+                                          className="px-3 py-1.5 bg-red-600/80 hover:bg-red-500 rounded text-sm font-medium transition-colors text-white"
+                                        >
+                                          Delete
+                                        </button>
+                                        <button
+                                          onClick={() => completeScheduledTask(task.id)}
+                                          className="px-3 py-1.5 bg-green-600 hover:bg-green-500 rounded text-sm font-medium transition-colors text-white"
+                                        >
+                                          Done
+                                        </button>
+                                      </div>
+                                    </div>
+                                    {task.description && <p className="text-slate-400 text-sm">{task.description}</p>}
                                   </div>
-                                  <button
-                                    onClick={() => completeScheduledTask(task.id)}
-                                    className="px-3 py-1.5 bg-green-600 hover:bg-green-500 rounded text-sm font-medium transition-colors"
-                                  >
-                                    Done
-                                  </button>
-                                </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           </div>
                         )}
@@ -5420,7 +5489,7 @@ export default function LandLeadsAdminPage() {
             className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-md p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-lg font-bold text-white mb-1">Schedule Task</h3>
+            <h3 className="text-lg font-bold text-white mb-1">{editingScheduleTaskId ? 'Edit Task' : 'Schedule Task'}</h3>
             <p className="text-sm text-slate-400 mb-4">
               {(() => {
                 const lead = allLeads.find(l => l.id === scheduleLeadId);
@@ -5431,17 +5500,22 @@ export default function LandLeadsAdminPage() {
             {/* Task Type */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-slate-300 mb-2">Type</label>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 {[
-                  { value: 'callback', label: 'Callback' },
-                  { value: 'send_offer', label: 'Send Offer' }
+                  { value: 'discovery_call', label: 'Discovery Call', color: 'bg-cyan-600', desc: 'First contact — never spoken' },
+                  { value: 'follow_up_call', label: 'Follow Up Call', color: 'bg-blue-600', desc: 'Spoke before, no offer yet' },
+                  { value: 'send_offer', label: 'Send Offer', color: 'bg-purple-600', desc: 'Ready to make/send offer' },
+                  { value: 'offer_follow_up', label: 'Offer Follow Up', color: 'bg-orange-600', desc: 'Offer sent, following up' },
+                  { value: 'title_work', label: 'Title Work Call', color: 'bg-emerald-600', desc: 'Under contract — title/access' },
+                  { value: 'callback', label: 'Callback', color: 'bg-slate-600', desc: 'General callback' }
                 ].map(opt => (
                   <button
                     key={opt.value}
                     onClick={() => setScheduleType(opt.value)}
-                    className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    title={opt.desc}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                       scheduleType === opt.value
-                        ? 'bg-blue-600 text-white'
+                        ? `${opt.color} text-white ring-2 ring-white/30`
                         : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                     }`}
                   >
@@ -5449,6 +5523,14 @@ export default function LandLeadsAdminPage() {
                   </button>
                 ))}
               </div>
+              <p className="text-xs text-slate-500 mt-2">
+                {scheduleType === 'discovery_call' && 'First contact — never spoken to this person'}
+                {scheduleType === 'follow_up_call' && 'Already spoke, no offer made yet'}
+                {scheduleType === 'send_offer' && 'Ready to make or send an offer'}
+                {scheduleType === 'offer_follow_up' && 'Offer is out, need to follow up'}
+                {scheduleType === 'title_work' && 'Under contract — discuss title, access, etc.'}
+                {scheduleType === 'callback' && 'General callback'}
+              </p>
             </div>
 
             {/* Date & Time */}
@@ -5501,7 +5583,7 @@ export default function LandLeadsAdminPage() {
                 disabled={!scheduleDate || !scheduleTime || scheduleSaving}
                 className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors"
               >
-                {scheduleSaving ? 'Saving...' : 'Save'}
+                {scheduleSaving ? 'Saving...' : editingScheduleTaskId ? 'Update' : 'Save'}
               </button>
             </div>
           </div>
