@@ -173,7 +173,7 @@ export default function LandLeadsAdminPage() {
     // ALWAYS respect manual status overrides (except for stale NEW leads)
     // If user explicitly set a status, use it
     if (['CONTACTED', 'CONTACTING', 'OFFER_SENT', 'OFFER_MADE', 'NEGOTIATING',
-         'UNDER_CONTRACT', 'CLOSED', 'DEAD', 'NURTURE', 'QUALIFYING'].includes(manualStatus)) {
+         'UNDER_CONTRACT', 'CLOSED', 'DEAD', 'NURTURE', 'QUALIFYING', 'ARCHIVED'].includes(manualStatus)) {
       return manualStatus === 'OFFER_MADE' ? 'OFFER_SENT' : manualStatus;
     }
 
@@ -198,7 +198,8 @@ export default function LandLeadsAdminPage() {
     UNDER_CONTRACT: { label: 'Under Contract', color: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50' },
     CLOSED: { label: 'Closed', color: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50' },
     DEAD: { label: 'Dead', color: 'bg-slate-500/20 text-slate-400 border-slate-500/50' },
-    NURTURE: { label: 'Nurture', color: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/50' }
+    NURTURE: { label: 'Nurture', color: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/50' },
+    ARCHIVED: { label: 'Archived', color: 'bg-zinc-500/20 text-zinc-400 border-zinc-500/50' }
   };
 
   // How long ago helper
@@ -301,7 +302,8 @@ export default function LandLeadsAdminPage() {
     { value: 'UNDER_CONTRACT', label: 'Under Contract' },
     { value: 'CLOSED', label: 'Closed' },
     { value: 'DEAD', label: 'Dead' },
-    { value: 'NURTURE', label: 'Nurture' }
+    { value: 'NURTURE', label: 'Nurture' },
+    { value: 'ARCHIVED', label: 'Archived' }
   ];
 
   // Create Lead states
@@ -659,6 +661,52 @@ export default function LandLeadsAdminPage() {
       showToast('Task completed', 'success');
     } catch (err) {
       console.error('Error completing task:', err);
+      showToast('Error: ' + err.message, 'error');
+    }
+  };
+
+  // Archive a lead
+  const archiveLead = async (leadId) => {
+    try {
+      const lead = allLeads.find(l => l.id === leadId);
+      const leadName = lead?.full_name || lead?.name || 'Lead';
+      await supabase.from('leads').update({ status: 'archived' }).eq('id', leadId);
+      setAllLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'archived' } : l));
+      showToast('Archived', 'success', leadName);
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error');
+    }
+  };
+
+  // Restore a lead from archive
+  const restoreLead = async (leadId) => {
+    try {
+      const lead = allLeads.find(l => l.id === leadId);
+      const leadName = lead?.full_name || lead?.name || 'Lead';
+      await supabase.from('leads').update({ status: 'new' }).eq('id', leadId);
+      setAllLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'new' } : l));
+      showToast('Restored', 'success', leadName);
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error');
+    }
+  };
+
+  // Permanently delete a lead
+  const deleteLead = async (leadId) => {
+    try {
+      const lead = allLeads.find(l => l.id === leadId);
+      const leadName = lead?.full_name || lead?.name || 'Lead';
+      // Delete related scheduled tasks first
+      await supabase.from('scheduled_tasks').delete().eq('lead_id', leadId);
+      // Delete lead assignments
+      await supabase.from('lead_assignments').delete().eq('lead_id', leadId);
+      // Delete the lead
+      const { error } = await supabase.from('leads').delete().eq('id', leadId);
+      if (error) throw error;
+      setAllLeads(prev => prev.filter(l => l.id !== leadId));
+      setScheduledTasks(prev => prev.filter(t => t.lead_id !== leadId));
+      showToast('Permanently deleted', 'success', leadName);
+    } catch (err) {
       showToast('Error: ' + err.message, 'error');
     }
   };
@@ -1737,7 +1785,7 @@ export default function LandLeadsAdminPage() {
   };
 
   // Check lead_assignments table to determine if lead is assigned
-  const unassignedLeads = allLeads.filter(l => !leadAssignments[l.id] || leadAssignments[l.id].length === 0);
+  const unassignedLeads = allLeads.filter(l => l.status !== 'archived' && (!leadAssignments[l.id] || leadAssignments[l.id].length === 0));
   const assignedLeads = allLeads.filter(l => leadAssignments[l.id] && leadAssignments[l.id].length > 0);
 
   // ============================================================
@@ -1986,7 +2034,7 @@ export default function LandLeadsAdminPage() {
       {/* Tabs */}
       <div className="bg-slate-800/30 border-b border-slate-700/50 px-6 overflow-x-auto">
         <div className="flex gap-4 min-w-max">
-          {['daily-rundown', 'organizations', 'ppc-inflow', 'subdivision-inflow', 'all-leads', 'unassigned', 'create-lead', 'session-analytics'].map((tab) => (
+          {['daily-rundown', 'organizations', 'ppc-inflow', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'session-analytics'].map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -2011,15 +2059,21 @@ export default function LandLeadsAdminPage() {
                   <path d="M1 22h4V11H1v11zm6-7h4v7H7v-7zm6-4h4v11h-4V11zm6-5h4v16h-4V6z"/>
                 </svg>
               )}
+              {tab === 'archive' && (
+                <svg className="w-4 h-4 inline-block mr-1 -mt-0.5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M20.54 5.23l-1.39-1.68C18.88 3.21 18.47 3 18 3H6c-.47 0-.88.21-1.16.55L3.46 5.23C3.17 5.57 3 6.02 3 6.5V19c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6.5c0-.48-.17-.93-.46-1.27zM12 17.5L6.5 12H10v-2h4v2h3.5L12 17.5zM5.12 5l.81-1h12l.94 1H5.12z"/>
+                </svg>
+              )}
               {tab === 'session-analytics' && (
                 <svg className="w-4 h-4 inline-block mr-1 -mt-0.5" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M11 7h2v10h-2zm4 4h2v6h-2zM7 9h2v8H7zm12-7H5c-1.1 0-2 .9-2 2v18l4-4h13c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
                 </svg>
               )}
-              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab.replace('-', ' ')}
+              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab.replace('-', ' ')}
               {tab === 'unassigned' && ` (${unassignedLeads.length})`}
-              {tab === 'ppc-inflow' && ` (${allLeads.filter(l => l.source?.includes('Haven Ground')).length})`}
-              {tab === 'subdivision-inflow' && ` (${allLeads.filter(l => l.source === 'subdivision').length})`}
+              {tab === 'ppc-inflow' && ` (${allLeads.filter(l => l.source?.includes('Haven Ground') && l.status !== 'archived').length})`}
+              {tab === 'subdivision-inflow' && ` (${allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived').length})`}
+              {tab === 'archive' && ` (${allLeads.filter(l => l.status === 'archived').length})`}
             </button>
           ))}
         </div>
@@ -2330,7 +2384,7 @@ export default function LandLeadsAdminPage() {
             {/* PPC Stats */}
             <div className="grid grid-cols-4 gap-4">
               <div className="bg-gradient-to-br from-orange-500/20 to-orange-600/20 border border-orange-500/30 rounded-xl p-6">
-                <div className="text-3xl font-bold text-orange-400">{allLeads.filter(l => l.source?.includes('Haven Ground')).length}</div>
+                <div className="text-3xl font-bold text-orange-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && l.status !== 'archived').length}</div>
                 <div className="text-slate-300 text-sm mt-1">PPC Inflow Leads</div>
               </div>
               <div className="bg-gradient-to-br from-green-500/20 to-green-600/20 border border-green-500/30 rounded-xl p-6">
@@ -2369,7 +2423,7 @@ export default function LandLeadsAdminPage() {
             {/* PPC Leads Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
               {allLeads
-                .filter(l => l.source?.includes('Haven Ground'))
+                .filter(l => l.source?.includes('Haven Ground') && l.status !== 'archived')
                 .filter(l => {
                   if (!ppcSearch.trim()) return true;
                   const q = ppcSearch.toLowerCase();
@@ -2814,6 +2868,24 @@ export default function LandLeadsAdminPage() {
                       </button>
                     </div>
 
+                    {/* Archive / Delete */}
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); archiveLead(lead.id); }}
+                        className="flex-1 px-3 py-1.5 bg-zinc-700/50 hover:bg-zinc-600/50 text-zinc-400 hover:text-zinc-300 text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>
+                        Archive
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); if (confirm(`Permanently delete ${lead.full_name || lead.name}? This cannot be undone.`)) deleteLead(lead.id); }}
+                        className="px-3 py-1.5 bg-red-900/30 hover:bg-red-800/40 text-red-400 hover:text-red-300 text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                        Delete
+                      </button>
+                    </div>
+
                     {/* Footer */}
                     <div className="mt-2 text-xs text-slate-500 text-center">
                       {new Date(lead.created_at).toLocaleString()}
@@ -2823,7 +2895,7 @@ export default function LandLeadsAdminPage() {
                 ))}
             </div>
 
-            {allLeads.filter(l => l.source?.includes('Haven Ground')).length === 0 && (
+            {allLeads.filter(l => l.source?.includes('Haven Ground') && l.status !== 'archived').length === 0 && (
               <div className="text-center py-12 text-slate-400">
                 No PPC leads yet. Leads from Haven Ground form will appear here.
               </div>
@@ -2837,19 +2909,19 @@ export default function LandLeadsAdminPage() {
             {/* Subdivision Stats */}
             <div className="grid grid-cols-4 gap-4">
               <div className="bg-gradient-to-br from-teal-500/20 to-teal-600/20 border border-teal-500/30 rounded-xl p-6">
-                <div className="text-3xl font-bold text-teal-400">{allLeads.filter(l => l.source === 'subdivision').length}</div>
+                <div className="text-3xl font-bold text-teal-400">{allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived').length}</div>
                 <div className="text-slate-300 text-sm mt-1">Total Subdivision Leads</div>
               </div>
               <div className="bg-gradient-to-br from-green-500/20 to-green-600/20 border border-green-500/30 rounded-xl p-6">
-                <div className="text-3xl font-bold text-green-400">{allLeads.filter(l => l.source === 'subdivision' && (getSmartStatus(l) === 'NEW')).length}</div>
+                <div className="text-3xl font-bold text-green-400">{allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived' && (getSmartStatus(l) === 'NEW')).length}</div>
                 <div className="text-slate-300 text-sm mt-1">New</div>
               </div>
               <div className="bg-gradient-to-br from-yellow-500/20 to-yellow-600/20 border border-yellow-500/30 rounded-xl p-6">
-                <div className="text-3xl font-bold text-yellow-400">{allLeads.filter(l => l.source === 'subdivision' && ['CONTACTING', 'CONTACTED'].includes(getSmartStatus(l))).length}</div>
+                <div className="text-3xl font-bold text-yellow-400">{allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived' && ['CONTACTING', 'CONTACTED'].includes(getSmartStatus(l))).length}</div>
                 <div className="text-slate-300 text-sm mt-1">In Progress</div>
               </div>
               <div className="bg-gradient-to-br from-purple-500/20 to-purple-600/20 border border-purple-500/30 rounded-xl p-6">
-                <div className="text-3xl font-bold text-purple-400">{allLeads.filter(l => l.source === 'subdivision' && new Date(l.created_at) > new Date(Date.now() - 7*24*60*60*1000)).length}</div>
+                <div className="text-3xl font-bold text-purple-400">{allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived' && new Date(l.created_at) > new Date(Date.now() - 7*24*60*60*1000)).length}</div>
                 <div className="text-slate-300 text-sm mt-1">Last 7 Days</div>
               </div>
             </div>
@@ -2992,7 +3064,7 @@ export default function LandLeadsAdminPage() {
             {/* Subdivision Leads Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
               {allLeads
-                .filter(l => l.source === 'subdivision')
+                .filter(l => l.source === 'subdivision' && l.status !== 'archived')
                 .filter(l => {
                   if (!subdivSearch.trim()) return true;
                   const q = subdivSearch.toLowerCase();
@@ -3295,6 +3367,24 @@ export default function LandLeadsAdminPage() {
                         </button>
                       </div>
 
+                      {/* Archive / Delete */}
+                      <div className="mt-2 flex gap-2">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); archiveLead(lead.id); }}
+                          className="flex-1 px-3 py-1.5 bg-zinc-700/50 hover:bg-zinc-600/50 text-zinc-400 hover:text-zinc-300 text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>
+                          Archive
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); if (confirm(`Permanently delete ${lead.full_name || lead.name}? This cannot be undone.`)) deleteLead(lead.id); }}
+                          className="px-3 py-1.5 bg-red-900/30 hover:bg-red-800/40 text-red-400 hover:text-red-300 text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                          Delete
+                        </button>
+                      </div>
+
                       {/* Footer */}
                       <div className="mt-2 text-xs text-slate-500 text-center">
                         {new Date(lead.created_at).toLocaleString()}
@@ -3304,7 +3394,7 @@ export default function LandLeadsAdminPage() {
                 ))}
             </div>
 
-            {allLeads.filter(l => l.source === 'subdivision').length === 0 && (
+            {allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived').length === 0 && (
               <div className="text-center py-12 text-slate-400">
                 No subdivision leads yet. Click "+ Add Property" to create one.
               </div>
@@ -3317,7 +3407,7 @@ export default function LandLeadsAdminPage() {
           <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
             <div className="p-4 border-b border-slate-700/50">
               <h3 className="text-xl font-bold">All Leads</h3>
-              <p className="text-sm text-slate-400 mt-1">{allLeads.length} total leads</p>
+              <p className="text-sm text-slate-400 mt-1">{allLeads.filter(l => l.status !== 'archived').length} active leads ({allLeads.length} total)</p>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -3325,21 +3415,15 @@ export default function LandLeadsAdminPage() {
                   <tr>
                     <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Date</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Name</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Source</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Location</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Acres</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Status</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Assigned To</th>
                     <th className="px-6 py-3 text-right text-xs font-medium text-slate-400 uppercase">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-700/50">
-                  {allLeads.map((lead) => {
-                    const assignments = leadAssignments[lead.id] || [];
-                    const assignedOrgs = assignments.map(a => ({
-                      org: organizations.find(o => o.id === a.team_id),
-                      assignedAt: a.assigned_at
-                    })).filter(a => a.org);
-
+                  {allLeads.filter(l => l.status !== 'archived').map((lead) => {
                     return (
                       <tr key={lead.id} className="hover:bg-slate-700/30">
                         <td className="px-6 py-4 text-sm">
@@ -3348,6 +3432,15 @@ export default function LandLeadsAdminPage() {
                         <td className="px-6 py-4">
                           <div className="font-medium">{lead.full_name || lead.name}</div>
                           <div className="text-sm text-slate-400">{lead.email}</div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                            lead.source === 'subdivision' ? 'bg-teal-500/20 text-teal-400' :
+                            lead.source?.includes('Haven Ground') ? 'bg-orange-500/20 text-orange-400' :
+                            'bg-slate-500/20 text-slate-400'
+                          }`}>
+                            {lead.source === 'subdivision' ? 'Subdivision' : lead.source?.includes('Haven Ground') ? 'PPC' : lead.source || 'Direct'}
+                          </span>
                         </td>
                         <td className="px-6 py-4 text-sm">
                           {lead.property_county || lead.county}, {lead.property_state || lead.state}
@@ -3362,31 +3455,24 @@ export default function LandLeadsAdminPage() {
                             {lead.status || 'new'}
                           </span>
                         </td>
-                        <td className="px-6 py-4">
-                          {assignedOrgs.length > 0 ? (
-                            <div className="space-y-1.5">
-                              {assignedOrgs.map((assignment, idx) => (
-                                <div key={idx} className="text-sm">
-                                  <div className="font-medium text-white">{assignment.org.name}</div>
-                                  <div className="text-xs text-slate-400">
-                                    {new Date(assignment.assignedAt).toLocaleDateString()}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <span className="text-slate-500">Unassigned</span>
-                          )}
-                        </td>
-                        <td className="px-6 py-4 text-right">
+                        <td className="px-6 py-4 text-right space-x-2">
                           <button
-                            onClick={() => {
-                              setSelectedLead(lead);
-                              setAssignModalOpen(true);
-                            }}
-                            className="px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors text-sm font-medium"
+                            onClick={() => openLeadDetails(lead)}
+                            className="px-3 py-1.5 bg-slate-700 text-white rounded-lg hover:bg-slate-600 transition-colors text-sm font-medium"
                           >
-                            Assign
+                            Details
+                          </button>
+                          <button
+                            onClick={() => archiveLead(lead.id)}
+                            className="px-3 py-1.5 bg-zinc-700/50 text-zinc-400 rounded-lg hover:bg-zinc-600/50 hover:text-zinc-300 transition-colors text-sm font-medium"
+                          >
+                            Archive
+                          </button>
+                          <button
+                            onClick={() => { if (confirm(`Permanently delete ${lead.full_name || lead.name}?`)) deleteLead(lead.id); }}
+                            className="px-3 py-1.5 bg-red-900/30 text-red-400 rounded-lg hover:bg-red-800/40 hover:text-red-300 transition-colors text-sm font-medium"
+                          >
+                            Delete
                           </button>
                         </td>
                       </tr>
@@ -3477,6 +3563,86 @@ export default function LandLeadsAdminPage() {
                 ))
               )}
             </div>
+          </div>
+        )}
+
+        {/* ARCHIVE TAB */}
+        {activeTab === 'archive' && (
+          <div className="space-y-6">
+            {/* Archive Header */}
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-6">
+              <div className="flex items-center gap-3 mb-2">
+                <svg className="w-6 h-6 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>
+                <h2 className="text-2xl font-bold text-white">Archive</h2>
+                <span className="ml-2 px-3 py-1 bg-zinc-700/50 rounded-full text-sm text-zinc-400 font-semibold">{allLeads.filter(l => l.status === 'archived').length} leads</span>
+              </div>
+              <p className="text-slate-400 text-sm">Archived leads are hidden from all dashboards. Restore to bring them back, or delete permanently.</p>
+            </div>
+
+            {allLeads.filter(l => l.status === 'archived').length === 0 ? (
+              <div className="text-center py-16 text-slate-400">
+                <svg className="w-12 h-12 mx-auto mb-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>
+                <p className="text-lg font-semibold">Archive is empty</p>
+                <p className="text-sm mt-1">Archived leads will appear here</p>
+              </div>
+            ) : (
+              <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-slate-700/50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Date</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Name</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Source</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Location</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Acres</th>
+                        <th className="px-6 py-3 text-right text-xs font-medium text-slate-400 uppercase">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-700/50">
+                      {allLeads.filter(l => l.status === 'archived').map((lead) => (
+                        <tr key={lead.id} className="hover:bg-slate-700/30">
+                          <td className="px-6 py-4 text-sm text-slate-400">
+                            {new Date(lead.created_at).toLocaleDateString()}
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="font-medium text-white">{lead.full_name || lead.name}</div>
+                            <div className="text-sm text-slate-500">{lead.email}</div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                              lead.source === 'subdivision' ? 'bg-teal-500/20 text-teal-400' :
+                              lead.source?.includes('Haven Ground') ? 'bg-orange-500/20 text-orange-400' :
+                              'bg-slate-500/20 text-slate-400'
+                            }`}>
+                              {lead.source === 'subdivision' ? 'Subdivision' : lead.source?.includes('Haven Ground') ? 'PPC' : lead.source || 'Direct'}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-sm text-slate-400">
+                            {lead.property_county || lead.county}, {lead.property_state || lead.state}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-slate-400">{lead.acres || lead.acreage || '-'}</td>
+                          <td className="px-6 py-4 text-right space-x-2">
+                            <button
+                              onClick={() => restoreLead(lead.id)}
+                              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-500 transition-colors text-sm font-semibold"
+                            >
+                              Restore
+                            </button>
+                            <button
+                              onClick={() => { if (confirm(`Permanently delete ${lead.full_name || lead.name}? This cannot be undone.`)) deleteLead(lead.id); }}
+                              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-500 transition-colors text-sm font-semibold"
+                            >
+                              Delete Forever
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
