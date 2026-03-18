@@ -63,7 +63,7 @@ export async function POST(request) {
         priority: 'high',
         status: 'pending',
         due_at: todayAt5.toISOString(),
-        notes: `Subdivision property - ${county}, ${state} - ${acreage || '?'} acres. Agent: ${agent_name || 'N/A'}`
+        description: `Subdivision property - ${county}, ${state} - ${acreage || '?'} acres. Agent: ${agent_name || 'N/A'}`
       }]);
 
     if (taskError) {
