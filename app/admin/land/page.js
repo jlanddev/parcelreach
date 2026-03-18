@@ -64,7 +64,7 @@ export default function LandLeadsAdminPage() {
   const [subdivSearch, setSubdivSearch] = useState('');
   const [subdivForm, setSubdivForm] = useState({
     county: '', state: 'TX', acreage: '', seller_name: '',
-    agent_name: '', agent_phone: '', agent_email: ''
+    agent_name: '', agent_phone: '', agent_email: '', parcel_id: ''
   });
   const [subdivCreating, setSubdivCreating] = useState(false);
   const [subdivFormOpen, setSubdivFormOpen] = useState(false);
@@ -1693,9 +1693,9 @@ export default function LandLeadsAdminPage() {
         state: subdivForm.state,
         acres: parseFloat(subdivForm.acreage) || null,
         acreage: parseFloat(subdivForm.acreage) || null,
+        parcel_id: subdivForm.parcel_id || null,
         source: 'subdivision',
         status: 'new',
-        pipeline_status: 'NEW',
         form_data: {
           agentName: subdivForm.agent_name,
           agentPhone: subdivForm.agent_phone,
@@ -1731,7 +1731,7 @@ export default function LandLeadsAdminPage() {
       }
 
       // Reset form
-      setSubdivForm({ county: '', state: 'TX', acreage: '', seller_name: '', agent_name: '', agent_phone: '', agent_email: '' });
+      setSubdivForm({ county: '', state: 'TX', acreage: '', seller_name: '', agent_name: '', agent_phone: '', agent_email: '', parcel_id: '' });
       setSubdivFormOpen(false);
       showToast('Subdivision property created!', 'success', subdivForm.seller_name || 'New Property');
     } catch (error) {
@@ -2901,7 +2901,7 @@ export default function LandLeadsAdminPage() {
             {subdivFormOpen && (
               <div className="bg-slate-800/80 border border-teal-500/30 rounded-xl p-6">
                 <h3 className="text-lg font-bold text-teal-400 mb-4">New Subdivision Property</h3>
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-4">
                   <div>
                     <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">County *</label>
                     <input
@@ -2940,6 +2940,16 @@ export default function LandLeadsAdminPage() {
                       onChange={(e) => setSubdivForm({...subdivForm, seller_name: e.target.value})}
                       className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-teal-500"
                       placeholder="John Smith"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Parcel ID</label>
+                    <input
+                      type="text"
+                      value={subdivForm.parcel_id}
+                      onChange={(e) => setSubdivForm({...subdivForm, parcel_id: e.target.value})}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-teal-500"
+                      placeholder="APN / Parcel #"
                     />
                   </div>
                 </div>
@@ -3118,6 +3128,22 @@ export default function LandLeadsAdminPage() {
                           className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm font-semibold text-teal-400 focus:outline-none focus:border-teal-500/50"
                           placeholder="Acres"
                         />
+                        <input
+                          type="text"
+                          value={lead.parcel_id || ''}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={async (e) => {
+                            const { error } = await supabase
+                              .from('leads')
+                              .update({ parcel_id: e.target.value })
+                              .eq('id', lead.id);
+                            if (!error) {
+                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, parcel_id: e.target.value} : l));
+                            }
+                          }}
+                          className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-teal-500/50"
+                          placeholder="Parcel ID / APN"
+                        />
                       </div>
 
                       {/* Agent Info */}
@@ -3233,6 +3259,32 @@ export default function LandLeadsAdminPage() {
                       {/* Bottom Actions */}
                       <div className="mt-2 pt-2 border-t border-slate-700/50 flex gap-2">
                         <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setLeadForMapSearch(lead);
+                            setFindMapModalOpen(true);
+                            setKmlFile(null);
+                            setUploadedGeometry(null);
+                          }}
+                          className={`flex-1 px-4 py-2 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2 ${lead.parcel_geometry ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}
+                        >
+                          {lead.parcel_geometry ? (
+                            <>
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                              </svg>
+                              Map Attached
+                            </>
+                          ) : (
+                            <>
+                              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+                              </svg>
+                              Attach Map
+                            </>
+                          )}
+                        </button>
+                        <button
                           onClick={(e) => { e.stopPropagation(); openCalendarModal(lead); }}
                           className="px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
                         >
@@ -3243,18 +3295,9 @@ export default function LandLeadsAdminPage() {
                         </button>
                         <button
                           onClick={(e) => { e.stopPropagation(); openLeadDetails(lead); }}
-                          className="flex-1 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold rounded-lg transition-colors"
+                          className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold rounded-lg transition-colors"
                         >
                           View Details
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); openScheduleModal(lead.id); }}
-                          className="px-4 py-2 bg-teal-600 hover:bg-teal-500 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                          Schedule Task
                         </button>
                       </div>
 
