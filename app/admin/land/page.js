@@ -597,6 +597,13 @@ export default function LandLeadsAdminPage() {
     title_work: 'bg-pink-500/20 text-pink-400 border-pink-500/50'
   };
 
+  // Normalize legacy/unknown task_type values to a valid key
+  const normalizeTaskType = (type) => {
+    if (TASK_TYPE_LABELS[type]) return type;
+    if (type === 'follow_up') return 'follow_up_call';
+    return 'callback';
+  };
+
   const updateTaskType = async (taskId, newType) => {
     const task = scheduledTasks.find(t => t.id === taskId);
     if (!task) return;
@@ -2151,7 +2158,8 @@ export default function LandLeadsAdminPage() {
                     const dueTime = new Date(task.due_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                     const isNewLead = task.title?.startsWith('NEW LEAD') || task.priority === 'high';
                     const isOverdue = !isNewLead && new Date(task.due_at) < new Date();
-                    const taskTypeColor = isNewLead ? 'bg-green-500/20 text-green-400 border-green-500/50' : (TASK_TYPE_COLORS[task.task_type] || 'bg-slate-500/20 text-slate-400 border-slate-500/50');
+                    const normalizedType = normalizeTaskType(task.task_type);
+                    const taskTypeColor = isNewLead ? 'bg-green-500/20 text-green-400 border-green-500/50' : TASK_TYPE_COLORS[normalizedType];
 
                     return (
                       <div key={task.id} className={`p-4 hover:bg-slate-800/50 transition-all ${isOverdue ? 'bg-red-900/10' : ''}`}>
@@ -2163,7 +2171,7 @@ export default function LandLeadsAdminPage() {
                                 <span className={`px-2 py-0.5 rounded border text-xs font-bold ${taskTypeColor}`}>New Lead</span>
                               ) : (
                                 <select
-                                  value={task.task_type}
+                                  value={normalizedType}
                                   onChange={(e) => updateTaskType(task.id, e.target.value)}
                                   className={`px-2 py-0.5 rounded border text-xs font-bold cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-500 ${taskTypeColor}`}
                                 >
@@ -5436,9 +5444,10 @@ export default function LandLeadsAdminPage() {
                         {hasTasks && data.tasks.map((t, i) => {
                           const shortLabels = { callback: 'Callback', follow_up_call: 'Follow Up', send_offer: 'Offer', discovery_call: 'Discovery', offer_follow_up: 'Offer F/U', title_work: 'Title Work' };
                           const cellColors = { discovery_call: 'bg-cyan-500/20 text-cyan-400', follow_up_call: 'bg-blue-500/20 text-blue-400', send_offer: 'bg-purple-500/20 text-purple-400', offer_follow_up: 'bg-orange-500/20 text-orange-400', title_work: 'bg-emerald-500/20 text-emerald-400', callback: 'bg-slate-500/20 text-slate-400' };
+                          const nt = normalizeTaskType(t.task_type);
                           return (
-                            <div key={i} className={`text-[10px] ${cellColors[t.task_type] || 'bg-orange-500/20 text-orange-400'} px-1 rounded truncate`}>
-                              {new Date(t.due_at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})} {shortLabels[t.task_type] || t.task_type}
+                            <div key={i} className={`text-[10px] ${cellColors[nt] || 'bg-orange-500/20 text-orange-400'} px-1 rounded truncate`}>
+                              {new Date(t.due_at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})} {shortLabels[nt] || nt}
                             </div>
                           );
                         })}
@@ -5478,12 +5487,13 @@ export default function LandLeadsAdminPage() {
                             <div className="space-y-2">
                               {dayData[calendarSelectedDay].tasks.map((task, idx) => {
                                 const typeColors = { callback: 'bg-slate-500/20 border-slate-500/30 text-slate-400', follow_up_call: 'bg-blue-500/20 border-blue-500/30 text-blue-400', send_offer: 'bg-purple-500/20 border-purple-500/30 text-purple-400', discovery_call: 'bg-cyan-500/20 border-cyan-500/30 text-cyan-400', offer_follow_up: 'bg-orange-500/20 border-orange-500/30 text-orange-400', title_work: 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400' };
-                                const colors = typeColors[task.task_type] || 'bg-orange-500/20 border-orange-500/30 text-orange-400';
+                                const ntType = normalizeTaskType(task.task_type);
+                                const colors = typeColors[ntType] || 'bg-orange-500/20 border-orange-500/30 text-orange-400';
                                 return (
                                   <div key={idx} className={`p-3 ${colors.split(' ').slice(0, 2).join(' ')} border rounded-lg`}>
                                     <div className="flex items-center justify-between mb-1">
                                       <div className="flex items-center gap-2">
-                                        <span className={`text-sm font-bold ${colors.split(' ')[2]}`}>{TASK_TYPE_LABELS[task.task_type] || task.task_type}</span>
+                                        <span className={`text-sm font-bold ${colors.split(' ')[2]}`}>{TASK_TYPE_LABELS[ntType] || ntType}</span>
                                         <span className="text-slate-300 text-sm">at {new Date(task.due_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</span>
                                       </div>
                                       <div className="flex gap-2">
