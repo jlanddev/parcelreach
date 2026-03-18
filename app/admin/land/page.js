@@ -1676,7 +1676,7 @@ export default function LandLeadsAdminPage() {
     }
   };
 
-  // Create Subdivision Property
+  // Create Subdivision Property via API
   const handleCreateSubdivision = async () => {
     if (!subdivForm.county || !subdivForm.state) {
       showToast('County and State are required', 'error');
@@ -1684,57 +1684,16 @@ export default function LandLeadsAdminPage() {
     }
     setSubdivCreating(true);
     try {
-      const leadToInsert = {
-        // Required NOT NULL columns
-        name: subdivForm.seller_name || 'Unknown Seller',
-        email: subdivForm.agent_email || 'subdivision@parcelreach.com',
-        phone: subdivForm.agent_phone || 'N/A',
-        address: `${subdivForm.county}, ${subdivForm.state}`,
-        city: subdivForm.county || 'Unknown',
-        // Additional columns
-        full_name: subdivForm.seller_name || 'Unknown Seller',
-        property_county: subdivForm.county,
-        county: subdivForm.county,
-        property_state: subdivForm.state,
-        state: subdivForm.state,
-        acres: parseFloat(subdivForm.acreage) || null,
-        acreage: parseFloat(subdivForm.acreage) || null,
-        parcel_id: subdivForm.parcel_id || null,
-        source: 'subdivision',
-        status: 'new',
-        form_data: {
-          agentName: subdivForm.agent_name,
-          agentPhone: subdivForm.agent_phone,
-          agentEmail: subdivForm.agent_email
-        },
-        created_at: new Date().toISOString()
-      };
+      const res = await fetch('/api/subdivision/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(subdivForm)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to create');
 
-      const { data: leadData, error: leadError } = await supabase
-        .from('leads')
-        .insert([leadToInsert])
-        .select();
-
-      if (leadError) throw leadError;
-
-      if (leadData && leadData.length > 0) {
-        setAllLeads(prev => [leadData[0], ...prev]);
-
-        // Auto-schedule for daily rundown
-        const todayAt5 = new Date();
-        todayAt5.setHours(17, 0, 0, 0);
-        const { data: { user } } = await supabase.auth.getUser();
-        await supabase.from('scheduled_tasks').insert({
-          lead_id: leadData[0].id,
-          title: `NEW LEAD: ${leadToInsert.full_name}`,
-          task_type: 'callback',
-          priority: 'high',
-          status: 'pending',
-          due_at: todayAt5.toISOString(),
-          created_by: user?.id,
-          notes: `Subdivision property - ${subdivForm.county}, ${subdivForm.state} - ${subdivForm.acreage || '?'} acres. Agent: ${subdivForm.agent_name || 'N/A'}`
-        });
-      }
+      // Add to local state
+      setAllLeads(prev => [data.lead, ...prev]);
 
       // Reset form
       setSubdivForm({ county: '', state: 'TX', acreage: '', seller_name: '', agent_name: '', agent_phone: '', agent_email: '', parcel_id: '' });
