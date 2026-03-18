@@ -588,6 +588,31 @@ export default function LandLeadsAdminPage() {
     title_work: 'Title Work Call'
   };
 
+  const TASK_TYPE_COLORS = {
+    callback: 'bg-blue-500/20 text-blue-400 border-blue-500/50',
+    discovery_call: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50',
+    follow_up_call: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50',
+    send_offer: 'bg-purple-500/20 text-purple-400 border-purple-500/50',
+    offer_follow_up: 'bg-amber-500/20 text-amber-400 border-amber-500/50',
+    title_work: 'bg-pink-500/20 text-pink-400 border-pink-500/50'
+  };
+
+  const updateTaskType = async (taskId, newType) => {
+    const task = scheduledTasks.find(t => t.id === taskId);
+    if (!task) return;
+    const lead = allLeads.find(l => l.id === task.lead_id);
+    const leadName = lead?.full_name || lead?.name || 'Unknown';
+    const newTitle = `${TASK_TYPE_LABELS[newType] || newType}: ${leadName}`;
+    const { error } = await supabase
+      .from('scheduled_tasks')
+      .update({ task_type: newType, title: newTitle })
+      .eq('id', taskId);
+    if (!error) {
+      setScheduledTasks(prev => prev.map(t => t.id === taskId ? { ...t, task_type: newType, title: newTitle } : t));
+      showToast(`Changed to ${TASK_TYPE_LABELS[newType]}`, 'success', leadName);
+    }
+  };
+
   // Save a scheduled task (create or edit)
   const saveScheduledTask = async () => {
     if (!scheduleDate || !scheduleTime) return;
@@ -2126,8 +2151,7 @@ export default function LandLeadsAdminPage() {
                     const dueTime = new Date(task.due_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                     const isNewLead = task.title?.startsWith('NEW LEAD') || task.priority === 'high';
                     const isOverdue = !isNewLead && new Date(task.due_at) < new Date();
-                    const taskTypeLabel = isNewLead ? 'New Lead' : task.task_type === 'callback' ? 'Callback' : task.task_type === 'follow_up' ? 'Follow Up' : task.task_type === 'send_offer' ? 'Send Offer' : task.task_type;
-                    const taskTypeColor = isNewLead ? 'bg-green-500/20 text-green-400 border-green-500/50' : task.task_type === 'callback' ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : task.task_type === 'follow_up' ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50' : 'bg-purple-500/20 text-purple-400 border-purple-500/50';
+                    const taskTypeColor = isNewLead ? 'bg-green-500/20 text-green-400 border-green-500/50' : (TASK_TYPE_COLORS[task.task_type] || 'bg-slate-500/20 text-slate-400 border-slate-500/50');
 
                     return (
                       <div key={task.id} className={`p-4 hover:bg-slate-800/50 transition-all ${isOverdue ? 'bg-red-900/10' : ''}`}>
@@ -2135,9 +2159,19 @@ export default function LandLeadsAdminPage() {
                           {/* Lead Info */}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-1">
-                              <span className={`px-2 py-0.5 rounded border text-xs font-bold ${taskTypeColor}`}>
-                                {taskTypeLabel}
-                              </span>
+                              {isNewLead ? (
+                                <span className={`px-2 py-0.5 rounded border text-xs font-bold ${taskTypeColor}`}>New Lead</span>
+                              ) : (
+                                <select
+                                  value={task.task_type}
+                                  onChange={(e) => updateTaskType(task.id, e.target.value)}
+                                  className={`px-2 py-0.5 rounded border text-xs font-bold cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-500 ${taskTypeColor}`}
+                                >
+                                  {Object.entries(TASK_TYPE_LABELS).map(([key, label]) => (
+                                    <option key={key} value={key}>{label}</option>
+                                  ))}
+                                </select>
+                              )}
                               <span className="font-semibold text-white truncate">{leadName}</span>
                               {editingTaskTime === task.id ? (
                                 <div className="flex items-center gap-1">
