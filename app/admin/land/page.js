@@ -1693,6 +1693,8 @@ export default function LandLeadsAdminPage() {
         state: subdivForm.state,
         acres: parseFloat(subdivForm.acreage) || null,
         acreage: parseFloat(subdivForm.acreage) || null,
+        email: '',
+        phone: '',
         parcel_id: subdivForm.parcel_id || null,
         source: 'subdivision',
         status: 'new',
