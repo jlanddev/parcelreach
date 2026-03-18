@@ -1685,16 +1685,20 @@ export default function LandLeadsAdminPage() {
     setSubdivCreating(true);
     try {
       const leadToInsert = {
-        full_name: subdivForm.seller_name || 'Unknown Seller',
+        // Required NOT NULL columns
         name: subdivForm.seller_name || 'Unknown Seller',
+        email: subdivForm.agent_email || 'subdivision@parcelreach.com',
+        phone: subdivForm.agent_phone || 'N/A',
+        address: `${subdivForm.county}, ${subdivForm.state}`,
+        city: subdivForm.county || 'Unknown',
+        // Additional columns
+        full_name: subdivForm.seller_name || 'Unknown Seller',
         property_county: subdivForm.county,
         county: subdivForm.county,
         property_state: subdivForm.state,
         state: subdivForm.state,
         acres: parseFloat(subdivForm.acreage) || null,
         acreage: parseFloat(subdivForm.acreage) || null,
-        email: subdivForm.agent_email || 'no-email@subdivision.lead',
-        phone: subdivForm.agent_phone || 'N/A',
         parcel_id: subdivForm.parcel_id || null,
         source: 'subdivision',
         status: 'new',
