@@ -667,8 +667,7 @@ export default function LandLeadsAdminPage() {
       lead_id: task.lead_id, user_id: user?.id,
       content: '[VM] Left Voicemail', mentioned_users: []
     });
-    await supabase.from('leads').update({ last_activity_at: new Date().toISOString(), status: 'contacting', pipeline_status: 'CONTACTING' }).eq('id', task.lead_id);
-    setAllLeads(prev => prev.map(l => l.id === task.lead_id ? { ...l, last_activity_at: new Date().toISOString(), status: 'contacting', pipeline_status: 'CONTACTING' } : l));
+    await updateLeadStatus(task.lead_id, 'CONTACTING');
 
     // Count VMs today for this lead
     const todayStart = new Date(); todayStart.setHours(0,0,0,0);
@@ -731,8 +730,7 @@ export default function LandLeadsAdminPage() {
       lead_id: task.lead_id, user_id: user?.id,
       content: '[TEXT] Sent text message', mentioned_users: []
     });
-    await supabase.from('leads').update({ last_activity_at: new Date().toISOString(), status: 'contacting', pipeline_status: 'CONTACTING' }).eq('id', task.lead_id);
-    setAllLeads(prev => prev.map(l => l.id === task.lead_id ? { ...l, last_activity_at: new Date().toISOString(), status: 'contacting', pipeline_status: 'CONTACTING' } : l));
+    await updateLeadStatus(task.lead_id, 'CONTACTING');
 
     // Complete this task
     await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id }).eq('id', task.id);
@@ -781,11 +779,7 @@ export default function LandLeadsAdminPage() {
           content: '[SPOKE] Conversation completed', mentioned_users: []
         });
       }
-      await supabase.from('leads').update({
-        last_activity_at: new Date().toISOString(),
-        status: 'contacted', pipeline_status: 'CONTACTED'
-      }).eq('id', convoCompleteTask.lead_id);
-      setAllLeads(prev => prev.map(l => l.id === convoCompleteTask.lead_id ? { ...l, last_activity_at: new Date().toISOString(), status: 'contacted', pipeline_status: 'CONTACTED' } : l));
+      await updateLeadStatus(convoCompleteTask.lead_id, 'CONTACTED');
 
       // Complete current task
       await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id }).eq('id', convoCompleteTask.id);
