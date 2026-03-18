@@ -51,6 +51,7 @@ export default function LandLeadsAdminPage() {
   const [convoSaving, setConvoSaving] = useState(false);
   const [editingTaskTime, setEditingTaskTime] = useState(null); // task id being edited
   const [editingTimeValue, setEditingTimeValue] = useState('');
+  const [editingDateValue, setEditingDateValue] = useState('');
   const [calendarModalOpen, setCalendarModalOpen] = useState(false);
   const [calendarLead, setCalendarLead] = useState(null);
   const [calendarMonth, setCalendarMonth] = useState(new Date().getMonth());
@@ -639,23 +640,20 @@ export default function LandLeadsAdminPage() {
     return desired; // fallback
   };
 
-  // Update a task's scheduled time
-  const updateTaskTime = async (taskId, newTimeStr) => {
-    const parsed = parseTimeInput(newTimeStr);
-    if (!parsed) { setEditingTaskTime(null); return; }
-    const task = scheduledTasks.find(t => t.id === taskId);
-    if (!task) return;
-    const oldDate = new Date(task.due_at);
-    const [h, m] = parsed.split(':').map(Number);
-    oldDate.setHours(h, m, 0, 0);
+  // Update a task's scheduled date+time
+  const saveTaskReschedule = async (taskId) => {
+    const parsed = parseTimeInput(editingTimeValue);
+    if (!parsed || !editingDateValue) { setEditingTaskTime(null); return; }
+    const newDate = new Date(`${editingDateValue}T${parsed}`);
+    if (isNaN(newDate.getTime())) { setEditingTaskTime(null); return; }
     // Check for conflicts (exclude self)
-    const conflict = scheduledTasks.some(t => t.id !== taskId && Math.abs(new Date(t.due_at).getTime() - oldDate.getTime()) < 15 * 60 * 1000);
-    if (conflict) { showToast('Time conflict — another task is within 15 min of that slot', 'error'); setEditingTaskTime(null); return; }
-    const newDueAt = oldDate.toISOString();
+    const conflict = scheduledTasks.some(t => t.id !== taskId && Math.abs(new Date(t.due_at).getTime() - newDate.getTime()) < 15 * 60 * 1000);
+    if (conflict) { showToast('Time conflict — another task is within 15 min of that slot', 'error'); return; }
+    const newDueAt = newDate.toISOString();
     await supabase.from('scheduled_tasks').update({ due_at: newDueAt, updated_at: new Date().toISOString() }).eq('id', taskId);
     setScheduledTasks(prev => prev.map(t => t.id === taskId ? { ...t, due_at: newDueAt, updated_at: new Date().toISOString() } : t));
     setEditingTaskTime(null);
-    showToast(`Rescheduled to ${oldDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`, 'success');
+    showToast(`Rescheduled to ${newDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`, 'success');
   };
 
   // Rundown action: Left Voicemail
@@ -2019,18 +2017,34 @@ export default function LandLeadsAdminPage() {
                               </span>
                               <span className="font-semibold text-white truncate">{leadName}</span>
                               {editingTaskTime === task.id ? (
-                                <input
-                                  type="text"
-                                  defaultValue={dueTime}
-                                  autoFocus
-                                  placeholder="2pm"
-                                  className="w-20 px-1.5 py-0.5 bg-slate-900 border border-blue-500 rounded text-xs text-white focus:outline-none"
-                                  onBlur={(e) => updateTaskTime(task.id, e.target.value)}
-                                  onKeyDown={(e) => { if (e.key === 'Enter') updateTaskTime(task.id, e.target.value); if (e.key === 'Escape') setEditingTaskTime(null); }}
-                                />
+                                <div className="flex items-center gap-1">
+                                  <input
+                                    type="date"
+                                    value={editingDateValue}
+                                    onChange={(e) => setEditingDateValue(e.target.value)}
+                                    min={new Date().toISOString().split('T')[0]}
+                                    className="w-32 px-1.5 py-0.5 bg-slate-900 border border-blue-500 rounded text-xs text-white focus:outline-none"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={editingTimeValue}
+                                    onChange={(e) => setEditingTimeValue(e.target.value)}
+                                    onBlur={(e) => { const p = parseTimeInput(e.target.value); if (p) setEditingTimeValue(p); }}
+                                    placeholder="2pm"
+                                    autoFocus
+                                    className="w-16 px-1.5 py-0.5 bg-slate-900 border border-blue-500 rounded text-xs text-white focus:outline-none"
+                                    onKeyDown={(e) => { if (e.key === 'Enter') saveTaskReschedule(task.id); if (e.key === 'Escape') setEditingTaskTime(null); }}
+                                  />
+                                  <button onClick={() => saveTaskReschedule(task.id)} className="px-2 py-0.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-medium text-white">Save</button>
+                                  <button onClick={() => setEditingTaskTime(null)} className="px-1.5 py-0.5 text-slate-400 hover:text-white text-xs">&times;</button>
+                                </div>
                               ) : (
                                 <button
-                                  onClick={() => { setEditingTaskTime(task.id); setEditingTimeValue(dueTime); }}
+                                  onClick={() => {
+                                    setEditingTaskTime(task.id);
+                                    setEditingDateValue(new Date(task.due_at).toISOString().split('T')[0]);
+                                    setEditingTimeValue(dueTime);
+                                  }}
                                   className={`text-xs hover:underline cursor-pointer ${isOverdue ? 'text-red-400 font-semibold' : 'text-slate-500 hover:text-blue-400'}`}
                                   title="Click to reschedule"
                                 >
