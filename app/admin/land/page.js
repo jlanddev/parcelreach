@@ -797,13 +797,17 @@ export default function LandLeadsAdminPage() {
     await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id }).eq('id', task.id);
     setScheduledTasks(prev => prev.filter(t => t.id !== task.id));
 
+    // Preserve original task type so discovery calls stay discovery calls, etc.
+    const retryType = normalizeTaskType(task.task_type);
+    const retryLabel = TASK_TYPE_LABELS[retryType] || 'Callback';
+
     if ((count || 0) >= 2) {
       // 2+ VMs today → schedule for tomorrow morning
       const tmrw = new Date(tomorrowStart); tmrw.setHours(9, 0, 0, 0);
       const slot = getAvailableTime(tmrw);
       const { data: newTask } = await supabase.from('scheduled_tasks').insert({
-        lead_id: task.lead_id, created_by: user?.id, task_type: 'callback',
-        title: `Callback: ${leadName}`, description: '2 VMs yesterday - try again',
+        lead_id: task.lead_id, created_by: user?.id, task_type: retryType,
+        title: `${retryLabel}: ${leadName}`, description: '2 VMs yesterday - try again',
         due_at: slot.toISOString(), status: 'pending', priority: 'normal'
       }).select().single();
       if (newTask) setScheduledTasks(prev => [...prev, newTask]);
@@ -817,8 +821,8 @@ export default function LandLeadsAdminPage() {
       if (retryTime <= sixPM) {
         const slot = getAvailableTime(retryTime);
         const { data: newTask } = await supabase.from('scheduled_tasks').insert({
-          lead_id: task.lead_id, created_by: user?.id, task_type: 'callback',
-          title: `Callback: ${leadName}`, description: 'VM earlier - retry',
+          lead_id: task.lead_id, created_by: user?.id, task_type: retryType,
+          title: `${retryLabel}: ${leadName}`, description: 'VM earlier - retry',
           due_at: slot.toISOString(), status: 'pending', priority: 'normal'
         }).select().single();
         if (newTask) setScheduledTasks(prev => [...prev, newTask]);
@@ -828,8 +832,8 @@ export default function LandLeadsAdminPage() {
         const tmrw = new Date(tomorrowStart); tmrw.setHours(9, 0, 0, 0);
         const slot = getAvailableTime(tmrw);
         const { data: newTask } = await supabase.from('scheduled_tasks').insert({
-          lead_id: task.lead_id, created_by: user?.id, task_type: 'callback',
-          title: `Callback: ${leadName}`, description: 'VM today - retry tomorrow',
+          lead_id: task.lead_id, created_by: user?.id, task_type: retryType,
+          title: `${retryLabel}: ${leadName}`, description: 'VM today - retry tomorrow',
           due_at: slot.toISOString(), status: 'pending', priority: 'normal'
         }).select().single();
         if (newTask) setScheduledTasks(prev => [...prev, newTask]);
@@ -854,12 +858,14 @@ export default function LandLeadsAdminPage() {
     await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id }).eq('id', task.id);
     setScheduledTasks(prev => prev.filter(t => t.id !== task.id));
 
-    // Schedule follow-up tomorrow
+    // Schedule follow-up tomorrow — preserve original task type
+    const followType = normalizeTaskType(task.task_type);
+    const followLabel = TASK_TYPE_LABELS[followType] || 'Follow Up Call';
     const tmrw = new Date(); tmrw.setHours(0,0,0,0); tmrw.setDate(tmrw.getDate() + 1); tmrw.setHours(10, 0, 0, 0);
     const slot = getAvailableTime(tmrw);
     const { data: newTask } = await supabase.from('scheduled_tasks').insert({
-      lead_id: task.lead_id, created_by: user?.id, task_type: 'follow_up',
-      title: `Follow Up: ${leadName}`, description: 'Sent text yesterday - follow up',
+      lead_id: task.lead_id, created_by: user?.id, task_type: followType,
+      title: `${followLabel}: ${leadName}`, description: 'Sent text yesterday - follow up',
       due_at: slot.toISOString(), status: 'pending', priority: 'normal'
     }).select().single();
     if (newTask) setScheduledTasks(prev => [...prev, newTask]);
@@ -2136,8 +2142,9 @@ export default function LandLeadsAdminPage() {
                 {(() => {
                   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
                   const tomorrowStart = new Date(todayStart); tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+                  const archivedLeadIds = new Set(allLeads.filter(l => l.status === 'archived').map(l => l.id));
                   const todayTasks = scheduledTasks
-                    .filter(t => { const d = new Date(t.due_at); return d >= todayStart && d < tomorrowStart; })
+                    .filter(t => { const d = new Date(t.due_at); return d >= todayStart && d < tomorrowStart && !archivedLeadIds.has(t.lead_id); })
                     .sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
 
                   if (todayTasks.length === 0) {
