@@ -776,6 +776,9 @@ export default function LandLeadsAdminPage() {
 
   // Rundown action: Left Voicemail
   const rundownVM = async (task) => {
+    if (actionInProgress) return;
+    setActionInProgress({ leadId: task.lead_id, action: 'vm' });
+    try {
     const lead = allLeads.find(l => l.id === task.lead_id);
     const leadName = lead?.full_name || lead?.name || 'Lead';
     const { data: { user } } = await supabase.auth.getUser();
@@ -840,10 +843,14 @@ export default function LandLeadsAdminPage() {
         showToast(`VM logged → scheduled ${slot.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}`, 'success', leadName);
       }
     }
+    } finally { setActionInProgress(null); }
   };
 
   // Rundown action: Sent Message → schedule follow-up tomorrow
   const rundownSentMessage = async (task) => {
+    if (actionInProgress) return;
+    setActionInProgress({ leadId: task.lead_id, action: 'sentmsg' });
+    try {
     const lead = allLeads.find(l => l.id === task.lead_id);
     const leadName = lead?.full_name || lead?.name || 'Lead';
     const { data: { user } } = await supabase.auth.getUser();
@@ -870,6 +877,7 @@ export default function LandLeadsAdminPage() {
     }).select().single();
     if (newTask) setScheduledTasks(prev => [...prev, newTask]);
     showToast(`Message logged → follow-up ${slot.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}`, 'success', leadName);
+    } finally { setActionInProgress(null); }
   };
 
   const openConvoComplete = (task) => {
@@ -2238,14 +2246,16 @@ export default function LandLeadsAdminPage() {
                           <div className="flex items-center gap-2 flex-shrink-0">
                             <button
                               onClick={() => rundownVM(task)}
-                              className="px-3 py-2 bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-400 active:scale-95 rounded text-sm font-medium transition-all"
+                              disabled={!!actionInProgress}
+                              className={`px-3 py-2 bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-400 active:scale-95 rounded text-sm font-medium transition-all ${actionInProgress ? 'opacity-50 cursor-not-allowed' : ''}`}
                               title="Left Voicemail - auto-schedules retry"
                             >
                               VM
                             </button>
                             <button
                               onClick={() => rundownSentMessage(task)}
-                              className="px-3 py-2 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 active:scale-95 rounded text-sm font-medium transition-all"
+                              disabled={!!actionInProgress}
+                              className={`px-3 py-2 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 active:scale-95 rounded text-sm font-medium transition-all ${actionInProgress ? 'opacity-50 cursor-not-allowed' : ''}`}
                               title="Sent text/message - schedules follow-up tomorrow"
                             >
                               Sent Msg
