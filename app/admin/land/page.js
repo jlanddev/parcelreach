@@ -15,6 +15,7 @@ export default function LandLeadsAdminPage() {
   const [selectedOrg, setSelectedOrg] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('daily-rundown');
+  const [exportFilters, setExportFilters] = useState({ minAcres: '', maxAcres: '', minAge: '', maxAge: '', excludeStatuses: ['UNDER_CONTRACT', 'CLOSED', 'ARCHIVED'] });
   const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [detailsModalOpen, setDetailsModalOpen] = useState(false);
   const [selectedLead, setSelectedLead] = useState(null);
@@ -305,6 +306,55 @@ export default function LandLeadsAdminPage() {
     { value: 'NURTURE', label: 'Nurture' },
     { value: 'ARCHIVED', label: 'Archived' }
   ];
+
+  // Export leads to CSV
+  const handleExportCSV = () => {
+    const now = new Date();
+    let filtered = allLeads.filter(lead => {
+      const acres = parseFloat(lead.acres) || 0;
+      const ageMs = now - new Date(lead.created_at);
+      const ageDays = ageMs / (1000 * 60 * 60 * 24);
+      const status = (lead.pipeline_status || lead.status || 'NEW').toUpperCase();
+
+      if (exportFilters.minAcres && acres < parseFloat(exportFilters.minAcres)) return false;
+      if (exportFilters.maxAcres && acres > parseFloat(exportFilters.maxAcres)) return false;
+      if (exportFilters.minAge && ageDays < parseFloat(exportFilters.minAge)) return false;
+      if (exportFilters.maxAge && ageDays > parseFloat(exportFilters.maxAge)) return false;
+      if (exportFilters.excludeStatuses.includes(status)) return false;
+      return true;
+    });
+
+    if (filtered.length === 0) { alert('No leads match your filters.'); return; }
+
+    const headers = ['Name', 'Phone', 'Email', 'County', 'State', 'Acres', 'Status', 'Age (days)', 'Created'];
+    const rows = filtered.map(lead => {
+      const ageDays = Math.floor((now - new Date(lead.created_at)) / (1000 * 60 * 60 * 24));
+      const status = (lead.pipeline_status || lead.status || 'new').toUpperCase();
+      return [
+        lead.full_name || lead.name || '',
+        lead.phone || '',
+        lead.email || '',
+        lead.property_county || '',
+        lead.property_state || '',
+        lead.acres || '',
+        status,
+        ageDays,
+        new Date(lead.created_at).toLocaleDateString()
+      ];
+    });
+
+    const csvContent = [headers, ...rows]
+      .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `leads-export-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   // Create Lead states
   const mapContainer = useRef(null);
@@ -2080,7 +2130,7 @@ export default function LandLeadsAdminPage() {
       {/* Tabs */}
       <div className="bg-slate-800/30 border-b border-slate-700/50 px-6 overflow-x-auto">
         <div className="flex gap-4 min-w-max">
-          {['daily-rundown', 'organizations', 'ppc-inflow', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'session-analytics'].map((tab) => (
+          {['daily-rundown', 'organizations', 'ppc-inflow', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics'].map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -2115,7 +2165,7 @@ export default function LandLeadsAdminPage() {
                   <path d="M11 7h2v10h-2zm4 4h2v6h-2zM7 9h2v8H7zm12-7H5c-1.1 0-2 .9-2 2v18l4-4h13c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
                 </svg>
               )}
-              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab.replace('-', ' ')}
+              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab.replace('-', ' ')}
               {tab === 'unassigned' && ` (${unassignedLeads.length})`}
               {tab === 'ppc-inflow' && ` (${allLeads.filter(l => l.source?.includes('Haven Ground') && l.status !== 'archived').length})`}
               {tab === 'subdivision-inflow' && ` (${allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived').length})`}
@@ -4072,6 +4122,115 @@ export default function LandLeadsAdminPage() {
                   </button>
                 )}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* EXPORT CSV TAB */}
+        {activeTab === 'export' && (
+          <div className="max-w-2xl mx-auto space-y-6">
+            <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700/50">
+              <h2 className="text-xl font-bold text-white mb-6">Export Leads to CSV</h2>
+
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div>
+                  <label className="block text-sm text-slate-400 mb-1">Min Acres</label>
+                  <input
+                    type="number"
+                    value={exportFilters.minAcres}
+                    onChange={(e) => setExportFilters(f => ({ ...f, minAcres: e.target.value }))}
+                    placeholder="e.g. 10"
+                    className="w-full bg-slate-900/50 text-white border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-400 mb-1">Max Acres</label>
+                  <input
+                    type="number"
+                    value={exportFilters.maxAcres}
+                    onChange={(e) => setExportFilters(f => ({ ...f, maxAcres: e.target.value }))}
+                    placeholder="No max"
+                    className="w-full bg-slate-900/50 text-white border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-400 mb-1">Min Age (days)</label>
+                  <input
+                    type="number"
+                    value={exportFilters.minAge}
+                    onChange={(e) => setExportFilters(f => ({ ...f, minAge: e.target.value }))}
+                    placeholder="e.g. 60"
+                    className="w-full bg-slate-900/50 text-white border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-400 mb-1">Max Age (days)</label>
+                  <input
+                    type="number"
+                    value={exportFilters.maxAge}
+                    onChange={(e) => setExportFilters(f => ({ ...f, maxAge: e.target.value }))}
+                    placeholder="No max"
+                    className="w-full bg-slate-900/50 text-white border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="mb-6">
+                <label className="block text-sm text-slate-400 mb-2">Exclude Statuses</label>
+                <div className="flex flex-wrap gap-2">
+                  {PIPELINE_STATUSES.map(s => (
+                    <button
+                      key={s.value}
+                      onClick={() => {
+                        setExportFilters(f => ({
+                          ...f,
+                          excludeStatuses: f.excludeStatuses.includes(s.value)
+                            ? f.excludeStatuses.filter(v => v !== s.value)
+                            : [...f.excludeStatuses, s.value]
+                        }));
+                      }}
+                      className={`px-3 py-1 rounded-full text-xs font-medium transition ${
+                        exportFilters.excludeStatuses.includes(s.value)
+                          ? 'bg-red-500/20 text-red-400 border border-red-500/50'
+                          : 'bg-slate-700/50 text-slate-300 border border-slate-600'
+                      }`}
+                    >
+                      {exportFilters.excludeStatuses.includes(s.value) ? 'Excluding: ' : ''}{s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-slate-900/50 rounded-lg p-4 mb-6">
+                <p className="text-sm text-slate-400">
+                  Matching leads: <span className="text-white font-bold">
+                    {(() => {
+                      const now = new Date();
+                      return allLeads.filter(lead => {
+                        const acres = parseFloat(lead.acres) || 0;
+                        const ageDays = (now - new Date(lead.created_at)) / (1000 * 60 * 60 * 24);
+                        const status = (lead.pipeline_status || lead.status || 'NEW').toUpperCase();
+                        if (exportFilters.minAcres && acres < parseFloat(exportFilters.minAcres)) return false;
+                        if (exportFilters.maxAcres && acres > parseFloat(exportFilters.maxAcres)) return false;
+                        if (exportFilters.minAge && ageDays < parseFloat(exportFilters.minAge)) return false;
+                        if (exportFilters.maxAge && ageDays > parseFloat(exportFilters.maxAge)) return false;
+                        if (exportFilters.excludeStatuses.includes(status)) return false;
+                        return true;
+                      }).length;
+                    })()}
+                  </span>
+                </p>
+              </div>
+
+              <button
+                onClick={handleExportCSV}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition flex items-center justify-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Download CSV
+              </button>
             </div>
           </div>
         )}
