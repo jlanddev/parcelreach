@@ -2201,9 +2201,17 @@ export default function LandLeadsAdminPage() {
                   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
                   const tomorrowStart = new Date(todayStart); tomorrowStart.setDate(tomorrowStart.getDate() + 1);
                   const archivedLeadIds = new Set(allLeads.filter(l => l.status === 'archived').map(l => l.id));
-                  const todayTasks = scheduledTasks
+                  const todayTasksAll = scheduledTasks
                     .filter(t => { const d = new Date(t.due_at); return d >= todayStart && d < tomorrowStart && !archivedLeadIds.has(t.lead_id); })
-                    .sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+                    .sort((a, b) => new Date(b.created_at || b.due_at) - new Date(a.created_at || a.due_at));
+                  // Deduplicate by lead_id — keep only the newest task per lead
+                  const seenLeads = new Set();
+                  const todayTasks = todayTasksAll.filter(t => {
+                    if (!t.lead_id) return true;
+                    if (seenLeads.has(t.lead_id)) return false;
+                    seenLeads.add(t.lead_id);
+                    return true;
+                  }).sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
 
                   if (todayTasks.length === 0) {
                     return (
