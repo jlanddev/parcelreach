@@ -2856,6 +2856,43 @@ export default function LandLeadsAdminPage() {
                           className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-slate-300 focus:outline-none focus:border-blue-500/50"
                           placeholder="Phone"
                         />
+                        {(lead.phone || lead.owner_phone) && (
+                          <>
+                            <a
+                              href={`https://app.openphone.com/dialer?phone=${encodeURIComponent(lead.phone || lead.owner_phone)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              title="Call via Quo"
+                              className="p-1.5 bg-green-600/20 hover:bg-green-600/40 rounded text-green-400 transition flex-shrink-0"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/>
+                              </svg>
+                            </a>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const msg = prompt('Send SMS via Quo:');
+                                if (msg) {
+                                  fetch('/api/quo-send-sms', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ to: lead.phone || lead.owner_phone, message: msg })
+                                  }).then(r => r.json()).then(d => {
+                                    alert(d.ok ? 'SMS sent!' : ('SMS failed: ' + (d.error || 'Unknown error')));
+                                  }).catch(() => alert('SMS failed'));
+                                }
+                              }}
+                              title="Text via Quo"
+                              className="p-1.5 bg-blue-600/20 hover:bg-blue-600/40 rounded text-blue-400 transition flex-shrink-0"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/>
+                              </svg>
+                            </button>
+                          </>
+                        )}
                       </div>
                       {lead.ip_address && (
                         <div className="flex items-center gap-2 text-slate-400 text-xs">
