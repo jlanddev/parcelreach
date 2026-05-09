@@ -460,32 +460,35 @@ export default function LandLeadsAdminPage() {
     setScheduledTasks(tasksData || []);
     setLoading(false);
 
-    // Auto-schedule new leads that don't have a task yet
-    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-    const existingTaskLeadIds = new Set((tasksData || []).map(t => t.lead_id));
-    const newLeadsWithoutTask = (leadsData || []).filter(l => {
-      const created = new Date(l.created_at);
-      if (created < todayStart) return false; // Only today's leads
-      if (existingTaskLeadIds.has(l.id)) return false; // Already has a task
-      const status = (l.pipeline_status || l.status || '').toUpperCase();
-      if (['DEAD', 'CLOSED', 'NURTURE', 'UNDER_CONTRACT'].includes(status)) return false;
-      return true;
-    });
+    // Auto-schedule new leads that don't have a task yet (only on first load, not every refresh)
+    if (!window._autoScheduleRan) {
+      window._autoScheduleRan = true;
+      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+      const existingTaskLeadIds = new Set((tasksData || []).map(t => t.lead_id));
+      const newLeadsWithoutTask = (leadsData || []).filter(l => {
+        const created = new Date(l.created_at);
+        if (created < todayStart) return false; // Only today's leads
+        if (existingTaskLeadIds.has(l.id)) return false; // Already has a task
+        const status = (l.pipeline_status || l.status || '').toUpperCase();
+        if (['DEAD', 'CLOSED', 'NURTURE', 'UNDER_CONTRACT'].includes(status)) return false;
+        return true;
+      });
 
-    if (newLeadsWithoutTask.length > 0) {
-      const { data: { user } } = await supabase.auth.getUser();
-      const tasksToInsert = newLeadsWithoutTask.map(l => ({
-        lead_id: l.id,
-        created_by: user?.id,
-        task_type: 'callback',
-        title: `NEW LEAD: ${l.full_name || l.name || 'Unknown'}`,
-        description: `New lead - contact same day`,
-        due_at: (() => { const eod = new Date(); eod.setHours(17, 0, 0, 0); return eod > new Date() ? getAvailableTime(eod).toISOString() : getAvailableTime(new Date()).toISOString(); })(),
-        status: 'pending',
-        priority: 'high'
-      }));
-      const { data: newTasks } = await supabase.from('scheduled_tasks').insert(tasksToInsert).select();
-      if (newTasks) setScheduledTasks(prev => [...prev, ...newTasks]);
+      if (newLeadsWithoutTask.length > 0) {
+        const { data: { user } } = await supabase.auth.getUser();
+        const tasksToInsert = newLeadsWithoutTask.map(l => ({
+          lead_id: l.id,
+          created_by: user?.id,
+          task_type: 'callback',
+          title: `NEW LEAD: ${l.full_name || l.name || 'Unknown'}`,
+          description: `New lead - contact same day`,
+          due_at: (() => { const eod = new Date(); eod.setHours(17, 0, 0, 0); return eod > new Date() ? getAvailableTime(eod).toISOString() : getAvailableTime(new Date()).toISOString(); })(),
+          status: 'pending',
+          priority: 'high'
+        }));
+        const { data: newTasks } = await supabase.from('scheduled_tasks').insert(tasksToInsert).select();
+        if (newTasks) setScheduledTasks(prev => [...prev, ...newTasks]);
+      }
     }
   };
 
