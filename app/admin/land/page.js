@@ -326,18 +326,40 @@ export default function LandLeadsAdminPage() {
 
     if (filtered.length === 0) { alert('No leads match your filters.'); return; }
 
-    const headers = ['Name', 'Phone', 'Email', 'County', 'State', 'Acres', 'Status', 'Age (days)', 'Created'];
+    const headers = [
+      'Name', 'Phone', 'Email',
+      'Address', 'County', 'State', 'APN/Parcel ID',
+      'Acres', 'Status', 'Price Range',
+      'Home on Property', 'Property Listed', 'Inherited', 'Owned 4+ Years',
+      'Names on Deed', 'Why Selling',
+      'Agent Name', 'Agent Phone', 'Agent Email',
+      'Source', 'Age (days)', 'Created'
+    ];
     const rows = filtered.map(lead => {
       const ageDays = Math.floor((now - new Date(lead.created_at)) / (1000 * 60 * 60 * 24));
       const status = (lead.pipeline_status || lead.status || 'new').toUpperCase();
+      const fd = lead.form_data || {};
       return [
         lead.full_name || lead.name || '',
         lead.phone || '',
         lead.email || '',
-        lead.property_county || '',
-        lead.property_state || '',
-        lead.acres || '',
+        fd.streetAddress || lead.street_address || lead.address || '',
+        fd.propertyCounty || lead.property_county || lead.county || '',
+        fd.propertyState || lead.property_state || lead.state || '',
+        fd.parcelId || lead.parcel_id || '',
+        fd.acres || lead.acres || lead.acreage || '',
         status,
+        fd.priceRange || '',
+        fd.homeOnProperty || '',
+        fd.propertyListed || '',
+        fd.isInherited || '',
+        fd.ownedFourYears || '',
+        fd.namesOnDeed || '',
+        fd.whySelling || '',
+        fd.agentName || '',
+        fd.agentPhone || '',
+        fd.agentEmail || '',
+        lead.source || '',
         ageDays,
         new Date(lead.created_at).toLocaleDateString()
       ];
