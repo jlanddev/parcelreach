@@ -847,16 +847,29 @@ export default function LandLeadsAdminPage() {
       if (taskErr) throw taskErr;
 
       // Now write the actual status change (skipping the intercept by passing a non-APPT value path)
-      const { error: statusErr } = await supabase
+      // Try with pipeline_status (newer schema) first, fall back to status-only if the column
+      // doesn't exist in this DB.
+      let { error: statusErr } = await supabase
         .from('leads')
         .update({
           status: 'appt_set_for_jordan',
           pipeline_status: 'APPT_SET_FOR_JORDAN',
-          current_owner_id: adminUserId, // appt is on Jordan's calendar — he owns the lead now
+          current_owner_id: adminUserId,
           last_activity_at: new Date().toISOString()
         })
         .eq('id', apptModalLeadId);
-      if (statusErr) throw statusErr;
+      if (statusErr) {
+        const { error: fallbackErr } = await supabase
+          .from('leads')
+          .update({
+            status: 'appt_set_for_jordan',
+            current_owner_id: adminUserId,
+            last_activity_at: new Date().toISOString()
+          })
+          .eq('id', apptModalLeadId);
+        if (fallbackErr) throw fallbackErr;
+        statusErr = null;
+      }
 
       setAllLeads(prev => prev.map(l =>
         l.id === apptModalLeadId
