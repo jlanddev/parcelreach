@@ -31,6 +31,30 @@ export default function LandLeadsAdminPage() {
       Mapped
     </span>
   );
+
+  // Current teammate pill — click to toggle between Jordan and Anthony.
+  const TeammateBadge = ({ lead }) => {
+    if (!lead || (!adminUserId && !acquisitionManagerId)) return null;
+    const ownerId = lead.current_owner_id;
+    const isAnthony = ownerId === acquisitionManagerId;
+    const isJordan = ownerId === adminUserId;
+    const name = isJordan ? 'Jordan' : isAnthony ? 'Anthony' : 'Unassigned';
+    const color = isJordan
+      ? 'bg-blue-900/40 border-blue-700/50 text-blue-300'
+      : isAnthony
+      ? 'bg-purple-900/40 border-purple-700/50 text-purple-300'
+      : 'bg-slate-800 border-slate-600 text-slate-400';
+    return (
+      <button
+        onClick={(e) => { e.stopPropagation(); toggleCurrentOwner(lead.id); }}
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-semibold ${color} hover:opacity-80 transition`}
+        title="Click to toggle current teammate"
+      >
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" /></svg>
+        Working: {name}
+      </button>
+    );
+  };
   const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [detailsModalOpen, setDetailsModalOpen] = useState(false);
   const [selectedLead, setSelectedLead] = useState(null);
@@ -704,6 +728,36 @@ export default function LandLeadsAdminPage() {
     }
   };
 
+  // Toggle which teammate is currently working a lead (Jordan ↔ Anthony).
+  // Either role can flip it. Updates leads.current_owner_id and re-renders.
+  const toggleCurrentOwner = async (leadId) => {
+    const lead = allLeads.find(l => l.id === leadId);
+    if (!lead) return;
+    const currentOwner = lead.current_owner_id;
+    let nextOwner;
+    if (currentOwner === adminUserId) nextOwner = acquisitionManagerId;
+    else if (currentOwner === acquisitionManagerId) nextOwner = adminUserId;
+    else nextOwner = adminUserId; // null → admin claims
+    if (!nextOwner) {
+      showToast('No teammate to toggle to', 'error');
+      return;
+    }
+    const { error } = await supabase
+      .from('leads')
+      .update({ current_owner_id: nextOwner })
+      .eq('id', leadId);
+    if (error) {
+      showToast('Toggle failed: ' + error.message, 'error');
+      return;
+    }
+    setAllLeads(prev => prev.map(l => l.id === leadId ? { ...l, current_owner_id: nextOwner } : l));
+    if (selectedLead && selectedLead.id === leadId) {
+      setSelectedLead(prev => ({ ...prev, current_owner_id: nextOwner }));
+    }
+    const newName = nextOwner === adminUserId ? 'Jordan' : 'Anthony';
+    showToast(`Now working: ${newName}`, 'success', lead.full_name || lead.name);
+  };
+
   // Push a lead to Anthony's queue. Creates a scheduled_task assigned to him at "now",
   // high priority, so it pops to the top of his rundown.
   const pushToAcquisitionManager = async (leadId) => {
@@ -734,6 +788,11 @@ export default function LandLeadsAdminPage() {
       }).select().single();
       if (error) throw error;
       if (newTask) setScheduledTasks(prev => [...prev.filter(t => !(t.lead_id === leadId && t.status === 'pending')), newTask]);
+
+      // Flip lead ownership to acquisition manager so the badge reflects who's working it
+      await supabase.from('leads').update({ current_owner_id: acquisitionManagerId }).eq('id', leadId);
+      setAllLeads(prev => prev.map(l => l.id === leadId ? { ...l, current_owner_id: acquisitionManagerId } : l));
+
       showToast('Pushed to Acquisition Manager', 'success', leadName);
     } catch (err) {
       showToast('Push failed: ' + err.message, 'error');
@@ -772,6 +831,7 @@ export default function LandLeadsAdminPage() {
         .update({
           status: 'appt_set_for_jordan',
           pipeline_status: 'APPT_SET_FOR_JORDAN',
+          current_owner_id: adminUserId, // appt is on Jordan's calendar — he owns the lead now
           last_activity_at: new Date().toISOString()
         })
         .eq('id', apptModalLeadId);
@@ -779,11 +839,11 @@ export default function LandLeadsAdminPage() {
 
       setAllLeads(prev => prev.map(l =>
         l.id === apptModalLeadId
-          ? { ...l, pipeline_status: 'APPT_SET_FOR_JORDAN', status: 'appt_set_for_jordan' }
+          ? { ...l, pipeline_status: 'APPT_SET_FOR_JORDAN', status: 'appt_set_for_jordan', current_owner_id: adminUserId }
           : l
       ));
       if (selectedLead && selectedLead.id === apptModalLeadId) {
-        setSelectedLead(prev => ({ ...prev, pipeline_status: 'APPT_SET_FOR_JORDAN', status: 'appt_set_for_jordan' }));
+        setSelectedLead(prev => ({ ...prev, pipeline_status: 'APPT_SET_FOR_JORDAN', status: 'appt_set_for_jordan', current_owner_id: adminUserId }));
       }
 
       showToast(`Appt booked for Jordan on ${apptDate} ${apptTime}`, 'success', leadName);
@@ -2603,7 +2663,11 @@ export default function LandLeadsAdminPage() {
                                   ))}
                                 </select>
                               )}
-                              <span className="font-semibold text-white truncate">{leadName}{lead?.map_uploaded && <MappedBadge />}</span>
+                              <span className="font-semibold text-white truncate inline-flex items-center gap-2">
+                                {leadName}
+                                {lead?.map_uploaded && <MappedBadge />}
+                                {lead && <TeammateBadge lead={lead} />}
+                              </span>
                               {editingTaskTime === task.id ? (
                                 <div className="flex items-center gap-1">
                                   <input
@@ -4149,9 +4213,10 @@ export default function LandLeadsAdminPage() {
                   <div key={lead.id} className="p-6 hover:bg-slate-700/30 transition-colors">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
-                        <h4 className="text-lg font-semibold text-white">
+                        <h4 className="text-lg font-semibold text-white inline-flex items-center gap-2">
                           {lead.full_name || lead.name}
                           {lead.map_uploaded && <MappedBadge />}
+                          <TeammateBadge lead={lead} />
                         </h4>
                         <div className="mt-2 grid grid-cols-4 gap-4 text-sm">
                           <div>
@@ -4239,7 +4304,7 @@ export default function LandLeadsAdminPage() {
                             {new Date(lead.created_at).toLocaleDateString()}
                           </td>
                           <td className="px-6 py-4">
-                            <div className="font-medium text-white">{lead.full_name || lead.name}{lead.map_uploaded && <MappedBadge />}</div>
+                            <div className="font-medium text-white inline-flex items-center gap-2">{lead.full_name || lead.name}{lead.map_uploaded && <MappedBadge />}<TeammateBadge lead={lead} /></div>
                             <div className="text-sm text-slate-500">{lead.email}</div>
                           </td>
                           <td className="px-6 py-4">
