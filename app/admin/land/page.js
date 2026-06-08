@@ -16,6 +16,20 @@ export default function LandLeadsAdminPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('daily-rundown');
   const [exportFilters, setExportFilters] = useState({ minAcres: '', maxAcres: '', minAge: '', maxAge: '', excludeStatuses: ['UNDER_CONTRACT', 'CLOSED', 'ARCHIVED'] });
+  const [currentUserId, setCurrentUserId] = useState(null);
+  const [currentUserRole, setCurrentUserRole] = useState(null);
+  const [currentUserName, setCurrentUserName] = useState('');
+  const [adminUserId, setAdminUserId] = useState(null); // Jordan's user id, used to route APPT_SET_FOR_JORDAN tasks
+  const isAdmin = currentUserRole === 'admin';
+  const isAcquisitionManager = currentUserRole === 'acquisition_manager';
+
+  // "Mapped" pill rendered on lead cards when a property map screenshot has been uploaded.
+  const MappedBadge = () => (
+    <span className="inline-flex items-center gap-1 ml-2 px-1.5 py-0.5 rounded-full bg-green-900/40 border border-green-700/50 text-green-400 text-[10px] font-semibold uppercase tracking-wide">
+      <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.6l7.3-7.3a1 1 0 011.4 0z" clipRule="evenodd" /></svg>
+      Mapped
+    </span>
+  );
   const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [detailsModalOpen, setDetailsModalOpen] = useState(false);
   const [selectedLead, setSelectedLead] = useState(null);
@@ -80,6 +94,14 @@ export default function LandLeadsAdminPage() {
   const [scheduleSaving, setScheduleSaving] = useState(false);
   const [scheduledTasks, setScheduledTasks] = useState([]);
   const [editingScheduleTaskId, setEditingScheduleTaskId] = useState(null);
+
+  // APPT_SET_FOR_JORDAN booking modal
+  const [apptModalOpen, setApptModalOpen] = useState(false);
+  const [apptModalLeadId, setApptModalLeadId] = useState(null);
+  const [apptDate, setApptDate] = useState('');
+  const [apptTime, setApptTime] = useState('');
+  const [apptNote, setApptNote] = useState('');
+  const [apptSaving, setApptSaving] = useState(false);
 
   // Session Analytics states
   const [analyticsSubTab, setAnalyticsSubTab] = useState('live-feed');
@@ -298,6 +320,9 @@ export default function LandLeadsAdminPage() {
     { value: 'NEW', label: 'New' },
     { value: 'CONTACTING', label: 'Contacting' },
     { value: 'CONTACTED', label: 'Contacted' },
+    { value: 'ANTHONY_CONTACTED', label: 'Anthony Contacted' },
+    { value: 'ANTHONY_FOLLOW_UP', label: 'Anthony Follow-up' },
+    { value: 'APPT_SET_FOR_JORDAN', label: 'Appt Set for Jordan' },
     { value: 'OFFER_SENT', label: 'Offer Sent' },
     { value: 'NEGOTIATING', label: 'Negotiating' },
     { value: 'UNDER_CONTRACT', label: 'Under Contract' },
@@ -411,18 +436,48 @@ export default function LandLeadsAdminPage() {
     const checkAdminAccess = async () => {
       const { data: { user } } = await supabase.auth.getUser();
 
-      const adminEmails = ['admin@parcelreach.ai', 'jordan@havenground.com', 'jordan@landreach.co'];
       if (!user) {
         console.log('❌ Not authenticated - redirecting to admin login');
         router.push('/admin/login');
         return;
       }
 
-      if (!adminEmails.includes(user.email)) {
-        console.log('❌ Access denied - not an admin');
+      // Look up role from users table
+      const adminEmails = ['admin@parcelreach.ai', 'jordan@havenground.com', 'jordan@landreach.co'];
+      let { data: profile } = await supabase
+        .from('users')
+        .select('id, email, full_name, role')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      // Self-heal: ensure Jordan has a users row with admin role
+      if (!profile && adminEmails.includes(user.email)) {
+        const { data: upserted } = await supabase
+          .from('users')
+          .upsert({ id: user.id, email: user.email, full_name: user.user_metadata?.full_name || 'Jordan', role: 'admin' }, { onConflict: 'id' })
+          .select()
+          .single();
+        profile = upserted;
+      }
+
+      const role = profile?.role || (adminEmails.includes(user.email) ? 'admin' : null);
+      if (!role || !['admin', 'acquisition_manager'].includes(role)) {
+        console.log('❌ Access denied - role:', role);
         router.push('/dashboard');
         return;
       }
+
+      setCurrentUserId(user.id);
+      setCurrentUserRole(role);
+      setCurrentUserName(profile?.full_name || user.email);
+
+      // Find Jordan's user id (the admin) so APPT_SET_FOR_JORDAN can route to him
+      const { data: admins } = await supabase
+        .from('users')
+        .select('id')
+        .eq('role', 'admin')
+        .limit(1);
+      if (admins?.[0]) setAdminUserId(admins[0].id);
     };
 
     checkAdminAccess();
@@ -500,7 +555,7 @@ export default function LandLeadsAdminPage() {
         const { data: { user } } = await supabase.auth.getUser();
         const tasksToInsert = newLeadsWithoutTask.map(l => ({
           lead_id: l.id,
-          created_by: user?.id,
+          created_by: user?.id, assigned_to: user?.id,
           task_type: 'callback',
           title: `NEW LEAD: ${l.full_name || l.name || 'Unknown'}`,
           description: `New lead - contact same day`,
@@ -516,6 +571,19 @@ export default function LandLeadsAdminPage() {
 
   // Update lead pipeline status
   const updateLeadStatus = async (leadId, newStatus) => {
+    // Intercept APPT_SET_FOR_JORDAN: open the appointment modal to capture date/time
+    // and route a scheduled task to Jordan. Actual status write happens after modal submit.
+    if (newStatus === 'APPT_SET_FOR_JORDAN') {
+      setApptModalLeadId(leadId);
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      setApptDate(tomorrow.toISOString().split('T')[0]);
+      setApptTime('10:00');
+      setApptNote('');
+      setApptModalOpen(true);
+      return;
+    }
+
     const lead = allLeads.find(l => l.id === leadId);
     const oldStatus = lead?.pipeline_status || lead?.status || 'NEW';
     const leadName = lead?.full_name || lead?.name || 'Lead';
@@ -570,6 +638,103 @@ export default function LandLeadsAdminPage() {
       });
     } catch (e) {
       // activities table may not exist yet
+    }
+  };
+
+  // Upload a property map screenshot to the lead-maps bucket and flag the lead as mapped.
+  const [mapUploading, setMapUploading] = useState(false);
+  const handleMapUpload = async (leadId, file) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showToast('File must be an image', 'error');
+      return;
+    }
+    setMapUploading(true);
+    try {
+      const ext = file.name.split('.').pop() || 'png';
+      const path = `${leadId}/${Date.now()}.${ext}`;
+      const { error: uploadErr } = await supabase
+        .storage
+        .from('lead-maps')
+        .upload(path, file, { cacheControl: '3600', upsert: true });
+      if (uploadErr) throw uploadErr;
+
+      const { data: urlData } = supabase.storage.from('lead-maps').getPublicUrl(path);
+      const publicUrl = urlData?.publicUrl;
+
+      const { error: updateErr } = await supabase
+        .from('leads')
+        .update({ map_uploaded: true, map_image_url: publicUrl })
+        .eq('id', leadId);
+      if (updateErr) throw updateErr;
+
+      setAllLeads(prev => prev.map(l =>
+        l.id === leadId ? { ...l, map_uploaded: true, map_image_url: publicUrl } : l
+      ));
+      if (selectedLead && selectedLead.id === leadId) {
+        setSelectedLead(prev => ({ ...prev, map_uploaded: true, map_image_url: publicUrl }));
+      }
+      showToast('Map uploaded', 'success');
+    } catch (err) {
+      showToast('Upload failed: ' + err.message, 'error');
+    } finally {
+      setMapUploading(false);
+    }
+  };
+
+  // Submit the APPT_SET_FOR_JORDAN booking: create scheduled task assigned to Jordan,
+  // then flip the lead status. Called by the appointment modal.
+  const submitApptForJordan = async () => {
+    if (!apptModalLeadId || !apptDate || !apptTime) {
+      showToast('Date and time are required', 'error');
+      return;
+    }
+    setApptSaving(true);
+    try {
+      const lead = allLeads.find(l => l.id === apptModalLeadId);
+      const leadName = lead?.full_name || lead?.name || 'Lead';
+      const dueAt = new Date(`${apptDate}T${apptTime}`).toISOString();
+
+      const { error: taskErr } = await supabase.from('scheduled_tasks').insert({
+        lead_id: apptModalLeadId,
+        assigned_to: adminUserId,
+        created_by: currentUserId,
+        task_type: 'meeting',
+        title: `Appointment with ${leadName}`,
+        description: apptNote || `Booked by ${currentUserName}`,
+        due_at: dueAt,
+        priority: 'high',
+        status: 'pending'
+      });
+      if (taskErr) throw taskErr;
+
+      // Now write the actual status change (skipping the intercept by passing a non-APPT value path)
+      const { error: statusErr } = await supabase
+        .from('leads')
+        .update({
+          status: 'appt_set_for_jordan',
+          pipeline_status: 'APPT_SET_FOR_JORDAN',
+          last_activity_at: new Date().toISOString()
+        })
+        .eq('id', apptModalLeadId);
+      if (statusErr) throw statusErr;
+
+      setAllLeads(prev => prev.map(l =>
+        l.id === apptModalLeadId
+          ? { ...l, pipeline_status: 'APPT_SET_FOR_JORDAN', status: 'appt_set_for_jordan' }
+          : l
+      ));
+      if (selectedLead && selectedLead.id === apptModalLeadId) {
+        setSelectedLead(prev => ({ ...prev, pipeline_status: 'APPT_SET_FOR_JORDAN', status: 'appt_set_for_jordan' }));
+      }
+
+      showToast(`Appt booked for Jordan on ${apptDate} ${apptTime}`, 'success', leadName);
+      setApptModalOpen(false);
+      setApptModalLeadId(null);
+    } catch (err) {
+      showToast('Failed to book appt: ' + err.message, 'error');
+    } finally {
+      setApptSaving(false);
     }
   };
 
@@ -727,7 +892,7 @@ export default function LandLeadsAdminPage() {
         // INSERT new task
         const { data, error } = await supabase.from('scheduled_tasks').insert({
           lead_id: scheduleLeadId,
-          created_by: user?.id,
+          created_by: user?.id, assigned_to: user?.id,
           task_type: scheduleType,
           title,
           description: scheduleNote || null,
@@ -774,6 +939,7 @@ export default function LandLeadsAdminPage() {
 
   // Archive a lead
   const archiveLead = async (leadId) => {
+    if (!isAdmin) { showToast('Only admins can archive leads', 'error'); return; }
     try {
       const lead = allLeads.find(l => l.id === leadId);
       const leadName = lead?.full_name || lead?.name || 'Lead';
@@ -800,6 +966,7 @@ export default function LandLeadsAdminPage() {
 
   // Permanently delete a lead
   const deleteLead = async (leadId) => {
+    if (!isAdmin) { showToast('Only admins can delete leads', 'error'); return; }
     try {
       const lead = allLeads.find(l => l.id === leadId);
       const leadName = lead?.full_name || lead?.name || 'Lead';
@@ -884,7 +1051,7 @@ export default function LandLeadsAdminPage() {
       const tmrw = new Date(tomorrowStart); tmrw.setHours(9, 0, 0, 0);
       const slot = getAvailableTime(tmrw);
       const { data: newTask } = await supabase.from('scheduled_tasks').insert({
-        lead_id: task.lead_id, created_by: user?.id, task_type: retryType,
+        lead_id: task.lead_id, created_by: user?.id, assigned_to: user?.id, task_type: retryType,
         title: `${retryLabel}: ${leadName}`, description: '2 VMs yesterday - try again',
         due_at: slot.toISOString(), status: 'pending', priority: 'normal'
       }).select().single();
@@ -899,7 +1066,7 @@ export default function LandLeadsAdminPage() {
       if (retryTime <= sixPM) {
         const slot = getAvailableTime(retryTime);
         const { data: newTask } = await supabase.from('scheduled_tasks').insert({
-          lead_id: task.lead_id, created_by: user?.id, task_type: retryType,
+          lead_id: task.lead_id, created_by: user?.id, assigned_to: user?.id, task_type: retryType,
           title: `${retryLabel}: ${leadName}`, description: 'VM earlier - retry',
           due_at: slot.toISOString(), status: 'pending', priority: 'normal'
         }).select().single();
@@ -910,7 +1077,7 @@ export default function LandLeadsAdminPage() {
         const tmrw = new Date(tomorrowStart); tmrw.setHours(9, 0, 0, 0);
         const slot = getAvailableTime(tmrw);
         const { data: newTask } = await supabase.from('scheduled_tasks').insert({
-          lead_id: task.lead_id, created_by: user?.id, task_type: retryType,
+          lead_id: task.lead_id, created_by: user?.id, assigned_to: user?.id, task_type: retryType,
           title: `${retryLabel}: ${leadName}`, description: 'VM today - retry tomorrow',
           due_at: slot.toISOString(), status: 'pending', priority: 'normal'
         }).select().single();
@@ -946,7 +1113,7 @@ export default function LandLeadsAdminPage() {
     const tmrw = new Date(); tmrw.setHours(0,0,0,0); tmrw.setDate(tmrw.getDate() + 1); tmrw.setHours(10, 0, 0, 0);
     const slot = getAvailableTime(tmrw);
     const { data: newTask } = await supabase.from('scheduled_tasks').insert({
-      lead_id: task.lead_id, created_by: user?.id, task_type: followType,
+      lead_id: task.lead_id, created_by: user?.id, assigned_to: user?.id, task_type: followType,
       title: `${followLabel}: ${leadName}`, description: 'Sent text yesterday - follow up',
       due_at: slot.toISOString(), status: 'pending', priority: 'normal'
     }).select().single();
@@ -997,7 +1164,7 @@ export default function LandLeadsAdminPage() {
         const desired = new Date(`${convoScheduleDate}T${convoScheduleTime}`);
         const slot = getAvailableTime(desired);
         const { data: newTask } = await supabase.from('scheduled_tasks').insert({
-          lead_id: convoCompleteTask.lead_id, created_by: user?.id, task_type: 'follow_up',
+          lead_id: convoCompleteTask.lead_id, created_by: user?.id, assigned_to: user?.id, task_type: 'follow_up',
           title: `Follow Up: ${leadName}`, description: convoNotes.trim() ? `Last convo: ${convoNotes}` : 'Follow up from conversation',
           due_at: slot.toISOString(), status: 'pending', priority: 'normal'
         }).select().single();
@@ -1053,6 +1220,7 @@ export default function LandLeadsAdminPage() {
   };
 
   const handleAssignLead = async (leadId, teamIds) => {
+    if (!isAdmin) { showToast('Only admins can assign leads to organizations', 'error'); return; }
     setIsAssigning(true);
     try {
       console.log('🔍 Assigning lead:', leadId, 'to teams:', teamIds);
@@ -2142,6 +2310,14 @@ export default function LandLeadsAdminPage() {
             <img src="/parcelreach-logo.png" alt="ParcelReach" className="h-20" />
           </div>
           <div className="flex items-center gap-4">
+            {currentUserRole && (
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-slate-400">{currentUserName}</span>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${isAdmin ? 'bg-blue-900/40 text-blue-300 border border-blue-700/50' : 'bg-purple-900/40 text-purple-300 border border-purple-700/50'}`}>
+                  {isAdmin ? 'Admin' : 'Acquisition Manager'}
+                </span>
+              </div>
+            )}
             <Link
               href="/dashboard"
               className="bg-slate-700 px-4 py-2 rounded-lg hover:bg-slate-600 transition-colors text-sm font-semibold"
@@ -2155,7 +2331,10 @@ export default function LandLeadsAdminPage() {
       {/* Tabs */}
       <div className="bg-slate-800/30 border-b border-slate-700/50 px-6 overflow-x-auto">
         <div className="flex gap-4 min-w-max">
-          {['daily-rundown', 'organizations', 'ppc-inflow', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics'].map((tab) => (
+          {(isAdmin
+            ? ['daily-rundown', 'organizations', 'ppc-inflow', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics']
+            : ['daily-rundown', 'ppc-inflow', 'subdivision-inflow', 'all-leads']
+          ).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -2204,6 +2383,86 @@ export default function LandLeadsAdminPage() {
         {/* DAILY RUNDOWN TAB */}
         {activeTab === 'daily-rundown' && (
           <div className="space-y-6">
+            {/* Acquisition Manager Activity Panel (admin only) */}
+            {isAdmin && (() => {
+              const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+              const tomorrowStart = new Date(todayStart); tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+              // Tasks assigned to someone other than Jordan (= acquisition managers)
+              const amTasks = scheduledTasks.filter(t =>
+                t.assigned_to && t.assigned_to !== currentUserId
+              );
+              const amTodayTasks = amTasks.filter(t => { const d = new Date(t.due_at); return d >= todayStart && d < tomorrowStart; });
+              const amTomorrowTasks = amTasks.filter(t => {
+                const d = new Date(t.due_at);
+                const dayAfter = new Date(tomorrowStart); dayAfter.setDate(dayAfter.getDate() + 1);
+                return d >= tomorrowStart && d < dayAfter;
+              });
+              const contactedToday = allLeads.filter(l => {
+                if (l.pipeline_status !== 'ANTHONY_CONTACTED') return false;
+                const t = l.last_activity_at ? new Date(l.last_activity_at) : null;
+                return t && t >= todayStart && t < tomorrowStart;
+              });
+              const apptsBooked = allLeads.filter(l => l.pipeline_status === 'APPT_SET_FOR_JORDAN');
+
+              if (amTasks.length === 0 && contactedToday.length === 0 && apptsBooked.length === 0) return null;
+
+              return (
+                <div className="bg-gradient-to-r from-purple-900/30 to-slate-900 rounded-xl border border-purple-700/40 overflow-hidden">
+                  <div className="bg-purple-900/40 px-4 py-3 border-b border-purple-700/40 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <svg className="w-5 h-5 text-purple-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-2a4 4 0 100-8 4 4 0 000 8zm6 2a4 4 0 100-8 4 4 0 000 8z" />
+                      </svg>
+                      <span className="font-semibold text-white text-lg">Acquisition Manager Activity</span>
+                    </div>
+                    <span className="text-purple-300 text-sm">Live</span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-4 p-4">
+                    <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3">
+                      <div className="text-2xl font-bold text-purple-300">{amTodayTasks.length}</div>
+                      <div className="text-xs text-slate-400 uppercase tracking-wide mt-1">Working today</div>
+                    </div>
+                    <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3">
+                      <div className="text-2xl font-bold text-cyan-300">{contactedToday.length}</div>
+                      <div className="text-xs text-slate-400 uppercase tracking-wide mt-1">Contacted today</div>
+                    </div>
+                    <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3">
+                      <div className="text-2xl font-bold text-green-300">{apptsBooked.length}</div>
+                      <div className="text-xs text-slate-400 uppercase tracking-wide mt-1">Appts booked for you</div>
+                    </div>
+                    <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3">
+                      <div className="text-2xl font-bold text-blue-300">{amTomorrowTasks.length}</div>
+                      <div className="text-xs text-slate-400 uppercase tracking-wide mt-1">On deck tomorrow</div>
+                    </div>
+                  </div>
+                  {apptsBooked.length > 0 && (
+                    <div className="border-t border-purple-700/30 p-4">
+                      <div className="text-xs font-semibold text-purple-300 uppercase tracking-wide mb-2">Appointments waiting for you</div>
+                      <div className="space-y-2">
+                        {apptsBooked.slice(0, 5).map(lead => {
+                          const apptTask = scheduledTasks.find(t => t.lead_id === lead.id && t.task_type === 'meeting' && t.status === 'pending');
+                          const when = apptTask ? new Date(apptTask.due_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'TBD';
+                          return (
+                            <button
+                              key={lead.id}
+                              onClick={() => openLeadDetails(lead)}
+                              className="w-full flex items-center justify-between bg-slate-800/40 hover:bg-slate-800/80 rounded-lg p-2 text-left transition-colors"
+                            >
+                              <div>
+                                <div className="font-medium text-white text-sm">{lead.full_name || lead.name}{lead.map_uploaded && <MappedBadge />}</div>
+                                <div className="text-xs text-slate-400">{lead.phone || 'No phone'} · {lead.property_county || lead.county || '?'}, {lead.property_state || lead.state || '?'}</div>
+                              </div>
+                              <div className="text-xs text-green-300 font-semibold">{when}</div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             {/* Daily Schedule - Single Unified Board */}
             <div className="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden">
               <div className="bg-slate-800 px-4 py-3 border-b border-slate-700 flex items-center justify-between">
@@ -2217,7 +2476,8 @@ export default function LandLeadsAdminPage() {
                   {(() => {
                     const ts = new Date(); ts.setHours(0,0,0,0);
                     const tmrw = new Date(ts); tmrw.setDate(tmrw.getDate() + 1);
-                    return scheduledTasks.filter(t => { const d = new Date(t.due_at); return d >= ts && d < tmrw; }).length;
+                    const isMyTaskCount = (t) => t.assigned_to === currentUserId || (t.assigned_to == null && isAdmin);
+                    return scheduledTasks.filter(t => { const d = new Date(t.due_at); return d >= ts && d < tmrw && isMyTaskCount(t); }).length;
                   })()} tasks today
                 </span>
               </div>
@@ -2226,8 +2486,11 @@ export default function LandLeadsAdminPage() {
                   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
                   const tomorrowStart = new Date(todayStart); tomorrowStart.setDate(tomorrowStart.getDate() + 1);
                   const archivedLeadIds = new Set(allLeads.filter(l => l.status === 'archived').map(l => l.id));
+                  // Role-scoped rundown: each user sees their own tasks. Jordan also inherits
+                  // legacy null-assigned tasks (created before the assigned_to field was wired).
+                  const isMyTask = (t) => t.assigned_to === currentUserId || (t.assigned_to == null && isAdmin);
                   const todayTasksAll = scheduledTasks
-                    .filter(t => { const d = new Date(t.due_at); return d >= todayStart && d < tomorrowStart && !archivedLeadIds.has(t.lead_id); })
+                    .filter(t => { const d = new Date(t.due_at); return d >= todayStart && d < tomorrowStart && !archivedLeadIds.has(t.lead_id) && isMyTask(t); })
                     .sort((a, b) => new Date(b.created_at || b.due_at) - new Date(a.created_at || a.due_at));
                   // Deduplicate by lead_id — keep only the newest task per lead
                   const seenLeads = new Set();
@@ -2278,7 +2541,7 @@ export default function LandLeadsAdminPage() {
                                   ))}
                                 </select>
                               )}
-                              <span className="font-semibold text-white truncate">{leadName}</span>
+                              <span className="font-semibold text-white truncate">{leadName}{lead?.map_uploaded && <MappedBadge />}</span>
                               {editingTaskTime === task.id ? (
                                 <div className="flex items-center gap-1">
                                   <input
@@ -2397,7 +2660,8 @@ export default function LandLeadsAdminPage() {
                 {(() => {
                   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
                   const tomorrowStart = new Date(todayStart); tomorrowStart.setDate(tomorrowStart.getDate() + 1);
-                  const total = scheduledTasks.filter(t => { const d = new Date(t.due_at); return d >= todayStart && d < tomorrowStart; }).length;
+                  const isMyTaskShow = (t) => t.assigned_to === currentUserId || (t.assigned_to == null && isAdmin);
+                  const total = scheduledTasks.filter(t => { const d = new Date(t.due_at); return d >= todayStart && d < tomorrowStart && isMyTaskShow(t); }).length;
                   if (total > rundownVisibleCount) return (
                     <div className="p-4 text-center border-t border-slate-700/50">
                       <button
@@ -3639,7 +3903,7 @@ export default function LandLeadsAdminPage() {
                           {new Date(lead.created_at).toLocaleDateString()}
                         </td>
                         <td className="px-6 py-4">
-                          <div className="font-medium">{lead.full_name || lead.name}</div>
+                          <div className="font-medium">{lead.full_name || lead.name}{lead.map_uploaded && <MappedBadge />}</div>
                           <div className="text-sm text-slate-400">{lead.email}</div>
                         </td>
                         <td className="px-6 py-4">
@@ -3728,6 +3992,7 @@ export default function LandLeadsAdminPage() {
                       <div className="flex-1">
                         <h4 className="text-lg font-semibold text-white">
                           {lead.full_name || lead.name}
+                          {lead.map_uploaded && <MappedBadge />}
                         </h4>
                         <div className="mt-2 grid grid-cols-4 gap-4 text-sm">
                           <div>
@@ -3815,7 +4080,7 @@ export default function LandLeadsAdminPage() {
                             {new Date(lead.created_at).toLocaleDateString()}
                           </td>
                           <td className="px-6 py-4">
-                            <div className="font-medium text-white">{lead.full_name || lead.name}</div>
+                            <div className="font-medium text-white">{lead.full_name || lead.name}{lead.map_uploaded && <MappedBadge />}</div>
                             <div className="text-sm text-slate-500">{lead.email}</div>
                           </td>
                           <td className="px-6 py-4">
@@ -4705,6 +4970,39 @@ export default function LandLeadsAdminPage() {
                   className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
                   placeholder="Enter parcel ID"
                 />
+              </div>
+
+              {/* Property Map Upload */}
+              <div className="bg-slate-900/50 border border-slate-700 rounded-lg p-4 mt-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-semibold text-slate-400 uppercase tracking-wide">Property Map</h4>
+                  {selectedLead.map_uploaded && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-900/40 border border-green-700/50 text-green-400 text-xs font-semibold">
+                      <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.6l7.3-7.3a1 1 0 011.4 0z" clipRule="evenodd" /></svg>
+                      Mapped
+                    </span>
+                  )}
+                </div>
+                {selectedLead.map_image_url && (
+                  <a href={selectedLead.map_image_url} target="_blank" rel="noreferrer" className="block mb-3">
+                    <img src={selectedLead.map_image_url} alt="Property map" className="w-full max-h-64 object-contain rounded-lg border border-slate-700" />
+                  </a>
+                )}
+                <label className="block">
+                  <span className="sr-only">Upload map screenshot</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    disabled={mapUploading}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleMapUpload(selectedLead.id, file);
+                      e.target.value = '';
+                    }}
+                    className="block w-full text-sm text-slate-400 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:font-semibold hover:file:bg-blue-700 file:cursor-pointer disabled:opacity-50"
+                  />
+                </label>
+                {mapUploading && <p className="text-xs text-slate-500 mt-2">Uploading...</p>}
               </div>
 
               {/* Questionnaire Answers */}
@@ -6070,6 +6368,76 @@ export default function LandLeadsAdminPage() {
                 className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors"
               >
                 {scheduleSaving ? 'Saving...' : editingScheduleTaskId ? 'Update' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Appointment for Jordan Modal */}
+      {apptModalOpen && apptModalLeadId && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => !apptSaving && setApptModalOpen(false)}
+        >
+          <div
+            className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-md p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-bold text-white mb-1">Book Appointment for Jordan</h3>
+            <p className="text-sm text-slate-400 mb-4">
+              {(() => {
+                const lead = allLeads.find(l => l.id === apptModalLeadId);
+                return lead?.full_name || lead?.name || 'Lead';
+              })()}
+            </p>
+
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Date</label>
+                <input
+                  type="date"
+                  value={apptDate}
+                  onChange={(e) => setApptDate(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Time</label>
+                <input
+                  type="time"
+                  value={apptTime}
+                  onChange={(e) => setApptTime(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white"
+                />
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-slate-300 mb-2">Note for Jordan (optional)</label>
+              <textarea
+                value={apptNote}
+                onChange={(e) => setApptNote(e.target.value)}
+                rows={3}
+                placeholder="What did the seller say? Any context Jordan needs?"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
+              />
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={submitApptForJordan}
+                disabled={apptSaving}
+                className="flex-1 bg-purple-600 hover:bg-purple-700 disabled:bg-slate-700 text-white font-semibold py-2 px-4 rounded-lg"
+              >
+                {apptSaving ? 'Booking...' : 'Book Appt & Send to Jordan'}
+              </button>
+              <button
+                onClick={() => setApptModalOpen(false)}
+                disabled={apptSaving}
+                className="bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 px-4 rounded-lg"
+              >
+                Cancel
               </button>
             </div>
           </div>
