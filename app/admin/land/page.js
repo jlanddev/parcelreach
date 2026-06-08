@@ -2599,8 +2599,8 @@ export default function LandLeadsAdminPage() {
                     const ts = new Date(); ts.setHours(0,0,0,0);
                     const tmrw = new Date(ts); tmrw.setDate(tmrw.getDate() + 1);
                     const isMyTaskCount = (t) => t.assigned_to === currentUserId || (t.assigned_to == null && isAdmin);
-                    return scheduledTasks.filter(t => { const d = new Date(t.due_at); return d >= ts && d < tmrw && isMyTaskCount(t); }).length;
-                  })()} tasks today
+                    return scheduledTasks.filter(t => { const d = new Date(t.due_at); return d < tmrw && isMyTaskCount(t); }).length;
+                  })()} tasks
                 </span>
               </div>
               <div className="divide-y divide-slate-800">
@@ -2610,9 +2610,10 @@ export default function LandLeadsAdminPage() {
                   const archivedLeadIds = new Set(allLeads.filter(l => l.status === 'archived').map(l => l.id));
                   // Role-scoped rundown: each user sees their own tasks. Jordan also inherits
                   // legacy null-assigned tasks (created before the assigned_to field was wired).
+                  // Overdue tasks (due_at before today) roll forward so they don't get stranded.
                   const isMyTask = (t) => t.assigned_to === currentUserId || (t.assigned_to == null && isAdmin);
                   const todayTasksAll = scheduledTasks
-                    .filter(t => { const d = new Date(t.due_at); return d >= todayStart && d < tomorrowStart && !archivedLeadIds.has(t.lead_id) && isMyTask(t); })
+                    .filter(t => { const d = new Date(t.due_at); return d < tomorrowStart && !archivedLeadIds.has(t.lead_id) && isMyTask(t); })
                     .sort((a, b) => new Date(b.created_at || b.due_at) - new Date(a.created_at || a.due_at));
                   // Deduplicate by lead_id — keep only the newest task per lead
                   const seenLeads = new Set();
@@ -2629,8 +2630,8 @@ export default function LandLeadsAdminPage() {
                         <svg className="w-12 h-12 text-slate-600 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
-                        <p className="text-slate-400 text-lg font-medium">No tasks scheduled for today</p>
-                        <p className="text-slate-500 text-sm mt-1">Schedule callbacks from PPC Inflow or use the calendar on lead cards</p>
+                        <p className="text-slate-400 text-lg font-medium">All caught up</p>
+                        <p className="text-slate-500 text-sm mt-1">No open tasks. New leads and follow-ups will appear here.</p>
                       </div>
                     );
                   }
@@ -2803,7 +2804,7 @@ export default function LandLeadsAdminPage() {
                   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
                   const tomorrowStart = new Date(todayStart); tomorrowStart.setDate(tomorrowStart.getDate() + 1);
                   const isMyTaskShow = (t) => t.assigned_to === currentUserId || (t.assigned_to == null && isAdmin);
-                  const total = scheduledTasks.filter(t => { const d = new Date(t.due_at); return d >= todayStart && d < tomorrowStart && isMyTaskShow(t); }).length;
+                  const total = scheduledTasks.filter(t => { const d = new Date(t.due_at); return d < tomorrowStart && isMyTaskShow(t); }).length;
                   if (total > rundownVisibleCount) return (
                     <div className="p-4 text-center border-t border-slate-700/50">
                       <button
