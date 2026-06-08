@@ -2376,12 +2376,16 @@ export default function LandLeadsAdminPage() {
                 </span>
               </div>
             )}
-            <Link
-              href="/dashboard"
-              className="bg-slate-700 px-4 py-2 rounded-lg hover:bg-slate-600 transition-colors text-sm font-semibold"
+            <button
+              onClick={async () => {
+                await supabase.auth.signOut();
+                if (typeof window !== 'undefined') localStorage.removeItem('parcelreach_current_user');
+                router.push('/admin/login');
+              }}
+              className="bg-red-600/80 hover:bg-red-600 text-white px-4 py-2 rounded-lg transition-colors text-sm font-semibold"
             >
-              Exit Admin
-            </Link>
+              Sign Out
+            </button>
           </div>
         </div>
       </div>
