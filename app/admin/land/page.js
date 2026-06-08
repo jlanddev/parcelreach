@@ -20,6 +20,7 @@ export default function LandLeadsAdminPage() {
   const [currentUserRole, setCurrentUserRole] = useState(null);
   const [currentUserName, setCurrentUserName] = useState('');
   const [adminUserId, setAdminUserId] = useState(null); // Jordan's user id, used to route APPT_SET_FOR_JORDAN tasks
+  const [acquisitionManagerId, setAcquisitionManagerId] = useState(null); // Anthony's user id, used to push leads to his queue
   const isAdmin = currentUserRole === 'admin';
   const isAcquisitionManager = currentUserRole === 'acquisition_manager';
 
@@ -478,18 +479,29 @@ export default function LandLeadsAdminPage() {
         .eq('role', 'admin')
         .limit(1);
       if (admins?.[0]) setAdminUserId(admins[0].id);
+
+      // Find Anthony (acquisition manager) so admin can push leads to his queue
+      const { data: ams } = await supabase
+        .from('users')
+        .select('id')
+        .eq('role', 'acquisition_manager')
+        .limit(1);
+      if (ams?.[0]) setAcquisitionManagerId(ams[0].id);
     };
 
     checkAdminAccess();
   }, [router]);
 
   useEffect(() => {
+    // Wait for role to be set before fetching so Acquisition Manager
+    // gets the 7-lead limit on first load (not the full pool).
+    if (!currentUserRole) return;
     fetchAllData();
 
     // Auto-refresh every 30 seconds
     const interval = setInterval(fetchAllData, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [currentUserRole]);
 
   const fetchAllData = async () => {
     setLoading(true);
@@ -503,11 +515,16 @@ export default function LandLeadsAdminPage() {
       `)
       .order('created_at', { ascending: false });
 
-    // Fetch all leads
-    const { data: leadsData } = await supabase
+    // Fetch leads. Acquisition Manager only sees the 7 newest leads to keep
+    // his board focused while he ramps up.
+    let leadsQuery = supabase
       .from('leads')
       .select('*')
       .order('created_at', { ascending: false });
+    if (currentUserRole === 'acquisition_manager') {
+      leadsQuery = leadsQuery.limit(7);
+    }
+    const { data: leadsData } = await leadsQuery;
 
     // Fetch all assignments
     const { data: assignmentsData } = await supabase
@@ -542,12 +559,17 @@ export default function LandLeadsAdminPage() {
       window._autoScheduleRan = true;
       const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
       const existingTaskLeadIds = new Set((tasksData || []).map(t => t.lead_id));
+      // Acquisition Manager: auto-schedule ALL of his 7 leads (regardless of age) so his
+      // rundown isn't empty on first login. Admin: only same-day leads (existing behavior).
+      const isAM = currentUserRole === 'acquisition_manager';
       const newLeadsWithoutTask = (leadsData || []).filter(l => {
-        const created = new Date(l.created_at);
-        if (created < todayStart) return false; // Only today's leads
+        if (!isAM) {
+          const created = new Date(l.created_at);
+          if (created < todayStart) return false; // Admin: only today's leads
+        }
         if (existingTaskLeadIds.has(l.id)) return false; // Already has a task
         const status = (l.pipeline_status || l.status || '').toUpperCase();
-        if (['DEAD', 'CLOSED', 'NURTURE', 'UNDER_CONTRACT'].includes(status)) return false;
+        if (['DEAD', 'CLOSED', 'NURTURE', 'UNDER_CONTRACT', 'ANTHONY_CONTACTED', 'APPT_SET_FOR_JORDAN'].includes(status)) return false;
         return true;
       });
 
@@ -679,6 +701,42 @@ export default function LandLeadsAdminPage() {
       showToast('Upload failed: ' + err.message, 'error');
     } finally {
       setMapUploading(false);
+    }
+  };
+
+  // Push a lead to Anthony's queue. Creates a scheduled_task assigned to him at "now",
+  // high priority, so it pops to the top of his rundown.
+  const pushToAcquisitionManager = async (leadId) => {
+    if (!isAdmin) return;
+    if (!acquisitionManagerId) {
+      showToast('No acquisition manager found', 'error');
+      return;
+    }
+    const lead = allLeads.find(l => l.id === leadId);
+    const leadName = lead?.full_name || lead?.name || 'Lead';
+    try {
+      // Drop any open task for this lead so the new push is the canonical one
+      await supabase.from('scheduled_tasks')
+        .update({ status: 'cancelled' })
+        .eq('lead_id', leadId)
+        .eq('status', 'pending');
+
+      const { data: newTask, error } = await supabase.from('scheduled_tasks').insert({
+        lead_id: leadId,
+        created_by: currentUserId,
+        assigned_to: acquisitionManagerId,
+        task_type: 'callback',
+        title: `Pushed by Jordan: ${leadName}`,
+        description: 'Jordan flagged this lead for you to contact',
+        due_at: new Date().toISOString(),
+        status: 'pending',
+        priority: 'high'
+      }).select().single();
+      if (error) throw error;
+      if (newTask) setScheduledTasks(prev => [...prev.filter(t => !(t.lead_id === leadId && t.status === 'pending')), newTask]);
+      showToast('Pushed to Acquisition Manager', 'success', leadName);
+    } catch (err) {
+      showToast('Push failed: ' + err.message, 'error');
     }
   };
 
@@ -2615,6 +2673,15 @@ export default function LandLeadsAdminPage() {
                             </button>
                             {lead && (
                               <>
+                                {isAdmin && acquisitionManagerId && (
+                                  <button
+                                    onClick={() => pushToAcquisitionManager(lead.id)}
+                                    className="px-3 py-2 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 active:scale-95 rounded text-sm font-medium transition-all"
+                                    title="Push to Anthony's queue"
+                                  >
+                                    Push to AM
+                                  </button>
+                                )}
                                 <button
                                   onClick={() => openLeadDetails(lead)}
                                   className="px-3 py-2 bg-slate-700 hover:bg-slate-600 active:scale-95 rounded text-sm font-medium transition-all"
@@ -2677,29 +2744,65 @@ export default function LandLeadsAdminPage() {
               </div>
             </div>
 
-            {/* Stats Row */}
-            <div className="grid grid-cols-5 gap-4">
-              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-center">
-                <div className="text-3xl font-bold text-red-400">{allLeads.filter(l => getSmartStatus(l) === 'NEEDS_ATTENTION').length}</div>
-                <div className="text-sm text-red-300">Needs Attention</div>
+            {/* Stats Row: action-oriented for Acquisition Manager */}
+            {isAcquisitionManager ? (() => {
+              const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+              const cutoff72h = new Date(Date.now() - 72 * 60 * 60 * 1000);
+              const newUncontacted = allLeads.filter(l => {
+                const status = (l.pipeline_status || l.status || '').toUpperCase();
+                return new Date(l.created_at) >= cutoff72h && !['ANTHONY_CONTACTED', 'APPT_SET_FOR_JORDAN', 'CLOSED', 'DEAD', 'ARCHIVED'].includes(status);
+              }).length;
+              const contactedToday = allLeads.filter(l => {
+                if (l.pipeline_status !== 'ANTHONY_CONTACTED') return false;
+                const t = l.last_activity_at ? new Date(l.last_activity_at) : null;
+                return t && t >= todayStart;
+              }).length;
+              const apptsSet = allLeads.filter(l => l.pipeline_status === 'APPT_SET_FOR_JORDAN').length;
+              const pendingFollowups = scheduledTasks.filter(t => t.assigned_to === currentUserId && t.status === 'pending').length;
+              return (
+                <div className="grid grid-cols-4 gap-4">
+                  <div className="bg-orange-500/10 border border-orange-500/30 rounded-lg p-4 text-center">
+                    <div className="text-3xl font-bold text-orange-400">{newUncontacted}</div>
+                    <div className="text-sm text-orange-300">New Leads (72h)</div>
+                  </div>
+                  <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-lg p-4 text-center">
+                    <div className="text-3xl font-bold text-cyan-400">{contactedToday}</div>
+                    <div className="text-sm text-cyan-300">Contacted Today</div>
+                  </div>
+                  <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 text-center">
+                    <div className="text-3xl font-bold text-green-400">{apptsSet}</div>
+                    <div className="text-sm text-green-300">Appts Set for Jordan</div>
+                  </div>
+                  <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4 text-center">
+                    <div className="text-3xl font-bold text-purple-400">{pendingFollowups}</div>
+                    <div className="text-sm text-purple-300">Pending Follow-ups</div>
+                  </div>
+                </div>
+              );
+            })() : (
+              <div className="grid grid-cols-5 gap-4">
+                <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-center">
+                  <div className="text-3xl font-bold text-red-400">{allLeads.filter(l => getSmartStatus(l) === 'NEEDS_ATTENTION').length}</div>
+                  <div className="text-sm text-red-300">Needs Attention</div>
+                </div>
+                <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 text-center">
+                  <div className="text-3xl font-bold text-green-400">{allLeads.filter(l => getSmartStatus(l) === 'NEW').length}</div>
+                  <div className="text-sm text-green-300">New (&lt;48hrs)</div>
+                </div>
+                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 text-center">
+                  <div className="text-3xl font-bold text-yellow-400">{allLeads.filter(l => getSmartStatus(l) === 'CONTACTING').length}</div>
+                  <div className="text-sm text-yellow-300">Contacting</div>
+                </div>
+                <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 text-center">
+                  <div className="text-3xl font-bold text-blue-400">{allLeads.filter(l => getSmartStatus(l) === 'CONTACTED').length}</div>
+                  <div className="text-sm text-blue-300">Contacted</div>
+                </div>
+                <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4 text-center">
+                  <div className="text-3xl font-bold text-purple-400">{allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING', 'UNDER_CONTRACT'].includes(getSmartStatus(l))).length}</div>
+                  <div className="text-sm text-purple-300">Working Deals</div>
+                </div>
               </div>
-              <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 text-center">
-                <div className="text-3xl font-bold text-green-400">{allLeads.filter(l => getSmartStatus(l) === 'NEW').length}</div>
-                <div className="text-sm text-green-300">New (&lt;48hrs)</div>
-              </div>
-              <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 text-center">
-                <div className="text-3xl font-bold text-yellow-400">{allLeads.filter(l => getSmartStatus(l) === 'CONTACTING').length}</div>
-                <div className="text-sm text-yellow-300">Contacting</div>
-              </div>
-              <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 text-center">
-                <div className="text-3xl font-bold text-blue-400">{allLeads.filter(l => getSmartStatus(l) === 'CONTACTED').length}</div>
-                <div className="text-sm text-blue-300">Contacted</div>
-              </div>
-              <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4 text-center">
-                <div className="text-3xl font-bold text-purple-400">{allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING', 'UNDER_CONTRACT'].includes(getSmartStatus(l))).length}</div>
-                <div className="text-sm text-purple-300">Working Deals</div>
-              </div>
-            </div>
+            )}
           </div>
         )}
 
@@ -2817,25 +2920,61 @@ export default function LandLeadsAdminPage() {
         {/* PPC INFLOW TAB */}
         {activeTab === 'ppc-inflow' && (
           <div className="space-y-6">
-            {/* PPC Stats */}
-            <div className="grid grid-cols-4 gap-4">
-              <div className="bg-gradient-to-br from-orange-500/20 to-orange-600/20 border border-orange-500/30 rounded-xl p-6">
-                <div className="text-3xl font-bold text-orange-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && l.status !== 'archived').length}</div>
-                <div className="text-slate-300 text-sm mt-1">PPC Inflow Leads</div>
+            {/* Stats: action-oriented for Acquisition Manager, PPC funnel for admin */}
+            {isAcquisitionManager ? (() => {
+              const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+              const cutoff72h = new Date(Date.now() - 72 * 60 * 60 * 1000);
+              const newUncontacted = allLeads.filter(l => {
+                const status = (l.pipeline_status || l.status || '').toUpperCase();
+                return new Date(l.created_at) >= cutoff72h && !['ANTHONY_CONTACTED', 'APPT_SET_FOR_JORDAN', 'CLOSED', 'DEAD', 'ARCHIVED'].includes(status);
+              }).length;
+              const contactedToday = allLeads.filter(l => {
+                if (l.pipeline_status !== 'ANTHONY_CONTACTED') return false;
+                const t = l.last_activity_at ? new Date(l.last_activity_at) : null;
+                return t && t >= todayStart;
+              }).length;
+              const apptsSet = allLeads.filter(l => l.pipeline_status === 'APPT_SET_FOR_JORDAN').length;
+              const pendingFollowups = scheduledTasks.filter(t => t.assigned_to === currentUserId && t.status === 'pending').length;
+              return (
+                <div className="grid grid-cols-4 gap-4">
+                  <div className="bg-gradient-to-br from-orange-500/20 to-orange-600/20 border border-orange-500/30 rounded-xl p-6">
+                    <div className="text-3xl font-bold text-orange-400">{newUncontacted}</div>
+                    <div className="text-slate-300 text-sm mt-1">New Leads (72h, uncontacted)</div>
+                  </div>
+                  <div className="bg-gradient-to-br from-cyan-500/20 to-cyan-600/20 border border-cyan-500/30 rounded-xl p-6">
+                    <div className="text-3xl font-bold text-cyan-400">{contactedToday}</div>
+                    <div className="text-slate-300 text-sm mt-1">Contacted Today</div>
+                  </div>
+                  <div className="bg-gradient-to-br from-green-500/20 to-green-600/20 border border-green-500/30 rounded-xl p-6">
+                    <div className="text-3xl font-bold text-green-400">{apptsSet}</div>
+                    <div className="text-slate-300 text-sm mt-1">Appts Set for Jordan</div>
+                  </div>
+                  <div className="bg-gradient-to-br from-purple-500/20 to-purple-600/20 border border-purple-500/30 rounded-xl p-6">
+                    <div className="text-3xl font-bold text-purple-400">{pendingFollowups}</div>
+                    <div className="text-slate-300 text-sm mt-1">Pending Follow-ups</div>
+                  </div>
+                </div>
+              );
+            })() : (
+              <div className="grid grid-cols-4 gap-4">
+                <div className="bg-gradient-to-br from-orange-500/20 to-orange-600/20 border border-orange-500/30 rounded-xl p-6">
+                  <div className="text-3xl font-bold text-orange-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && l.status !== 'archived').length}</div>
+                  <div className="text-slate-300 text-sm mt-1">PPC Inflow Leads</div>
+                </div>
+                <div className="bg-gradient-to-br from-green-500/20 to-green-600/20 border border-green-500/30 rounded-xl p-6">
+                  <div className="text-3xl font-bold text-green-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && l.form_data?.homeOnProperty === 'no').length}</div>
+                  <div className="text-slate-300 text-sm mt-1">No Home (Qualified)</div>
+                </div>
+                <div className="bg-gradient-to-br from-blue-500/20 to-blue-600/20 border border-blue-500/30 rounded-xl p-6">
+                  <div className="text-3xl font-bold text-blue-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && l.form_data?.acres?.includes('50') || l.form_data?.acres?.includes('100')).length}</div>
+                  <div className="text-slate-300 text-sm mt-1">50+ Acres</div>
+                </div>
+                <div className="bg-gradient-to-br from-purple-500/20 to-purple-600/20 border border-purple-500/30 rounded-xl p-6">
+                  <div className="text-3xl font-bold text-purple-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && new Date(l.created_at) > new Date(Date.now() - 24*60*60*1000)).length}</div>
+                  <div className="text-slate-300 text-sm mt-1">Last 24 Hours</div>
+                </div>
               </div>
-              <div className="bg-gradient-to-br from-green-500/20 to-green-600/20 border border-green-500/30 rounded-xl p-6">
-                <div className="text-3xl font-bold text-green-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && l.form_data?.homeOnProperty === 'no').length}</div>
-                <div className="text-slate-300 text-sm mt-1">No Home (Qualified)</div>
-              </div>
-              <div className="bg-gradient-to-br from-blue-500/20 to-blue-600/20 border border-blue-500/30 rounded-xl p-6">
-                <div className="text-3xl font-bold text-blue-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && l.form_data?.acres?.includes('50') || l.form_data?.acres?.includes('100')).length}</div>
-                <div className="text-slate-300 text-sm mt-1">50+ Acres</div>
-              </div>
-              <div className="bg-gradient-to-br from-purple-500/20 to-purple-600/20 border border-purple-500/30 rounded-xl p-6">
-                <div className="text-3xl font-bold text-purple-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && new Date(l.created_at) > new Date(Date.now() - 24*60*60*1000)).length}</div>
-                <div className="text-slate-300 text-sm mt-1">Last 24 Hours</div>
-              </div>
-            </div>
+            )}
 
             {/* PPC Search */}
             <div className="relative">
@@ -3838,6 +3977,15 @@ export default function LandLeadsAdminPage() {
                         >
                           View Details
                         </button>
+                        {isAdmin && acquisitionManagerId && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); pushToAcquisitionManager(lead.id); }}
+                            className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-semibold rounded-lg transition-colors"
+                            title="Push to Anthony's queue"
+                          >
+                            Push to AM
+                          </button>
+                        )}
                       </div>
 
                       {/* Archive / Delete */}
