@@ -32,6 +32,18 @@ export default function LandLeadsAdminPage() {
     </span>
   );
 
+  // FRESH pill — shown when the lead was created in the last 24 hours.
+  const FreshBadge = ({ lead }) => {
+    if (!lead?.created_at) return null;
+    const ageMs = Date.now() - new Date(lead.created_at).getTime();
+    if (ageMs > 24 * 60 * 60 * 1000) return null;
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-600/30 border border-red-500/60 text-red-300 text-[11px] font-bold uppercase tracking-wide animate-pulse">
+        Fresh
+      </span>
+    );
+  };
+
   // Current teammate pill — click to toggle between Jordan and Anthony.
   const TeammateBadge = ({ lead }) => {
     if (!lead || (!adminUserId && !acquisitionManagerId)) return null;
@@ -539,16 +551,12 @@ export default function LandLeadsAdminPage() {
       `)
       .order('created_at', { ascending: false });
 
-    // Fetch leads. Acquisition Manager only sees the 7 newest leads to keep
-    // his board focused while he ramps up.
-    let leadsQuery = supabase
+    // Fetch all leads. (We dropped the 7-lead cap on Acquisition Manager —
+    // tasks now drive the rundown, and the lead pool needs to match.)
+    const { data: leadsData } = await supabase
       .from('leads')
       .select('*')
       .order('created_at', { ascending: false });
-    if (currentUserRole === 'acquisition_manager') {
-      leadsQuery = leadsQuery.limit(7);
-    }
-    const { data: leadsData } = await leadsQuery;
 
     // Fetch all assignments
     const { data: assignmentsData } = await supabase
@@ -601,11 +609,14 @@ export default function LandLeadsAdminPage() {
         const { data: { user } } = await supabase.auth.getUser();
         const tasksToInsert = newLeadsWithoutTask.map(l => ({
           lead_id: l.id,
-          created_by: user?.id, assigned_to: user?.id,
+          created_by: user?.id,
+          // Task lands with whoever owns the lead — falls back to the logged-in user if unset.
+          assigned_to: l.current_owner_id || user?.id,
           task_type: 'callback',
           title: `NEW LEAD: ${l.full_name || l.name || 'Unknown'}`,
-          description: `New lead - contact same day`,
-          due_at: (() => { const eod = new Date(); eod.setHours(17, 0, 0, 0); return eod > new Date() ? getAvailableTime(eod).toISOString() : getAvailableTime(new Date()).toISOString(); })(),
+          description: `New lead - contact immediately`,
+          // Speed-to-lead: fresh leads land at "now" so they surface to the top of the rundown.
+          due_at: new Date().toISOString(),
           status: 'pending',
           priority: 'high'
         }));
@@ -673,6 +684,16 @@ export default function LandLeadsAdminPage() {
 
     console.log('Status updated successfully to:', newStatus);
     showToast(`Status: ${newStatus}`, 'success', leadName);
+
+    // Auto-cancel pending tasks for terminal statuses so they stop cluttering the rundown
+    const terminalStatuses = ['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE', 'UNDER_CONTRACT'];
+    if (terminalStatuses.includes(newStatus)) {
+      await supabase.from('scheduled_tasks')
+        .update({ status: 'cancelled', completed_at: new Date().toISOString() })
+        .eq('lead_id', leadId)
+        .eq('status', 'pending');
+      setScheduledTasks(prev => prev.filter(t => !(t.lead_id === leadId && t.status === 'pending')));
+    }
 
     // Try to log activity
     try {
@@ -2609,20 +2630,37 @@ export default function LandLeadsAdminPage() {
                   const tomorrowStart = new Date(todayStart); tomorrowStart.setDate(tomorrowStart.getDate() + 1);
                   const archivedLeadIds = new Set(allLeads.filter(l => l.status === 'archived').map(l => l.id));
                   // Role-scoped rundown: each user sees their own tasks. Jordan also inherits
-                  // legacy null-assigned tasks (created before the assigned_to field was wired).
-                  // Overdue tasks (due_at before today) roll forward so they don't get stranded.
+                  // legacy null-assigned tasks. Overdue rolls forward. Also hide tasks for leads
+                  // in terminal status so closed/dead leads stop cluttering.
+                  const terminalLeadIds = new Set(allLeads.filter(l => {
+                    const s = (l.pipeline_status || l.status || '').toUpperCase();
+                    return ['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE', 'UNDER_CONTRACT'].includes(s);
+                  }).map(l => l.id));
+                  const leadById = new Map(allLeads.map(l => [l.id, l]));
                   const isMyTask = (t) => t.assigned_to === currentUserId || (t.assigned_to == null && isAdmin);
                   const todayTasksAll = scheduledTasks
-                    .filter(t => { const d = new Date(t.due_at); return d < tomorrowStart && !archivedLeadIds.has(t.lead_id) && isMyTask(t); })
-                    .sort((a, b) => new Date(b.created_at || b.due_at) - new Date(a.created_at || a.due_at));
-                  // Deduplicate by lead_id — keep only the newest task per lead
+                    .filter(t => {
+                      const d = new Date(t.due_at);
+                      return d < tomorrowStart && !archivedLeadIds.has(t.lead_id) && !terminalLeadIds.has(t.lead_id) && isMyTask(t);
+                    })
+                    .sort((a, b) => {
+                      // Newest leads first (speed-to-lead). Fall back to due_at when leads tie.
+                      const la = leadById.get(a.lead_id);
+                      const lb = leadById.get(b.lead_id);
+                      const ca = la ? new Date(la.created_at).getTime() : 0;
+                      const cb = lb ? new Date(lb.created_at).getTime() : 0;
+                      if (cb !== ca) return cb - ca;
+                      return new Date(a.due_at) - new Date(b.due_at);
+                    });
+                  // Deduplicate by lead_id — keep the first task per lead (which is already the
+                  // priority pick from the sort above: newest lead first, soonest due_at tiebreak).
                   const seenLeads = new Set();
                   const todayTasks = todayTasksAll.filter(t => {
                     if (!t.lead_id) return true;
                     if (seenLeads.has(t.lead_id)) return false;
                     seenLeads.add(t.lead_id);
                     return true;
-                  }).sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+                  });
 
                   if (todayTasks.length === 0) {
                     return (
@@ -2666,6 +2704,7 @@ export default function LandLeadsAdminPage() {
                               )}
                               <span className="font-semibold text-white truncate inline-flex items-center gap-2">
                                 {leadName}
+                                {lead && <FreshBadge lead={lead} />}
                                 {lead?.map_uploaded && <MappedBadge />}
                                 {lead && <TeammateBadge lead={lead} />}
                               </span>
