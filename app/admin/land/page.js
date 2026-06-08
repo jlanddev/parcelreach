@@ -2561,18 +2561,24 @@ export default function LandLeadsAdminPage() {
                     <span className="text-purple-300 text-sm">Live</span>
                   </div>
                   <div className="grid grid-cols-4 gap-4 p-4">
-                    <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3">
+                    <button
+                      onClick={() => setRundownFilter(rundownFilter === 'anthony' ? null : 'anthony')}
+                      className={`bg-slate-800/60 border rounded-lg p-3 text-left hover:bg-slate-800 transition ${rundownFilter === 'anthony' ? 'border-purple-400 ring-2 ring-purple-500/40' : 'border-slate-700/50'}`}
+                    >
                       <div className="text-2xl font-bold text-purple-300">{amTodayTasks.length}</div>
-                      <div className="text-xs text-slate-400 uppercase tracking-wide mt-1">Working today</div>
-                    </div>
+                      <div className="text-xs text-slate-400 uppercase tracking-wide mt-1">Working today {rundownFilter === 'anthony' && '✓'}</div>
+                    </button>
                     <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3">
                       <div className="text-2xl font-bold text-cyan-300">{contactedToday.length}</div>
                       <div className="text-xs text-slate-400 uppercase tracking-wide mt-1">Contacted today</div>
                     </div>
-                    <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3">
+                    <button
+                      onClick={() => setRundownFilter(rundownFilter === 'my_appts' ? null : 'my_appts')}
+                      className={`bg-slate-800/60 border rounded-lg p-3 text-left hover:bg-slate-800 transition ${rundownFilter === 'my_appts' ? 'border-green-400 ring-2 ring-green-500/40' : 'border-slate-700/50'}`}
+                    >
                       <div className="text-2xl font-bold text-green-300">{apptsBooked.length}</div>
-                      <div className="text-xs text-slate-400 uppercase tracking-wide mt-1">Appts booked for you</div>
-                    </div>
+                      <div className="text-xs text-slate-400 uppercase tracking-wide mt-1">Appts booked for you {rundownFilter === 'my_appts' && '✓'}</div>
+                    </button>
                     <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3">
                       <div className="text-2xl font-bold text-blue-300">{amTomorrowTasks.length}</div>
                       <div className="text-xs text-slate-400 uppercase tracking-wide mt-1">On deck tomorrow</div>
@@ -2614,6 +2620,16 @@ export default function LandLeadsAdminPage() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                   </svg>
                   <span className="font-semibold text-white text-lg">Daily Schedule - {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</span>
+                  {rundownFilter && (
+                    <button
+                      onClick={() => setRundownFilter(null)}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-semibold ${rundownFilter === 'anthony' ? 'bg-purple-900/40 border-purple-600/50 text-purple-200' : 'bg-green-900/40 border-green-600/50 text-green-200'} hover:opacity-80 transition`}
+                      title="Clear filter"
+                    >
+                      Showing: {rundownFilter === 'anthony' ? "Anthony's queue" : 'My appointments'}
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                  )}
                 </div>
                 <span className="text-slate-400 text-sm">
                   {(() => {
@@ -2638,10 +2654,24 @@ export default function LandLeadsAdminPage() {
                   }).map(l => l.id));
                   const leadById = new Map(allLeads.map(l => [l.id, l]));
                   const isMyTask = (t) => t.assigned_to === currentUserId || (t.assigned_to == null && isAdmin);
+                  // Filter mode (admin only):
+                  //   null         → my tasks (default)
+                  //   'anthony'    → Anthony's open queue
+                  //   'my_appts'   → only APPT_SET_FOR_JORDAN leads
+                  const apptLeadIds = new Set(
+                    allLeads
+                      .filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN')
+                      .map(l => l.id)
+                  );
+                  const taskMatchesFilter = (t) => {
+                    if (rundownFilter === 'anthony') return t.assigned_to && t.assigned_to !== currentUserId;
+                    if (rundownFilter === 'my_appts') return isMyTask(t) && apptLeadIds.has(t.lead_id);
+                    return isMyTask(t);
+                  };
                   const todayTasksAll = scheduledTasks
                     .filter(t => {
                       const d = new Date(t.due_at);
-                      return d < tomorrowStart && !archivedLeadIds.has(t.lead_id) && !terminalLeadIds.has(t.lead_id) && isMyTask(t);
+                      return d < tomorrowStart && !archivedLeadIds.has(t.lead_id) && !terminalLeadIds.has(t.lead_id) && taskMatchesFilter(t);
                     })
                     .sort((a, b) => {
                       // Newest leads first (speed-to-lead). Fall back to due_at when leads tie.
