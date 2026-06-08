@@ -25,9 +25,16 @@ export default function AdminLoginPage() {
 
       if (signInError) throw signInError;
 
-      // Check if user is admin
+      // Check role from users table (admin or acquisition_manager allowed)
       const adminEmails = ['admin@parcelreach.ai', 'jordan@havenground.com', 'jordan@landreach.co'];
-      if (!adminEmails.includes(email)) {
+      const { data: profile } = await supabase
+        .from('users')
+        .select('role')
+        .eq('id', data.user.id)
+        .maybeSingle();
+
+      const role = profile?.role || (adminEmails.includes(email) ? 'admin' : null);
+      if (!role || !['admin', 'acquisition_manager'].includes(role)) {
         await supabase.auth.signOut();
         setError('Access denied. This account does not have admin privileges.');
         setLoading(false);
