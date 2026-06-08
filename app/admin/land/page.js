@@ -2669,11 +2669,18 @@ export default function LandLeadsAdminPage() {
                               Sent Msg
                             </button>
                             <button
-                              onClick={() => openConvoComplete(task)}
+                              onClick={() => {
+                                if (isAcquisitionManager) {
+                                  // Anthony spoke with seller → book appt for Jordan
+                                  updateLeadStatus(task.lead_id, 'APPT_SET_FOR_JORDAN');
+                                } else {
+                                  openConvoComplete(task);
+                                }
+                              }}
                               className="px-3 py-2 bg-green-600 hover:bg-green-500 active:scale-95 rounded text-sm font-medium transition-all text-white"
-                              title="Spoke with them - add notes & schedule next"
+                              title={isAcquisitionManager ? 'Spoke with them - book appt for Jordan' : 'Spoke with them - add notes & schedule next'}
                             >
-                              Spoke
+                              {isAcquisitionManager ? 'Set Appt' : 'Spoke'}
                             </button>
                             {lead && (
                               <>
@@ -6433,18 +6440,21 @@ export default function LandLeadsAdminPage() {
               })()}
             </p>
 
-            {/* Task Type */}
+            {/* Task Type — Acquisition Manager gets a narrower set: book appt for Jordan or schedule own follow-up */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-slate-300 mb-2">Type</label>
               <div className="flex flex-wrap gap-2">
-                {[
+                {(isAcquisitionManager ? [
+                  { value: 'meeting', label: 'Appt for Jordan', color: 'bg-green-600', desc: 'Books an appointment on Jordan\'s calendar' },
+                  { value: 'follow_up_call', label: 'My Follow-up Call', color: 'bg-blue-600', desc: 'Schedule a callback for yourself' }
+                ] : [
                   { value: 'discovery_call', label: 'Discovery Call', color: 'bg-cyan-600', desc: 'First contact — never spoken' },
                   { value: 'follow_up_call', label: 'Follow Up Call', color: 'bg-blue-600', desc: 'Spoke before, no offer yet' },
                   { value: 'send_offer', label: 'Send Offer', color: 'bg-purple-600', desc: 'Ready to make/send offer' },
                   { value: 'offer_follow_up', label: 'Offer Follow Up', color: 'bg-orange-600', desc: 'Offer sent, following up' },
                   { value: 'title_work', label: 'Title Work Call', color: 'bg-emerald-600', desc: 'Under contract — title/access' },
                   { value: 'callback', label: 'Callback', color: 'bg-slate-600', desc: 'General callback' }
-                ].map(opt => (
+                ]).map(opt => (
                   <button
                     key={opt.value}
                     onClick={() => setScheduleType(opt.value)}
