@@ -2648,8 +2648,8 @@ export default function LandLeadsAdminPage() {
                   {(() => {
                     const ts = new Date(); ts.setHours(0,0,0,0);
                     const tmrw = new Date(ts); tmrw.setDate(tmrw.getDate() + 1);
-                    const isMyTaskCount = (t) => t.assigned_to === currentUserId || (t.assigned_to == null && isAdmin);
-                    return scheduledTasks.filter(t => { const d = new Date(t.due_at); return d < tmrw && isMyTaskCount(t); }).length;
+                    const isMineOrSharedCount = (t) => isAdmin ? true : t.assigned_to === currentUserId;
+                    return scheduledTasks.filter(t => { const d = new Date(t.due_at); return d < tmrw && isMineOrSharedCount(t); }).length;
                   })()} tasks
                 </span>
               </div>
@@ -2666,11 +2666,15 @@ export default function LandLeadsAdminPage() {
                     return ['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE', 'UNDER_CONTRACT'].includes(s);
                   }).map(l => l.id));
                   const leadById = new Map(allLeads.map(l => [l.id, l]));
-                  const isMyTask = (t) => t.assigned_to === currentUserId || (t.assigned_to == null && isAdmin);
+                  // Admin's default rundown shows BOTH his own tasks and Anthony's — full visibility.
+                  // Acquisition Manager only sees his own tasks.
+                  const isMineOrShared = (t) => isAdmin
+                    ? true
+                    : t.assigned_to === currentUserId;
                   // Filter mode (admin only):
-                  //   null         → my tasks (default)
-                  //   'anthony'    → Anthony's open queue
-                  //   'my_appts'   → only APPT_SET_FOR_JORDAN leads
+                  //   null         → both my tasks and Anthony's (default)
+                  //   'anthony'    → narrow to Anthony's queue only
+                  //   'my_appts'   → narrow to APPT_SET_FOR_JORDAN leads only
                   const apptLeadIds = new Set(
                     allLeads
                       .filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN')
@@ -2678,8 +2682,8 @@ export default function LandLeadsAdminPage() {
                   );
                   const taskMatchesFilter = (t) => {
                     if (rundownFilter === 'anthony') return t.assigned_to && t.assigned_to !== currentUserId;
-                    if (rundownFilter === 'my_appts') return isMyTask(t) && apptLeadIds.has(t.lead_id);
-                    return isMyTask(t);
+                    if (rundownFilter === 'my_appts') return apptLeadIds.has(t.lead_id);
+                    return isMineOrShared(t);
                   };
                   const todayTasksAll = scheduledTasks
                     .filter(t => {
@@ -2885,8 +2889,8 @@ export default function LandLeadsAdminPage() {
                 {(() => {
                   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
                   const tomorrowStart = new Date(todayStart); tomorrowStart.setDate(tomorrowStart.getDate() + 1);
-                  const isMyTaskShow = (t) => t.assigned_to === currentUserId || (t.assigned_to == null && isAdmin);
-                  const total = scheduledTasks.filter(t => { const d = new Date(t.due_at); return d < tomorrowStart && isMyTaskShow(t); }).length;
+                  const isMineOrSharedShow = (t) => isAdmin ? true : t.assigned_to === currentUserId;
+                  const total = scheduledTasks.filter(t => { const d = new Date(t.due_at); return d < tomorrowStart && isMineOrSharedShow(t); }).length;
                   if (total > rundownVisibleCount) return (
                     <div className="p-4 text-center border-t border-slate-700/50">
                       <button
