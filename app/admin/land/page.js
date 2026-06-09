@@ -2553,8 +2553,11 @@ export default function LandLeadsAdminPage() {
                 const dayAfter = new Date(tomorrowStart); dayAfter.setDate(dayAfter.getDate() + 1);
                 return d >= tomorrowStart && d < dayAfter;
               });
+              // "Touches today" = any lead Anthony took action on today (VM, msg, spoke,
+              // status change, appt booking, etc.) — measured by last_activity_at on his
+              // owned leads. Counts attempts, not just successful contacts.
               const contactedToday = allLeads.filter(l => {
-                if (l.pipeline_status !== 'ANTHONY_CONTACTED') return false;
+                if (l.current_owner_id !== acquisitionManagerId) return false;
                 const t = l.last_activity_at ? new Date(l.last_activity_at) : null;
                 return t && t >= todayStart && t < tomorrowStart;
               });
@@ -2583,7 +2586,7 @@ export default function LandLeadsAdminPage() {
                     </button>
                     <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3">
                       <div className="text-2xl font-bold text-cyan-300">{contactedToday.length}</div>
-                      <div className="text-xs text-slate-400 uppercase tracking-wide mt-1">Contacted today</div>
+                      <div className="text-xs text-slate-400 uppercase tracking-wide mt-1">Touches today</div>
                     </div>
                     <button
                       onClick={() => setRundownFilter(rundownFilter === 'my_appts' ? null : 'my_appts')}
@@ -2914,8 +2917,9 @@ export default function LandLeadsAdminPage() {
                 const status = (l.pipeline_status || l.status || '').toUpperCase();
                 return new Date(l.created_at) >= cutoff72h && !['ANTHONY_CONTACTED', 'APPT_SET_FOR_JORDAN', 'CLOSED', 'DEAD', 'ARCHIVED'].includes(status);
               }).length;
+              // Touches today = any lead the acquisition manager took action on today.
               const contactedToday = allLeads.filter(l => {
-                if (l.pipeline_status !== 'ANTHONY_CONTACTED') return false;
+                if (l.current_owner_id !== acquisitionManagerId) return false;
                 const t = l.last_activity_at ? new Date(l.last_activity_at) : null;
                 return t && t >= todayStart;
               }).length;
@@ -2929,7 +2933,7 @@ export default function LandLeadsAdminPage() {
                   </div>
                   <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-lg p-4 text-center">
                     <div className="text-3xl font-bold text-cyan-400">{contactedToday}</div>
-                    <div className="text-sm text-cyan-300">Contacted Today</div>
+                    <div className="text-sm text-cyan-300">Touches Today</div>
                   </div>
                   <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 text-center">
                     <div className="text-3xl font-bold text-green-400">{apptsSet}</div>
@@ -3090,8 +3094,9 @@ export default function LandLeadsAdminPage() {
                 const status = (l.pipeline_status || l.status || '').toUpperCase();
                 return new Date(l.created_at) >= cutoff72h && !['ANTHONY_CONTACTED', 'APPT_SET_FOR_JORDAN', 'CLOSED', 'DEAD', 'ARCHIVED'].includes(status);
               }).length;
+              // Touches today = any lead the acquisition manager took action on today.
               const contactedToday = allLeads.filter(l => {
-                if (l.pipeline_status !== 'ANTHONY_CONTACTED') return false;
+                if (l.current_owner_id !== acquisitionManagerId) return false;
                 const t = l.last_activity_at ? new Date(l.last_activity_at) : null;
                 return t && t >= todayStart;
               }).length;
@@ -3105,7 +3110,7 @@ export default function LandLeadsAdminPage() {
                   </div>
                   <div className="bg-gradient-to-br from-cyan-500/20 to-cyan-600/20 border border-cyan-500/30 rounded-xl p-6">
                     <div className="text-3xl font-bold text-cyan-400">{contactedToday}</div>
-                    <div className="text-slate-300 text-sm mt-1">Contacted Today</div>
+                    <div className="text-slate-300 text-sm mt-1">Touches Today</div>
                   </div>
                   <div className="bg-gradient-to-br from-green-500/20 to-green-600/20 border border-green-500/30 rounded-xl p-6">
                     <div className="text-3xl font-bold text-green-400">{apptsSet}</div>
