@@ -225,26 +225,12 @@ export default function LandLeadsAdminPage() {
 
   // Smart lead status - auto-calculates based on time and activity
   const getSmartStatus = (lead) => {
+    // Status is driven by the manual pipeline_status / status only — no auto-aging.
+    // Age is communicated separately via the FRESH pill (<24h) and "Lead received Xd ago"
+    // text on the card, so a 6-day-old "New" lead stays NEW until someone moves it forward.
     const manualStatus = (lead.pipeline_status || lead.status || '').toUpperCase();
-    const now = new Date();
-    const createdAt = new Date(lead.created_at);
-    const hoursSinceCreated = (now - createdAt) / (1000 * 60 * 60);
-
-    // ALWAYS respect manual status overrides (except for stale NEW leads)
-    // If user explicitly set a status, use it
-    if (['CONTACTED', 'CONTACTING', 'OFFER_SENT', 'OFFER_MADE', 'NEGOTIATING',
-         'UNDER_CONTRACT', 'CLOSED', 'DEAD', 'NURTURE', 'QUALIFYING', 'ARCHIVED'].includes(manualStatus)) {
-      return manualStatus === 'OFFER_MADE' ? 'OFFER_SENT' : manualStatus;
-    }
-
-    // For NEW or empty status, auto-calculate based on age
-    // NEW = less than 48 hours old
-    if (hoursSinceCreated < 48) {
-      return 'NEW';
-    }
-
-    // Older than 48 hours with no status set = NEEDS ATTENTION
-    return 'NEEDS_ATTENTION';
+    if (manualStatus === 'OFFER_MADE') return 'OFFER_SENT';
+    return manualStatus || 'NEW';
   };
 
   // Status display config
