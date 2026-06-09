@@ -1190,7 +1190,7 @@ export default function LandLeadsAdminPage() {
       const slot = getAvailableTime(tmrw);
       const { data: newTask } = await supabase.from('scheduled_tasks').insert({
         lead_id: task.lead_id, created_by: user?.id, assigned_to: user?.id, task_type: retryType,
-        title: `${retryLabel}: ${leadName}`, description: '2 VMs yesterday - try again',
+        title: `${retryLabel}: ${leadName}`, description: '2+ voicemails left — try again',
         due_at: slot.toISOString(), status: 'pending', priority: 'normal'
       }).select().single();
       if (newTask) setScheduledTasks(prev => [...prev, newTask]);
@@ -1205,7 +1205,7 @@ export default function LandLeadsAdminPage() {
         const slot = getAvailableTime(retryTime);
         const { data: newTask } = await supabase.from('scheduled_tasks').insert({
           lead_id: task.lead_id, created_by: user?.id, assigned_to: user?.id, task_type: retryType,
-          title: `${retryLabel}: ${leadName}`, description: 'VM earlier - retry',
+          title: `${retryLabel}: ${leadName}`, description: 'Voicemail left — retry',
           due_at: slot.toISOString(), status: 'pending', priority: 'normal'
         }).select().single();
         if (newTask) setScheduledTasks(prev => [...prev, newTask]);
@@ -1216,7 +1216,7 @@ export default function LandLeadsAdminPage() {
         const slot = getAvailableTime(tmrw);
         const { data: newTask } = await supabase.from('scheduled_tasks').insert({
           lead_id: task.lead_id, created_by: user?.id, assigned_to: user?.id, task_type: retryType,
-          title: `${retryLabel}: ${leadName}`, description: 'VM today - retry tomorrow',
+          title: `${retryLabel}: ${leadName}`, description: 'Voicemail left — retry',
           due_at: slot.toISOString(), status: 'pending', priority: 'normal'
         }).select().single();
         if (newTask) setScheduledTasks(prev => [...prev, newTask]);
@@ -1252,7 +1252,7 @@ export default function LandLeadsAdminPage() {
     const slot = getAvailableTime(tmrw);
     const { data: newTask } = await supabase.from('scheduled_tasks').insert({
       lead_id: task.lead_id, created_by: user?.id, assigned_to: user?.id, task_type: followType,
-      title: `${followLabel}: ${leadName}`, description: 'Sent text yesterday - follow up',
+      title: `${followLabel}: ${leadName}`, description: 'Text sent — follow up',
       due_at: slot.toISOString(), status: 'pending', priority: 'normal'
     }).select().single();
     if (newTask) setScheduledTasks(prev => [...prev, newTask]);
@@ -2713,7 +2713,18 @@ export default function LandLeadsAdminPage() {
                   return todayTasks.slice(0, rundownVisibleCount).map(task => {
                     const lead = allLeads.find(l => l.id === task.lead_id);
                     const leadName = lead?.full_name || lead?.name || 'Unknown';
-                    const dueTime = new Date(task.due_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    const dueTime = (() => {
+                      const d = new Date(task.due_at);
+                      const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+                      const today = new Date(); today.setHours(0, 0, 0, 0);
+                      const tmrw = new Date(today); tmrw.setDate(tmrw.getDate() + 1);
+                      const dayAfter = new Date(tmrw); dayAfter.setDate(dayAfter.getDate() + 1);
+                      const dDay = new Date(d); dDay.setHours(0, 0, 0, 0);
+                      if (dDay.getTime() === today.getTime()) return time;
+                      if (dDay.getTime() === tmrw.getTime()) return `Tomorrow ${time}`;
+                      if (dDay < today) return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+                      return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+                    })();
                     const isNewLead = task.title?.startsWith('NEW LEAD') || task.priority === 'high';
                     const isOverdue = !isNewLead && new Date(task.due_at) < new Date();
                     const normalizedType = normalizeTaskType(task.task_type);
