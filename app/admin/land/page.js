@@ -672,7 +672,9 @@ export default function LandLeadsAdminPage() {
     showToast(`Status: ${newStatus}`, 'success', leadName);
 
     // Auto-cancel pending tasks for terminal statuses so they stop cluttering the rundown
-    const terminalStatuses = ['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE', 'UNDER_CONTRACT'];
+    // UNDER_CONTRACT is intentionally NOT terminal — deals in motion still need follow-up
+    // tasks (title work, contract review, etc.) to appear in the rundown.
+    const terminalStatuses = ['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE'];
     if (terminalStatuses.includes(newStatus)) {
       await supabase.from('scheduled_tasks')
         .update({ status: 'cancelled', completed_at: new Date().toISOString() })
@@ -2652,7 +2654,8 @@ export default function LandLeadsAdminPage() {
                   // in terminal status so closed/dead leads stop cluttering.
                   const terminalLeadIds = new Set(allLeads.filter(l => {
                     const s = (l.pipeline_status || l.status || '').toUpperCase();
-                    return ['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE', 'UNDER_CONTRACT'].includes(s);
+                    // UNDER_CONTRACT stays visible — deals in motion still need rundown tasks
+                    return ['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE'].includes(s);
                   }).map(l => l.id));
                   const leadById = new Map(allLeads.map(l => [l.id, l]));
                   // Admin's default rundown shows BOTH his own tasks and Anthony's — full visibility.
