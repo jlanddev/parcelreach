@@ -2728,7 +2728,11 @@ export default function LandLeadsAdminPage() {
                       if (dDay < today) return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
                       return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
                     })();
-                    const isNewLead = task.title?.startsWith('NEW LEAD') || task.priority === 'high';
+                    // Drive the "New Lead" pill off the lead's LIVE status, not the task title
+                    // (which is baked in at creation). When status changes anywhere in the app,
+                    // the rundown pill mirrors immediately.
+                    const liveLeadStatus = (lead?.pipeline_status || lead?.status || '').toUpperCase();
+                    const isNewLead = !liveLeadStatus || liveLeadStatus === 'NEW';
                     const isOverdue = !isNewLead && new Date(task.due_at) < new Date();
                     const normalizedType = normalizeTaskType(task.task_type);
                     const taskTypeColor = isNewLead ? 'bg-green-500/20 text-green-400 border-green-500/50' : TASK_TYPE_COLORS[normalizedType];
