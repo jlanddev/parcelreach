@@ -32,6 +32,20 @@ export default function LandLeadsAdminPage() {
     </span>
   );
 
+  // HAMMERING pill — shown when hammer_mode is on. Click to toggle off.
+  const HammerBadge = ({ lead }) => {
+    if (!lead?.hammer_mode) return null;
+    return (
+      <button
+        onClick={(e) => { e.stopPropagation(); toggleHammerMode(lead.id); }}
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-600/30 border border-red-500/60 text-red-300 text-[11px] font-bold uppercase tracking-wide animate-pulse hover:opacity-80"
+        title="Click to stop hammering"
+      >
+        🔨 Hammering
+      </button>
+    );
+  };
+
   // FRESH pill — shown when the lead was created in the last 24 hours.
   const FreshBadge = ({ lead }) => {
     if (!lead?.created_at) return null;
@@ -355,9 +369,13 @@ export default function LandLeadsAdminPage() {
     { value: 'UNDER_CONTRACT', label: 'Signed Contract' },
     { value: 'CLOSED', label: 'Closed' },
     { value: 'DEAD', label: 'Dead' },
+    { value: 'WE_PASSED', label: 'We Passed' },
     { value: 'NURTURE', label: 'Nurture' },
     { value: 'ARCHIVED', label: 'Archived' }
   ];
+
+  // Statuses that end the loop — no auto-cadence, no watchdog, no Hammer.
+  const TERMINAL_STATUSES = ['CLOSED', 'DEAD', 'WE_PASSED', 'NURTURE', 'ARCHIVED'];
 
   // Export leads to CSV
   const handleExportCSV = () => {
@@ -576,9 +594,10 @@ export default function LandLeadsAdminPage() {
     setScheduledTasks(tasksData || []);
     setLoading(false);
 
-    // Auto-schedule new leads that don't have a task yet (only on first load, not every refresh)
-    if (!window._autoScheduleRan) {
-      window._autoScheduleRan = true;
+    // Auto-schedule + watchdog run on EVERY fetchAllData (every 30s) so fresh leads
+    // landing mid-session still get a task immediately. Both branches are idempotent —
+    // they check for an existing pending task per lead before inserting.
+    {
       const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
       const existingTaskLeadIds = new Set((tasksData || []).map(t => t.lead_id));
       // Acquisition Manager: auto-schedule ALL of his 7 leads (regardless of age) so his
@@ -612,6 +631,34 @@ export default function LandLeadsAdminPage() {
         }));
         const { data: newTasks } = await supabase.from('scheduled_tasks').insert(tasksToInsert).select();
         if (newTasks) setScheduledTasks(prev => [...prev, ...newTasks]);
+      }
+
+      // WATCHDOG: any non-terminal lead with no pending task gets a generic check-in
+      // scheduled for today so nothing falls through. Assigned to current owner (fallback Anthony).
+      const allPendingLeadIds = new Set((tasksData || []).map(t => t.lead_id));
+      const orphanedLeads = (leadsData || []).filter(l => {
+        const s = (l.pipeline_status || l.status || '').toUpperCase();
+        if (TERMINAL_STATUSES.includes(s)) return false;
+        if (l.status === 'archived') return false;
+        if (existingTaskLeadIds.has(l.id)) return false;
+        if (allPendingLeadIds.has(l.id)) return false;
+        return true;
+      });
+      if (orphanedLeads.length > 0) {
+        const today11 = new Date(); today11.setHours(11, 0, 0, 0);
+        const watchdogTasks = orphanedLeads.map(l => ({
+          lead_id: l.id,
+          created_by: user?.id,
+          assigned_to: l.current_owner_id || acquisitionManagerId || user?.id,
+          task_type: 'callback',
+          title: `Check In: ${l.full_name || l.name || 'Unknown'}`,
+          description: 'Watchdog: no follow-up scheduled — check in and decide next step',
+          due_at: (today11 > new Date() ? today11 : new Date()).toISOString(),
+          status: 'pending',
+          priority: 'high'
+        }));
+        const { data: dogTasks } = await supabase.from('scheduled_tasks').insert(watchdogTasks).select();
+        if (dogTasks) setScheduledTasks(prev => [...prev, ...dogTasks]);
       }
     }
   };
@@ -675,10 +722,17 @@ export default function LandLeadsAdminPage() {
     console.log('Status updated successfully to:', newStatus);
     showToast(`Status: ${newStatus}`, 'success', leadName);
 
+    // Status change always clears hammer mode — hammering is meant to push toward the
+    // next status, so once that lands the mode resets.
+    if (newStatus !== oldStatus && lead?.hammer_mode) {
+      await supabase.from('leads').update({ hammer_mode: false }).eq('id', leadId);
+      setAllLeads(prev => prev.map(l => l.id === leadId ? { ...l, hammer_mode: false } : l));
+    }
+
     // Auto-cancel pending tasks for terminal statuses so they stop cluttering the rundown
     // UNDER_CONTRACT is intentionally NOT terminal — deals in motion still need follow-up
     // tasks (title work, contract review, etc.) to appear in the rundown.
-    const terminalStatuses = ['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE'];
+    const terminalStatuses = ['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE', 'WE_PASSED'];
     if (terminalStatuses.includes(newStatus)) {
       await supabase.from('scheduled_tasks')
         .update({ status: 'cancelled', completed_at: new Date().toISOString() })
@@ -739,6 +793,50 @@ export default function LandLeadsAdminPage() {
     } finally {
       setMapUploading(false);
     }
+  };
+
+  // Toggle hammer mode on a lead. When ON, every completed touch auto-schedules
+  // tomorrow's callback regardless of bucket cadence.
+  const toggleHammerMode = async (leadId) => {
+    const lead = allLeads.find(l => l.id === leadId);
+    if (!lead) return;
+    const next = !lead.hammer_mode;
+    const { error } = await supabase
+      .from('leads')
+      .update({ hammer_mode: next })
+      .eq('id', leadId);
+    if (error) {
+      showToast('Toggle failed: ' + error.message, 'error');
+      return;
+    }
+    setAllLeads(prev => prev.map(l => l.id === leadId ? { ...l, hammer_mode: next } : l));
+    if (selectedLead && selectedLead.id === leadId) {
+      setSelectedLead(prev => ({ ...prev, hammer_mode: next }));
+    }
+    // If turning ON and lead has no pending task today, schedule one for now.
+    if (next) {
+      const hasOpenToday = scheduledTasks.some(t => {
+        if (t.lead_id !== leadId || t.status !== 'pending') return false;
+        const d = new Date(t.due_at);
+        const tmrw = new Date(); tmrw.setHours(0, 0, 0, 0); tmrw.setDate(tmrw.getDate() + 1);
+        return d < tmrw;
+      });
+      if (!hasOpenToday) {
+        const { data: newTask } = await supabase.from('scheduled_tasks').insert({
+          lead_id: leadId,
+          created_by: currentUserId,
+          assigned_to: lead.current_owner_id || acquisitionManagerId || currentUserId,
+          task_type: 'callback',
+          title: `HAMMER: ${lead.full_name || lead.name || 'Lead'}`,
+          description: 'Hammer mode — daily callbacks until status changes',
+          due_at: new Date().toISOString(),
+          status: 'pending',
+          priority: 'high'
+        }).select().single();
+        if (newTask) setScheduledTasks(prev => [...prev, newTask]);
+      }
+    }
+    showToast(next ? '🔨 Hammering on' : 'Hammer cleared', 'success', lead.full_name || lead.name);
   };
 
   // Toggle which teammate is currently working a lead (Jordan ↔ Anthony).
@@ -825,7 +923,15 @@ export default function LandLeadsAdminPage() {
       const leadName = lead?.full_name || lead?.name || 'Lead';
       const dueAt = new Date(`${apptDate}T${apptTime}`).toISOString();
 
-      const { error: taskErr } = await supabase.from('scheduled_tasks').insert({
+      // Cancel any existing pending tasks for this lead so it stops appearing in the
+      // booker's rundown (Anthony's callback gets cleared when he books an appt).
+      await supabase.from('scheduled_tasks')
+        .update({ status: 'cancelled', completed_at: new Date().toISOString() })
+        .eq('lead_id', apptModalLeadId)
+        .eq('status', 'pending');
+      setScheduledTasks(prev => prev.filter(t => !(t.lead_id === apptModalLeadId && t.status === 'pending')));
+
+      const { data: newApptTask, error: taskErr } = await supabase.from('scheduled_tasks').insert({
         lead_id: apptModalLeadId,
         assigned_to: adminUserId,
         created_by: currentUserId,
@@ -835,8 +941,9 @@ export default function LandLeadsAdminPage() {
         due_at: dueAt,
         priority: 'high',
         status: 'pending'
-      });
+      }).select().single();
       if (taskErr) throw taskErr;
+      if (newApptTask) setScheduledTasks(prev => [...prev, newApptTask]);
 
       // Now write the actual status change (skipping the intercept by passing a non-APPT value path)
       // Try with pipeline_status (newer schema) first, fall back to status-only if the column
@@ -1189,6 +1296,20 @@ export default function LandLeadsAdminPage() {
     // Preserve original task type so discovery calls stay discovery calls, etc.
     const retryType = normalizeTaskType(task.task_type);
     const retryLabel = TASK_TYPE_LABELS[retryType] || 'Callback';
+
+    // Hammer mode override — daily cadence wins over normal VM cadence.
+    if (lead?.hammer_mode) {
+      const tmrw = new Date(tomorrowStart); tmrw.setHours(9, 0, 0, 0);
+      const slot = getAvailableTime(tmrw);
+      const { data: newTask } = await supabase.from('scheduled_tasks').insert({
+        lead_id: task.lead_id, created_by: user?.id, assigned_to: lead.current_owner_id || user?.id, task_type: retryType,
+        title: `🔨 HAMMER: ${leadName}`, description: 'Hammer mode — daily callbacks until status changes',
+        due_at: slot.toISOString(), status: 'pending', priority: 'high'
+      }).select().single();
+      if (newTask) setScheduledTasks(prev => [...prev, newTask]);
+      showToast(`🔨 Hammer next callback ${slot.toLocaleString([], {month:'short', day:'numeric', hour:'numeric'})}`, 'success', leadName);
+      return;
+    }
 
     if ((count || 0) >= 2) {
       // 2+ VMs today → schedule for tomorrow morning
@@ -2784,6 +2905,7 @@ export default function LandLeadsAdminPage() {
                                 {leadName}
                                 {lead && <FreshBadge lead={lead} />}
                                 {lead?.map_uploaded && <MappedBadge />}
+                                {lead && <HammerBadge lead={lead} />}
                                 {lead && <TeammateBadge lead={lead} />}
                               </span>
                               {editingTaskTime === task.id ? (
@@ -3788,6 +3910,7 @@ export default function LandLeadsAdminPage() {
                             <span className="font-semibold text-white">{lead.full_name || lead.name || 'Unknown'}</span>
                             <FreshBadge lead={lead} />
                             {lead.map_uploaded && <MappedBadge />}
+                            <HammerBadge lead={lead} />
                             <TeammateBadge lead={lead} />
                           </div>
                           <div className="text-sm text-slate-400">
@@ -3795,6 +3918,15 @@ export default function LandLeadsAdminPage() {
                           </div>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
+                          {!lead.hammer_mode && !TERMINAL_STATUSES.includes(status) && (
+                            <button
+                              onClick={() => toggleHammerMode(lead.id)}
+                              className="px-3 py-1.5 bg-red-600/20 hover:bg-red-600/40 border border-red-600/50 text-red-300 text-sm rounded transition"
+                              title="Hammer mode: daily callbacks until status changes"
+                            >
+                              🔨 Hammer
+                            </button>
+                          )}
                           <select
                             value={status}
                             onChange={(e) => updateLeadStatus(lead.id, e.target.value)}
