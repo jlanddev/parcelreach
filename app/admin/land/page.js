@@ -47,6 +47,9 @@ export default function LandLeadsAdminPage() {
   // Current teammate pill — click to toggle between Jordan and Anthony.
   const TeammateBadge = ({ lead }) => {
     if (!lead || (!adminUserId && !acquisitionManagerId)) return null;
+    // Hide on terminal-status leads — no one is "working" a closed/dead/archived/nurture lead.
+    const leadStatus = (lead.pipeline_status || lead.status || '').toUpperCase();
+    if (['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE'].includes(leadStatus)) return null;
     const ownerId = lead.current_owner_id;
     const isAnthony = ownerId === acquisitionManagerId;
     const isJordan = ownerId === adminUserId;
