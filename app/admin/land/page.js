@@ -351,7 +351,8 @@ export default function LandLeadsAdminPage() {
     { value: 'APPT_SET_FOR_JORDAN', label: 'Appt Set for Jordan' },
     { value: 'OFFER_SENT', label: 'Offer Sent' },
     { value: 'NEGOTIATING', label: 'Negotiating' },
-    { value: 'UNDER_CONTRACT', label: 'Under Contract' },
+    { value: 'AGREEMENT_SENT', label: 'Agreement Sent' },
+    { value: 'UNDER_CONTRACT', label: 'Signed Contract' },
     { value: 'CLOSED', label: 'Closed' },
     { value: 'DEAD', label: 'Dead' },
     { value: 'NURTURE', label: 'Nurture' },
@@ -2481,7 +2482,7 @@ export default function LandLeadsAdminPage() {
           {(() => {
             // Pipeline buckets render east-to-west between Daily Rundown and the other tabs,
             // with arrow chevrons between them to visualize lead flow.
-            const PIPELINE_TABS = ['ppc-inflow', 'appointment-set', 'offer-made', 'agreement-sent', 'closed-deal'];
+            const PIPELINE_TABS = ['ppc-inflow', 'appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'];
             const allTabs = isAdmin
               ? ['daily-rundown', ...PIPELINE_TABS, 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics']
               : ['daily-rundown', ...PIPELINE_TABS, 'subdivision-inflow', 'all-leads'];
@@ -2528,12 +2529,13 @@ export default function LandLeadsAdminPage() {
                   <path d="M11 7h2v10h-2zm4 4h2v6h-2zM7 9h2v8H7zm12-7H5c-1.1 0-2 .9-2 2v18l4-4h13c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
                 </svg>
               )}
-              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'appointment-set' ? 'Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Agreement Sent' : tab === 'closed-deal' ? 'Closed Deal' : tab.replace('-', ' ')}
+              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'appointment-set' ? 'Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Agreement Sent' : tab === 'signed-contract' ? 'Signed Contract' : tab === 'closed-deal' ? 'Closed Deal' : tab.replace('-', ' ')}
               {tab === 'unassigned' && ` (${unassignedLeads.length})`}
               {tab === 'ppc-inflow' && ` (${allLeads.filter(l => l.source?.includes('Haven Ground') && l.status !== 'archived').length})`}
               {tab === 'appointment-set' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN').length})`}
               {tab === 'offer-made' && ` (${allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING'].includes((l.pipeline_status || l.status || '').toUpperCase())).length})`}
-              {tab === 'agreement-sent' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'UNDER_CONTRACT').length})`}
+              {tab === 'agreement-sent' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'AGREEMENT_SENT').length})`}
+              {tab === 'signed-contract' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'UNDER_CONTRACT').length})`}
               {tab === 'closed-deal' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'CLOSED').length})`}
               {tab === 'subdivision-inflow' && ` (${allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived').length})`}
               {tab === 'archive' && ` (${allLeads.filter(l => l.status === 'archived').length})`}
@@ -3708,8 +3710,8 @@ export default function LandLeadsAdminPage() {
           </div>
         )}
 
-        {/* PIPELINE BUCKETS — Appointment Set / Offer Made / Agreement Sent / Closed Deal */}
-        {['appointment-set', 'offer-made', 'agreement-sent', 'closed-deal'].includes(activeTab) && (() => {
+        {/* PIPELINE BUCKETS — Appointment Set / Offer Made / Agreement Sent / Signed Contract / Closed Deal */}
+        {['appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'].includes(activeTab) && (() => {
           const bucketConfig = {
             'appointment-set': {
               title: 'Appointment Set',
@@ -3725,9 +3727,15 @@ export default function LandLeadsAdminPage() {
             },
             'agreement-sent': {
               title: 'Agreement Sent',
-              subtitle: 'Contract is out — waiting on signature / title work',
-              statuses: ['UNDER_CONTRACT'],
+              subtitle: 'Agreement out the door — waiting for the seller to sign',
+              statuses: ['AGREEMENT_SENT'],
               accent: 'amber',
+            },
+            'signed-contract': {
+              title: 'Signed Contract',
+              subtitle: 'Under contract — title work, contingencies, closing prep',
+              statuses: ['UNDER_CONTRACT'],
+              accent: 'blue',
             },
             'closed-deal': {
               title: 'Closed Deal',
@@ -3741,6 +3749,7 @@ export default function LandLeadsAdminPage() {
             green:  { ring: 'border-green-500/40',  text: 'text-green-300',  bg: 'from-green-500/10 to-green-600/5' },
             purple: { ring: 'border-purple-500/40', text: 'text-purple-300', bg: 'from-purple-500/10 to-purple-600/5' },
             amber:  { ring: 'border-amber-500/40',  text: 'text-amber-300',  bg: 'from-amber-500/10 to-amber-600/5' },
+            blue:   { ring: 'border-blue-500/40',   text: 'text-blue-300',   bg: 'from-blue-500/10 to-blue-600/5' },
             emerald:{ ring: 'border-emerald-500/40',text: 'text-emerald-300',bg: 'from-emerald-500/10 to-emerald-600/5' },
           };
           const c = accentMap[cfg.accent];
