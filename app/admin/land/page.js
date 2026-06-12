@@ -2474,20 +2474,32 @@ export default function LandLeadsAdminPage() {
 
       {/* Tabs */}
       <div className="bg-slate-800/30 border-b border-slate-700/50 px-6 overflow-x-auto">
-        <div className="flex gap-4 min-w-max">
-          {(isAdmin
-            ? ['daily-rundown', 'organizations', 'ppc-inflow', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics']
-            : ['daily-rundown', 'ppc-inflow', 'subdivision-inflow', 'all-leads']
-          ).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`px-4 py-3 font-medium capitalize border-b-2 transition ${
-                activeTab === tab
-                  ? 'border-blue-500 text-blue-400'
-                  : 'border-transparent text-slate-400 hover:text-white'
-              }`}
-            >
+        <div className="flex items-center gap-2 min-w-max">
+          {(() => {
+            // Pipeline buckets render east-to-west between Daily Rundown and the other tabs,
+            // with arrow chevrons between them to visualize lead flow.
+            const PIPELINE_TABS = ['ppc-inflow', 'appointment-set', 'offer-made', 'agreement-sent', 'closed-deal'];
+            const allTabs = isAdmin
+              ? ['daily-rundown', ...PIPELINE_TABS, 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics']
+              : ['daily-rundown', ...PIPELINE_TABS, 'subdivision-inflow', 'all-leads'];
+            return allTabs.map((tab, i) => {
+              const prevTab = allTabs[i - 1];
+              const showChevron = PIPELINE_TABS.includes(tab) && PIPELINE_TABS.includes(prevTab);
+              return (
+                <div key={tab} className="flex items-center">
+                  {showChevron && (
+                    <svg className="w-4 h-4 text-slate-600 mx-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
+                    </svg>
+                  )}
+                  <button
+                    onClick={() => setActiveTab(tab)}
+                    className={`px-4 py-3 font-medium capitalize border-b-2 transition ${
+                      activeTab === tab
+                        ? 'border-blue-500 text-blue-400'
+                        : 'border-transparent text-slate-400 hover:text-white'
+                    }`}
+                  >
               {tab === 'daily-rundown' && (
                 <svg className="w-4 h-4 inline-block mr-1 -mt-0.5" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
@@ -2513,13 +2525,20 @@ export default function LandLeadsAdminPage() {
                   <path d="M11 7h2v10h-2zm4 4h2v6h-2zM7 9h2v8H7zm12-7H5c-1.1 0-2 .9-2 2v18l4-4h13c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
                 </svg>
               )}
-              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab.replace('-', ' ')}
+              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'appointment-set' ? 'Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Agreement Sent' : tab === 'closed-deal' ? 'Closed Deal' : tab.replace('-', ' ')}
               {tab === 'unassigned' && ` (${unassignedLeads.length})`}
               {tab === 'ppc-inflow' && ` (${allLeads.filter(l => l.source?.includes('Haven Ground') && l.status !== 'archived').length})`}
+              {tab === 'appointment-set' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN').length})`}
+              {tab === 'offer-made' && ` (${allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING'].includes((l.pipeline_status || l.status || '').toUpperCase())).length})`}
+              {tab === 'agreement-sent' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'UNDER_CONTRACT').length})`}
+              {tab === 'closed-deal' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'CLOSED').length})`}
               {tab === 'subdivision-inflow' && ` (${allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived').length})`}
               {tab === 'archive' && ` (${allLeads.filter(l => l.status === 'archived').length})`}
-            </button>
-          ))}
+                  </button>
+                </div>
+              );
+            });
+          })()}
         </div>
       </div>
 
@@ -3685,6 +3704,109 @@ export default function LandLeadsAdminPage() {
             )}
           </div>
         )}
+
+        {/* PIPELINE BUCKETS — Appointment Set / Offer Made / Agreement Sent / Closed Deal */}
+        {['appointment-set', 'offer-made', 'agreement-sent', 'closed-deal'].includes(activeTab) && (() => {
+          const bucketConfig = {
+            'appointment-set': {
+              title: 'Appointment Set',
+              subtitle: "Sellers we've connected with — appointments on the calendar",
+              statuses: ['APPT_SET_FOR_JORDAN'],
+              accent: 'green',
+            },
+            'offer-made': {
+              title: 'Offer Made',
+              subtitle: 'Mutual interest — offer or proposal on the table',
+              statuses: ['OFFER_SENT', 'NEGOTIATING'],
+              accent: 'purple',
+            },
+            'agreement-sent': {
+              title: 'Agreement Sent',
+              subtitle: 'Contract is out — waiting on signature / title work',
+              statuses: ['UNDER_CONTRACT'],
+              accent: 'amber',
+            },
+            'closed-deal': {
+              title: 'Closed Deal',
+              subtitle: 'Done deals — for the record',
+              statuses: ['CLOSED'],
+              accent: 'emerald',
+            },
+          };
+          const cfg = bucketConfig[activeTab];
+          const accentMap = {
+            green:  { ring: 'border-green-500/40',  text: 'text-green-300',  bg: 'from-green-500/10 to-green-600/5' },
+            purple: { ring: 'border-purple-500/40', text: 'text-purple-300', bg: 'from-purple-500/10 to-purple-600/5' },
+            amber:  { ring: 'border-amber-500/40',  text: 'text-amber-300',  bg: 'from-amber-500/10 to-amber-600/5' },
+            emerald:{ ring: 'border-emerald-500/40',text: 'text-emerald-300',bg: 'from-emerald-500/10 to-emerald-600/5' },
+          };
+          const c = accentMap[cfg.accent];
+          const leadsInBucket = allLeads
+            .filter(l => cfg.statuses.includes((l.pipeline_status || l.status || '').toUpperCase()))
+            .sort((a, b) => new Date(b.last_activity_at || b.created_at) - new Date(a.last_activity_at || a.created_at));
+
+          return (
+            <div className="space-y-6">
+              <div className={`bg-gradient-to-br ${c.bg} border ${c.ring} rounded-xl p-6`}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className={`text-2xl font-bold ${c.text}`}>{cfg.title}</h2>
+                    <p className="text-slate-400 text-sm mt-1">{cfg.subtitle}</p>
+                  </div>
+                  <div className="text-right">
+                    <div className={`text-4xl font-bold ${c.text}`}>{leadsInBucket.length}</div>
+                    <div className="text-xs text-slate-500 uppercase tracking-wide">leads</div>
+                  </div>
+                </div>
+              </div>
+
+              {leadsInBucket.length === 0 ? (
+                <div className="text-center py-20 text-slate-500">
+                  <p className="text-lg">No leads in this bucket yet.</p>
+                  <p className="text-sm mt-1">Leads land here when their status moves into {cfg.statuses.join(' / ')}.</p>
+                </div>
+              ) : (
+                <div className="bg-slate-900 rounded-xl border border-slate-700 divide-y divide-slate-800">
+                  {leadsInBucket.map(lead => {
+                    const status = (lead.pipeline_status || lead.status || '').toUpperCase();
+                    return (
+                      <div key={lead.id} className="p-4 hover:bg-slate-800/40 transition flex items-center justify-between gap-4">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap mb-1">
+                            <span className="font-semibold text-white">{lead.full_name || lead.name || 'Unknown'}</span>
+                            <FreshBadge lead={lead} />
+                            {lead.map_uploaded && <MappedBadge />}
+                            <TeammateBadge lead={lead} />
+                          </div>
+                          <div className="text-sm text-slate-400">
+                            {lead.phone || 'No phone'} · {lead.property_county || lead.county || '?'}, {lead.property_state || lead.state || '?'} · {lead.acres || lead.acreage || '?'} acres
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <select
+                            value={status}
+                            onChange={(e) => updateLeadStatus(lead.id, e.target.value)}
+                            className="px-3 py-1.5 bg-slate-800 border border-slate-700 rounded text-sm text-white focus:outline-none focus:border-blue-500"
+                          >
+                            {PIPELINE_STATUSES.map(s => (
+                              <option key={s.value} value={s.value}>{s.label}</option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={() => openLeadDetails(lead)}
+                            className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-sm rounded transition"
+                          >
+                            View
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* SUBDIVISION INFLOW TAB */}
         {activeTab === 'subdivision-inflow' && (
