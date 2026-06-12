@@ -865,6 +865,14 @@ export default function LandLeadsAdminPage() {
     if (selectedLead && selectedLead.id === leadId) {
       setSelectedLead(prev => ({ ...prev, current_owner_id: nextOwner }));
     }
+    // Cascade: any pending tasks for this lead move to the new owner so the rundown follows.
+    await supabase.from('scheduled_tasks')
+      .update({ assigned_to: nextOwner })
+      .eq('lead_id', leadId)
+      .eq('status', 'pending');
+    setScheduledTasks(prev => prev.map(t =>
+      t.lead_id === leadId && t.status === 'pending' ? { ...t, assigned_to: nextOwner } : t
+    ));
     const newName = nextOwner === adminUserId ? 'Jordan' : 'Anthony';
     showToast(`Now working: ${newName}`, 'success', lead.full_name || lead.name);
   };
@@ -2652,7 +2660,7 @@ export default function LandLeadsAdminPage() {
               )}
               {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'appointment-set' ? 'Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Agreement Sent' : tab === 'signed-contract' ? 'Signed Contract' : tab === 'closed-deal' ? 'Closed Deal' : tab.replace('-', ' ')}
               {tab === 'unassigned' && ` (${unassignedLeads.length})`}
-              {tab === 'ppc-inflow' && ` (${allLeads.filter(l => l.source?.includes('Haven Ground') && l.status !== 'archived').length})`}
+              {tab === 'ppc-inflow' && ` (${allLeads.filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })()).length})`}
               {tab === 'appointment-set' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN').length})`}
               {tab === 'offer-made' && ` (${allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING'].includes((l.pipeline_status || l.status || '').toUpperCase())).length})`}
               {tab === 'agreement-sent' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'AGREEMENT_SENT').length})`}
@@ -2804,10 +2812,17 @@ export default function LandLeadsAdminPage() {
                   }).map(l => l.id));
                   const leadById = new Map(allLeads.map(l => [l.id, l]));
                   // Admin's default rundown shows BOTH his own tasks and Anthony's — full visibility.
-                  // Acquisition Manager only sees his own tasks.
-                  const isMineOrShared = (t) => isAdmin
-                    ? true
-                    : t.assigned_to === currentUserId;
+                  // Acquisition Manager only sees tasks where both the task AND the lead are his:
+                  //   task.assigned_to === him AND lead.current_owner_id === him (or unset).
+                  // Prevents Jordan-claimed leads from showing in Anthony's queue even if the task
+                  // assignment lagged behind the ownership flip.
+                  const isMineOrShared = (t) => {
+                    if (isAdmin) return true;
+                    if (t.assigned_to !== currentUserId) return false;
+                    const leadForTask = leadById.get(t.lead_id);
+                    const ownerId = leadForTask?.current_owner_id;
+                    return !ownerId || ownerId === currentUserId;
+                  };
                   // Filter mode (admin only):
                   //   null         → both my tasks and Anthony's (default)
                   //   'anthony'    → narrow to Anthony's queue only
@@ -3275,7 +3290,7 @@ export default function LandLeadsAdminPage() {
             })() : (
               <div className="grid grid-cols-4 gap-4">
                 <div className="bg-gradient-to-br from-orange-500/20 to-orange-600/20 border border-orange-500/30 rounded-xl p-6">
-                  <div className="text-3xl font-bold text-orange-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && l.status !== 'archived').length}</div>
+                  <div className="text-3xl font-bold text-orange-400">{allLeads.filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })()).length}</div>
                   <div className="text-slate-300 text-sm mt-1">PPC Inflow Leads</div>
                 </div>
                 <div className="bg-gradient-to-br from-green-500/20 to-green-600/20 border border-green-500/30 rounded-xl p-6">
@@ -3315,7 +3330,7 @@ export default function LandLeadsAdminPage() {
             {/* PPC Leads Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
               {allLeads
-                .filter(l => l.source?.includes('Haven Ground') && l.status !== 'archived')
+                .filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })())
                 .filter(l => {
                   if (!ppcSearch.trim()) return true;
                   const q = ppcSearch.toLowerCase();
@@ -3824,7 +3839,7 @@ export default function LandLeadsAdminPage() {
                 ))}
             </div>
 
-            {allLeads.filter(l => l.source?.includes('Haven Ground') && l.status !== 'archived').length === 0 && (
+            {allLeads.filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })()).length === 0 && (
               <div className="text-center py-12 text-slate-400">
                 No PPC leads yet. Leads from Haven Ground form will appear here.
               </div>
