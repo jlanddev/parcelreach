@@ -15,7 +15,15 @@ export default function LandLeadsAdminPage() {
   const [selectedOrg, setSelectedOrg] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('daily-rundown');
-  const [exportFilters, setExportFilters] = useState({ minAcres: '', maxAcres: '', minAge: '', maxAge: '', excludeStatuses: ['UNDER_CONTRACT', 'CLOSED', 'ARCHIVED'] });
+  const [exportFilters, setExportFilters] = useState({
+    minAcres: '', maxAcres: '',
+    // POSITIVE include lists. Empty = include all.
+    includeStatuses: [],
+    // Date range: 'all' | '5d' | '30d' | '90d'
+    dateRange: 'all',
+    // Date basis: 'created' (when lead came in) | 'activity' (when status last changed / touch logged)
+    dateBasis: 'activity',
+  });
   const [currentUserId, setCurrentUserId] = useState(null);
   const [currentUserRole, setCurrentUserRole] = useState(null);
   const [currentUserName, setCurrentUserName] = useState('');
@@ -378,21 +386,28 @@ export default function LandLeadsAdminPage() {
   const TERMINAL_STATUSES = ['CLOSED', 'DEAD', 'WE_PASSED', 'NURTURE', 'ARCHIVED'];
 
   // Export leads to CSV
-  const handleExportCSV = () => {
-    const now = new Date();
-    let filtered = allLeads.filter(lead => {
+  // Returns leads matching the current Export tab filters (status include + date + acres).
+  const applyExportFilters = () => {
+    const days = { '5d': 5, '30d': 30, '90d': 90 }[exportFilters.dateRange];
+    const cutoff = days ? Date.now() - days * 24 * 60 * 60 * 1000 : null;
+    return allLeads.filter(lead => {
       const acres = parseFloat(lead.acres) || 0;
-      const ageMs = now - new Date(lead.created_at);
-      const ageDays = ageMs / (1000 * 60 * 60 * 24);
       const status = (lead.pipeline_status || lead.status || 'NEW').toUpperCase();
-
       if (exportFilters.minAcres && acres < parseFloat(exportFilters.minAcres)) return false;
       if (exportFilters.maxAcres && acres > parseFloat(exportFilters.maxAcres)) return false;
-      if (exportFilters.minAge && ageDays < parseFloat(exportFilters.minAge)) return false;
-      if (exportFilters.maxAge && ageDays > parseFloat(exportFilters.maxAge)) return false;
-      if (exportFilters.excludeStatuses.includes(status)) return false;
+      if (exportFilters.includeStatuses.length > 0 && !exportFilters.includeStatuses.includes(status)) return false;
+      if (cutoff) {
+        const basis = exportFilters.dateBasis === 'activity'
+          ? (lead.last_activity_at || lead.created_at)
+          : lead.created_at;
+        if (new Date(basis).getTime() < cutoff) return false;
+      }
       return true;
     });
+  };
+
+  const handleExportCSV = () => {
+    const filtered = applyExportFilters();
 
     if (filtered.length === 0) { alert('No leads match your filters.'); return; }
 
@@ -444,6 +459,52 @@ export default function LandLeadsAdminPage() {
     const a = document.createElement('a');
     a.href = url;
     a.download = `leads-export-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Export an arbitrary list of leads (used by bucket-level Export buttons).
+  // Same column layout as handleExportCSV but takes the lead list directly.
+  const exportLeadsToCsv = (leads, filenamePrefix = 'leads-export') => {
+    if (!leads || leads.length === 0) { alert('No leads to export.'); return; }
+    const now = new Date();
+    const headers = [
+      'Name', 'Phone', 'Email',
+      'Address', 'County', 'State', 'APN/Parcel ID',
+      'Acres', 'Status', 'Price Range',
+      'Home on Property', 'Property Listed', 'Inherited', 'Owned 4+ Years',
+      'Names on Deed', 'Why Selling',
+      'Agent Name', 'Agent Phone', 'Agent Email',
+      'Source', 'Age (days)', 'Created'
+    ];
+    const rows = leads.map(lead => {
+      const ageDays = Math.floor((now - new Date(lead.created_at)) / (1000 * 60 * 60 * 24));
+      const status = (lead.pipeline_status || lead.status || 'new').toUpperCase();
+      const fd = lead.form_data || {};
+      return [
+        lead.full_name || lead.name || '',
+        lead.phone || '', lead.email || '',
+        fd.streetAddress || lead.street_address || lead.address || '',
+        fd.propertyCounty || lead.property_county || lead.county || '',
+        fd.propertyState || lead.property_state || lead.state || '',
+        fd.parcelId || lead.parcel_id || '',
+        fd.acres || lead.acres || lead.acreage || '',
+        status, fd.priceRange || '',
+        fd.homeOnProperty || '', fd.propertyListed || '',
+        fd.isInherited || '', fd.ownedFourYears || '',
+        fd.namesOnDeed || '', fd.whySelling || '',
+        fd.agentName || '', fd.agentPhone || '', fd.agentEmail || '',
+        lead.source || '', ageDays, new Date(lead.created_at).toLocaleDateString()
+      ];
+    });
+    const csv = [headers, ...rows]
+      .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${filenamePrefix}-${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -5068,6 +5129,88 @@ export default function LandLeadsAdminPage() {
             <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700/50">
               <h2 className="text-xl font-bold text-white mb-6">Export Leads to CSV</h2>
 
+              {/* Include statuses — empty = all */}
+              <div className="mb-6">
+                <label className="block text-sm text-slate-400 mb-2">Include Statuses {exportFilters.includeStatuses.length === 0 && <span className="text-slate-500">(none selected = all)</span>}</label>
+                <div className="flex flex-wrap gap-2">
+                  {PIPELINE_STATUSES.map(s => (
+                    <button
+                      key={s.value}
+                      onClick={() => {
+                        setExportFilters(f => ({
+                          ...f,
+                          includeStatuses: f.includeStatuses.includes(s.value)
+                            ? f.includeStatuses.filter(v => v !== s.value)
+                            : [...f.includeStatuses, s.value]
+                        }));
+                      }}
+                      className={`px-3 py-1 rounded-full text-xs font-medium transition ${
+                        exportFilters.includeStatuses.includes(s.value)
+                          ? 'bg-green-500/20 text-green-400 border border-green-500/50'
+                          : 'bg-slate-700/50 text-slate-300 border border-slate-600 hover:bg-slate-700'
+                      }`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Date range */}
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div>
+                  <label className="block text-sm text-slate-400 mb-2">Time Range</label>
+                  <div className="flex gap-2">
+                    {[
+                      { value: 'all', label: 'All time' },
+                      { value: '5d', label: 'Last 5 days' },
+                      { value: '30d', label: 'Last 30 days' },
+                      { value: '90d', label: 'Last 90 days' },
+                    ].map(opt => (
+                      <button
+                        key={opt.value}
+                        onClick={() => setExportFilters(f => ({ ...f, dateRange: opt.value }))}
+                        className={`px-3 py-1.5 rounded text-xs font-medium transition ${
+                          exportFilters.dateRange === opt.value
+                            ? 'bg-blue-500/20 text-blue-300 border border-blue-500/50'
+                            : 'bg-slate-700/50 text-slate-300 border border-slate-600 hover:bg-slate-700'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-400 mb-2">Date Basis</label>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setExportFilters(f => ({ ...f, dateBasis: 'activity' }))}
+                      className={`flex-1 px-3 py-1.5 rounded text-xs font-medium transition ${
+                        exportFilters.dateBasis === 'activity'
+                          ? 'bg-blue-500/20 text-blue-300 border border-blue-500/50'
+                          : 'bg-slate-700/50 text-slate-300 border border-slate-600 hover:bg-slate-700'
+                      }`}
+                      title="When the lead was last touched (status change, note, etc.)"
+                    >
+                      Last activity
+                    </button>
+                    <button
+                      onClick={() => setExportFilters(f => ({ ...f, dateBasis: 'created' }))}
+                      className={`flex-1 px-3 py-1.5 rounded text-xs font-medium transition ${
+                        exportFilters.dateBasis === 'created'
+                          ? 'bg-blue-500/20 text-blue-300 border border-blue-500/50'
+                          : 'bg-slate-700/50 text-slate-300 border border-slate-600 hover:bg-slate-700'
+                      }`}
+                      title="When the lead came in"
+                    >
+                      Created
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Acres */}
               <div className="grid grid-cols-2 gap-4 mb-6">
                 <div>
                   <label className="block text-sm text-slate-400 mb-1">Min Acres</label>
@@ -5089,72 +5232,11 @@ export default function LandLeadsAdminPage() {
                     className="w-full bg-slate-900/50 text-white border border-slate-600 rounded-lg px-3 py-2 text-sm"
                   />
                 </div>
-                <div>
-                  <label className="block text-sm text-slate-400 mb-1">Min Age (days)</label>
-                  <input
-                    type="number"
-                    value={exportFilters.minAge}
-                    onChange={(e) => setExportFilters(f => ({ ...f, minAge: e.target.value }))}
-                    placeholder="e.g. 60"
-                    className="w-full bg-slate-900/50 text-white border border-slate-600 rounded-lg px-3 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-slate-400 mb-1">Max Age (days)</label>
-                  <input
-                    type="number"
-                    value={exportFilters.maxAge}
-                    onChange={(e) => setExportFilters(f => ({ ...f, maxAge: e.target.value }))}
-                    placeholder="No max"
-                    className="w-full bg-slate-900/50 text-white border border-slate-600 rounded-lg px-3 py-2 text-sm"
-                  />
-                </div>
-              </div>
-
-              <div className="mb-6">
-                <label className="block text-sm text-slate-400 mb-2">Exclude Statuses</label>
-                <div className="flex flex-wrap gap-2">
-                  {PIPELINE_STATUSES.map(s => (
-                    <button
-                      key={s.value}
-                      onClick={() => {
-                        setExportFilters(f => ({
-                          ...f,
-                          excludeStatuses: f.excludeStatuses.includes(s.value)
-                            ? f.excludeStatuses.filter(v => v !== s.value)
-                            : [...f.excludeStatuses, s.value]
-                        }));
-                      }}
-                      className={`px-3 py-1 rounded-full text-xs font-medium transition ${
-                        exportFilters.excludeStatuses.includes(s.value)
-                          ? 'bg-red-500/20 text-red-400 border border-red-500/50'
-                          : 'bg-slate-700/50 text-slate-300 border border-slate-600'
-                      }`}
-                    >
-                      {exportFilters.excludeStatuses.includes(s.value) ? 'Excluding: ' : ''}{s.label}
-                    </button>
-                  ))}
-                </div>
               </div>
 
               <div className="bg-slate-900/50 rounded-lg p-4 mb-6">
                 <p className="text-sm text-slate-400">
-                  Matching leads: <span className="text-white font-bold">
-                    {(() => {
-                      const now = new Date();
-                      return allLeads.filter(lead => {
-                        const acres = parseFloat(lead.acres) || 0;
-                        const ageDays = (now - new Date(lead.created_at)) / (1000 * 60 * 60 * 24);
-                        const status = (lead.pipeline_status || lead.status || 'NEW').toUpperCase();
-                        if (exportFilters.minAcres && acres < parseFloat(exportFilters.minAcres)) return false;
-                        if (exportFilters.maxAcres && acres > parseFloat(exportFilters.maxAcres)) return false;
-                        if (exportFilters.minAge && ageDays < parseFloat(exportFilters.minAge)) return false;
-                        if (exportFilters.maxAge && ageDays > parseFloat(exportFilters.maxAge)) return false;
-                        if (exportFilters.excludeStatuses.includes(status)) return false;
-                        return true;
-                      }).length;
-                    })()}
-                  </span>
+                  Matching leads: <span className="text-white font-bold">{applyExportFilters().length}</span>
                 </p>
               </div>
 
