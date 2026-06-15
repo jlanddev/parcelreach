@@ -2759,11 +2759,12 @@ export default function LandLeadsAdminPage() {
               // status change, appt booking, etc.) — measured by last_activity_at on his
               // owned leads. Counts attempts, not just successful contacts.
               const contactedToday = allLeads.filter(l => {
-                if (l.current_owner_id !== acquisitionManagerId) return false;
+                // Count unassigned leads as Anthony's (default owner for new form leads).
+                if (l.current_owner_id && l.current_owner_id !== acquisitionManagerId) return false;
                 const t = l.last_activity_at ? new Date(l.last_activity_at) : null;
                 return t && t >= todayStart && t < tomorrowStart;
               });
-              const apptsBooked = allLeads.filter(l => l.pipeline_status === 'APPT_SET_FOR_JORDAN');
+              const apptsBooked = allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN');
 
               if (amTasks.length === 0 && contactedToday.length === 0 && apptsBooked.length === 0) return null;
 
@@ -3116,10 +3117,45 @@ export default function LandLeadsAdminPage() {
                   });
                 })()}
                 {(() => {
+                  // Use the SAME filter + dedupe + rundownFilter logic as the rundown row render
+                  // so 'Show More' reflects what would actually appear. Bug fix: previously counted
+                  // raw scheduled_tasks without dedupe, so 'Show More' would say 478 remaining but
+                  // clicking it never grew the list (everything was already dedup-collapsed).
                   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
                   const tomorrowStart = new Date(todayStart); tomorrowStart.setDate(tomorrowStart.getDate() + 1);
-                  const isMineOrSharedShow = (t) => isAdmin ? true : t.assigned_to === currentUserId;
-                  const total = scheduledTasks.filter(t => { const d = new Date(t.due_at); return d < tomorrowStart && isMineOrSharedShow(t); }).length;
+                  const archivedLeadIdsShow = new Set(allLeads.filter(l => l.status === 'archived').map(l => l.id));
+                  const terminalLeadIdsShow = new Set(allLeads.filter(l => {
+                    const s = (l.pipeline_status || l.status || '').toUpperCase();
+                    return TERMINAL_STATUSES.includes(s);
+                  }).map(l => l.id));
+                  const leadByIdShow = new Map(allLeads.map(l => [l.id, l]));
+                  const apptLeadIdsShow = new Set(
+                    allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN').map(l => l.id)
+                  );
+                  const isMineOrSharedShow = (t) => {
+                    if (isAdmin) return true;
+                    if (t.assigned_to !== currentUserId) return false;
+                    const leadForTask = leadByIdShow.get(t.lead_id);
+                    const ownerId = leadForTask?.current_owner_id;
+                    return !ownerId || ownerId === currentUserId;
+                  };
+                  const taskMatchesFilterShow = (t) => {
+                    if (rundownFilter === 'anthony') return t.assigned_to && t.assigned_to !== currentUserId;
+                    if (rundownFilter === 'my_appts') return apptLeadIdsShow.has(t.lead_id);
+                    return isMineOrSharedShow(t);
+                  };
+                  const seen = new Set();
+                  const total = scheduledTasks
+                    .filter(t => {
+                      const d = new Date(t.due_at);
+                      return d < tomorrowStart && !archivedLeadIdsShow.has(t.lead_id) && !terminalLeadIdsShow.has(t.lead_id) && taskMatchesFilterShow(t);
+                    })
+                    .filter(t => {
+                      if (!t.lead_id) return true;
+                      if (seen.has(t.lead_id)) return false;
+                      seen.add(t.lead_id);
+                      return true;
+                    }).length;
                   if (total > rundownVisibleCount) return (
                     <div className="p-4 text-center border-t border-slate-700/50">
                       <button
@@ -3145,11 +3181,12 @@ export default function LandLeadsAdminPage() {
               }).length;
               // Touches today = any lead the acquisition manager took action on today.
               const contactedToday = allLeads.filter(l => {
-                if (l.current_owner_id !== acquisitionManagerId) return false;
+                // Count unassigned leads as Anthony's (default owner for new form leads).
+                if (l.current_owner_id && l.current_owner_id !== acquisitionManagerId) return false;
                 const t = l.last_activity_at ? new Date(l.last_activity_at) : null;
                 return t && t >= todayStart;
               }).length;
-              const apptsSet = allLeads.filter(l => l.pipeline_status === 'APPT_SET_FOR_JORDAN').length;
+              const apptsSet = allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN').length;
               const pendingFollowups = scheduledTasks.filter(t => t.assigned_to === currentUserId && t.status === 'pending').length;
               return (
                 <div className="grid grid-cols-4 gap-4">
@@ -3322,11 +3359,12 @@ export default function LandLeadsAdminPage() {
               }).length;
               // Touches today = any lead the acquisition manager took action on today.
               const contactedToday = allLeads.filter(l => {
-                if (l.current_owner_id !== acquisitionManagerId) return false;
+                // Count unassigned leads as Anthony's (default owner for new form leads).
+                if (l.current_owner_id && l.current_owner_id !== acquisitionManagerId) return false;
                 const t = l.last_activity_at ? new Date(l.last_activity_at) : null;
                 return t && t >= todayStart;
               }).length;
-              const apptsSet = allLeads.filter(l => l.pipeline_status === 'APPT_SET_FOR_JORDAN').length;
+              const apptsSet = allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN').length;
               const pendingFollowups = scheduledTasks.filter(t => t.assigned_to === currentUserId && t.status === 'pending').length;
               return (
                 <div className="grid grid-cols-4 gap-4">
