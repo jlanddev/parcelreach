@@ -3387,24 +3387,46 @@ export default function LandLeadsAdminPage() {
                 </div>
               );
             })() : (
-              <div className="grid grid-cols-4 gap-4">
-                <div className="bg-gradient-to-br from-orange-500/20 to-orange-600/20 border border-orange-500/30 rounded-xl p-6">
-                  <div className="text-3xl font-bold text-orange-400">{allLeads.filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })()).length}</div>
-                  <div className="text-slate-300 text-sm mt-1">PPC Inflow Leads</div>
-                </div>
-                <div className="bg-gradient-to-br from-green-500/20 to-green-600/20 border border-green-500/30 rounded-xl p-6">
-                  <div className="text-3xl font-bold text-green-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && l.form_data?.homeOnProperty === 'no').length}</div>
-                  <div className="text-slate-300 text-sm mt-1">No Home (Qualified)</div>
-                </div>
-                <div className="bg-gradient-to-br from-blue-500/20 to-blue-600/20 border border-blue-500/30 rounded-xl p-6">
-                  <div className="text-3xl font-bold text-blue-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && l.form_data?.acres?.includes('50') || l.form_data?.acres?.includes('100')).length}</div>
-                  <div className="text-slate-300 text-sm mt-1">50+ Acres</div>
-                </div>
-                <div className="bg-gradient-to-br from-purple-500/20 to-purple-600/20 border border-purple-500/30 rounded-xl p-6">
-                  <div className="text-3xl font-bold text-purple-400">{allLeads.filter(l => l.source?.includes('Haven Ground') && new Date(l.created_at) > new Date(Date.now() - 24*60*60*1000)).length}</div>
-                  <div className="text-slate-300 text-sm mt-1">Last 24 Hours</div>
-                </div>
-              </div>
+              (() => {
+                // Pipeline funnel tiles. Click any to jump straight to that bucket.
+                const statusOf = (l) => (l.pipeline_status || l.status || '').toUpperCase();
+                const inflow = allLeads.filter(l => ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(statusOf(l)) && l.status !== 'archived').length;
+                const apptSet = allLeads.filter(l => statusOf(l) === 'APPT_SET_FOR_JORDAN').length;
+                const offerMade = allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING'].includes(statusOf(l))).length;
+                const agreement = allLeads.filter(l => statusOf(l) === 'AGREEMENT_SENT').length;
+                const signed = allLeads.filter(l => statusOf(l) === 'UNDER_CONTRACT').length;
+                const closed = allLeads.filter(l => statusOf(l) === 'CLOSED').length;
+                const tiles = [
+                  { label: 'PPC Inflow',      count: inflow,    tab: 'ppc-inflow',      color: 'orange'  },
+                  { label: 'Appointments Set',count: apptSet,   tab: 'appointment-set', color: 'green'   },
+                  { label: 'Offer Made',      count: offerMade, tab: 'offer-made',      color: 'purple'  },
+                  { label: 'Agreement Sent',  count: agreement, tab: 'agreement-sent',  color: 'amber'   },
+                  { label: 'Signed Contract', count: signed,    tab: 'signed-contract', color: 'blue'    },
+                  { label: 'Closed Deals',    count: closed,    tab: 'closed-deal',     color: 'emerald' },
+                ];
+                const colorMap = {
+                  orange:  'from-orange-500/20 to-orange-600/20 border-orange-500/30 text-orange-400',
+                  green:   'from-green-500/20 to-green-600/20 border-green-500/30 text-green-400',
+                  purple:  'from-purple-500/20 to-purple-600/20 border-purple-500/30 text-purple-400',
+                  amber:   'from-amber-500/20 to-amber-600/20 border-amber-500/30 text-amber-400',
+                  blue:    'from-blue-500/20 to-blue-600/20 border-blue-500/30 text-blue-400',
+                  emerald: 'from-emerald-500/20 to-emerald-600/20 border-emerald-500/30 text-emerald-400',
+                };
+                return (
+                  <div className="grid grid-cols-6 gap-3">
+                    {tiles.map(t => (
+                      <button
+                        key={t.tab}
+                        onClick={() => setActiveTab(t.tab)}
+                        className={`bg-gradient-to-br border rounded-xl p-4 text-left hover:scale-[1.02] transition ${colorMap[t.color]}`}
+                      >
+                        <div className="text-3xl font-bold">{t.count}</div>
+                        <div className="text-slate-300 text-xs mt-1">{t.label}</div>
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()
             )}
 
             {/* PPC Search */}
