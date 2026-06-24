@@ -1351,6 +1351,15 @@ export default function LandLeadsAdminPage() {
     }
   };
 
+  // Reassign a task between Jordan and Anthony (used on the Shared Calendar).
+  const reassignTask = async (taskId, newAssignee) => {
+    const { error } = await supabase.from('scheduled_tasks').update({ assigned_to: newAssignee }).eq('id', taskId);
+    if (!error) {
+      setScheduledTasks(prev => prev.map(t => t.id === taskId ? { ...t, assigned_to: newAssignee } : t));
+      showToast(`Reassigned to ${usersById[newAssignee] || 'teammate'}`, 'success');
+    }
+  };
+
   // Save a scheduled task (create or edit)
   const saveScheduledTask = async () => {
     if (!scheduleDate || !scheduleTime) return;
@@ -4145,16 +4154,21 @@ export default function LandLeadsAdminPage() {
                           const time = new Date(t.due_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
                           const typeLabel = TASK_TYPE_LABELS[normalizeTaskType(t.task_type)] || 'Task';
                           return (
-                            <button
-                              key={t.id}
-                              onClick={() => lead && openLeadDetails(lead)}
-                              className="w-full text-left px-4 py-2.5 hover:bg-slate-800/40 transition flex items-center gap-3"
-                            >
-                              <span className="text-sm text-slate-400 w-20 flex-shrink-0">{time}</span>
-                              <span className={`text-[10px] px-2 py-0.5 rounded-full border flex-shrink-0 ${chip}`}>{who}</span>
-                              <span className="text-sm text-white truncate flex-1">{name}</span>
+                            <div key={t.id} className="px-4 py-2.5 hover:bg-slate-800/40 transition flex items-center gap-3">
+                              {editingTaskTime === t.id ? (
+                                <div className="flex items-center gap-1 flex-shrink-0">
+                                  <input type="date" value={editingDateValue} onChange={(e) => setEditingDateValue(e.target.value)} min={new Date().toISOString().split('T')[0]} className="w-32 px-1.5 py-0.5 bg-slate-900 border border-blue-500 rounded text-xs text-white focus:outline-none" />
+                                  <input type="text" value={editingTimeValue} onChange={(e) => setEditingTimeValue(e.target.value)} onBlur={(e) => { const p = parseTimeInput(e.target.value); if (p) setEditingTimeValue(p); }} placeholder="2pm" autoFocus className="w-16 px-1.5 py-0.5 bg-slate-900 border border-blue-500 rounded text-xs text-white focus:outline-none" onKeyDown={(e) => { if (e.key === 'Enter') saveTaskReschedule(t.id); if (e.key === 'Escape') setEditingTaskTime(null); }} />
+                                  <button onClick={() => saveTaskReschedule(t.id)} className="px-2 py-0.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-medium text-white">Save</button>
+                                  <button onClick={() => setEditingTaskTime(null)} className="px-1.5 py-0.5 text-slate-400 hover:text-white text-xs">&times;</button>
+                                </div>
+                              ) : (
+                                <button onClick={() => { setEditingTaskTime(t.id); setEditingDateValue(new Date(t.due_at).toISOString().split('T')[0]); setEditingTimeValue(time); }} title="Reschedule" className="text-sm text-slate-400 w-20 flex-shrink-0 text-left hover:text-blue-400 hover:underline">{time}</button>
+                              )}
+                              <button onClick={() => reassignTask(t.id, isJordan ? acquisitionManagerId : adminUserId)} title="Click to reassign" className={`text-[10px] px-2 py-0.5 rounded-full border flex-shrink-0 hover:opacity-80 ${chip}`}>{who}</button>
+                              <button onClick={() => lead && openLeadDetails(lead)} className="text-sm text-white truncate flex-1 text-left hover:underline">{name}</button>
                               <span className="text-xs text-slate-500 flex-shrink-0">{typeLabel}</span>
-                            </button>
+                            </div>
                           );
                         })}
                       </div>
