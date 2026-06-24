@@ -2834,6 +2834,14 @@ export default function LandLeadsAdminPage() {
                     })()}
 
                     <div className="p-5">
+                      {/* Tags row (interest/status signals) at the top of the card */}
+                      <div className="flex items-center gap-1.5 flex-wrap mb-3">
+                        <FreshBadge lead={lead} />
+                        {lead.map_uploaded && <MappedBadge />}
+                        <HammerBadge lead={lead} />
+                        <TeammateBadge lead={lead} />
+                      </div>
+
                       {/* LAST CONTACTED + MESSAGES (Project Blue) */}
                       {(() => {
                         const meta = contactMeta[phoneKey(lead.phone || lead.owner_phone)];
