@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin, findLeadByPhone } from '@/lib/supabaseAdmin';
 import { last10 } from '@/lib/projectBlue';
+import { autoCadenceOnOutboundText } from '@/lib/cadence';
 
 /**
  * Project Blue inbound message webhook.
@@ -104,6 +105,10 @@ export async function POST(request) {
       if (lead.pipeline_status === 'NEW' || lead.status === 'new') {
         await supabase.from('leads').update({ status: 'contacted' }).eq('id', lead.id);
       }
+    } else {
+      // App-direct outbound text (not sent through our app, so send-sms didn't
+      // run): advance the rundown cadence here.
+      await autoCadenceOnOutboundText(supabase, lead.id);
     }
 
     return NextResponse.json({ ok: true });

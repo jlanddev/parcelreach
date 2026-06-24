@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { sendMessage } from '@/lib/projectBlue';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
+import { autoCadenceOnOutboundText } from '@/lib/cadence';
 
 // Send a text via Project Blue and log it to the lead timeline.
 export async function POST(request) {
@@ -48,6 +49,8 @@ export async function POST(request) {
       } catch (e) {
         console.error('[PB send-sms] timeline log failed', e);
       }
+      // Auto-advance the rundown cadence (complete open task + schedule follow-up).
+      await autoCadenceOnOutboundText(supabase, leadId);
     }
 
     return NextResponse.json({ ok: true, data: result });
