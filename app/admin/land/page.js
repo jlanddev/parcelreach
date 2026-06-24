@@ -8,7 +8,12 @@ import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import area from '@turf/area';
 import ConversationModal from '@/components/ConversationModal';
+import NotesModal from '@/components/NotesModal';
 import { timeAgo, channelLabel } from '@/lib/format';
+
+// A conversation note is anything that isn't an auto-logged activity marker.
+const isConversationNote = (content) =>
+  !/^\s*\[(VM|TEXT|CALL|EMAIL|DAILY RUNDOWN|STATUS_CHANGE|STATUS)\b/i.test(content || '');
 
 // Last 10 digits of a phone — the stable key for matching messages to leads.
 const phoneKey = (p) => (p || '').replace(/\D/g, '').slice(-10);
@@ -119,6 +124,11 @@ export default function LandLeadsAdminPage() {
   const [conversationLead, setConversationLead] = useState(null); // open iMessage-style thread
   const [contactMeta, setContactMeta] = useState({}); // leadId -> { last, unread } for cards
   const [contactRefresh, setContactRefresh] = useState(0); // bump to reload contactMeta
+  const [notesByLead, setNotesByLead] = useState({}); // leadId -> recent conversation notes
+  const [notesModalLead, setNotesModalLead] = useState(null); // open notes thread
+  const [notesRefresh, setNotesRefresh] = useState(0);
+  const [noteRoster, setNoteRoster] = useState([]); // [{id,name}] taggable teammates
+  const [usersById, setUsersById] = useState({}); // userId -> display name
 
   // Live: any new text/call activity refreshes the cards' Last Contacted + unread.
   useEffect(() => {
@@ -194,6 +204,78 @@ export default function LandLeadsAdminPage() {
     } catch {}
     setConversationLead(lead);
     setContactRefresh((t) => t + 1);
+  };
+
+  // Taggable roster (admin + acquisition manager) + author-name lookup.
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from('users').select('id, full_name, role');
+      if (!data) return;
+      const byId = {};
+      for (const u of data) byId[u.id] = u.full_name || 'User';
+      setUsersById(byId);
+      setNoteRoster(
+        data
+          .filter((u) => u.role === 'admin' || u.role === 'acquisition_manager')
+          .map((u) => ({ id: u.id, name: (u.full_name || 'User').split(' ')[0] }))
+      );
+    })();
+  }, []);
+
+  // Batch-load recent conversation notes for every visible lead (all authors).
+  useEffect(() => {
+    const ids = allLeads.map((l) => l.id).filter(Boolean);
+    if (!ids.length) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('lead_notes')
+        .select('id, lead_id, content, created_at, user_id')
+        .in('lead_id', ids)
+        .order('created_at', { ascending: false })
+        .limit(800);
+      if (cancelled || !data) return;
+      const map = {};
+      for (const n of data) {
+        if (!isConversationNote(n.content)) continue;
+        (map[n.lead_id] = map[n.lead_id] || []).push(n);
+      }
+      for (const k of Object.keys(map)) map[k] = map[k].slice(0, 3); // newest 3
+      setNotesByLead(map);
+    })();
+    return () => { cancelled = true; };
+  }, [allLeads.length, notesRefresh]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const openNotes = (lead) => setNotesModalLead(lead);
+
+  // Compact notes block shown on every lead card.
+  const renderNotesPreview = (lead) => {
+    const recent = notesByLead[lead.id] || [];
+    return (
+      <div className="mt-3 pt-3 border-t border-slate-700/40">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-[10px] uppercase tracking-wide text-slate-500">Notes{recent.length ? ` (${recent.length})` : ''}</span>
+          <button
+            onClick={(e) => { e.stopPropagation(); openNotes(lead); }}
+            className="text-xs px-2 py-1 rounded bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 font-medium"
+          >
+            {recent.length ? 'Open thread' : 'Add note'}
+          </button>
+        </div>
+        {recent.length === 0 ? (
+          <div className="text-xs text-slate-600 italic">No notes yet — tag a teammate with @</div>
+        ) : (
+          <div className="space-y-1">
+            {recent.map((n) => (
+              <div key={n.id} className="text-xs text-slate-300 truncate">
+                <span className="text-slate-500">{(usersById[n.user_id] || 'Teammate').split(' ')[0]} · {timeAgo(n.created_at)}:</span>{' '}
+                {n.content}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
   };
   const [rundownFilter, setRundownFilter] = useState(null); // For Daily Rundown tile clicks
   const [toast, setToast] = useState(null); // { message, type, leadName }
@@ -2804,6 +2886,8 @@ export default function LandLeadsAdminPage() {
                         );
                       })()}
 
+                      {renderNotesPreview(lead)}
+
                       {/* STATUS DROPDOWN - Prominent at top */}
                       <div className="mb-4">
                         {(() => {
@@ -3239,6 +3323,17 @@ export default function LandLeadsAdminPage() {
           onActivity={() => setContactRefresh((t) => t + 1)}
         />
       )}
+      {notesModalLead && (
+        <NotesModal
+          lead={notesModalLead}
+          currentUserId={currentUserId}
+          currentUserName={currentUserName}
+          roster={noteRoster}
+          usersById={usersById}
+          onClose={() => setNotesModalLead(null)}
+          onPosted={() => setNotesRefresh((t) => t + 1)}
+        />
+      )}
       {toast && (
         <div className={`fixed top-4 right-4 z-50 px-6 py-4 rounded-xl shadow-2xl transform transition-all duration-300 animate-slide-in ${
           toast.type === 'success' ? 'bg-green-600 border border-green-400' : 'bg-red-600 border border-red-400'
@@ -3658,6 +3753,7 @@ export default function LandLeadsAdminPage() {
                                 {lead.phone || 'No phone'} &middot; {lead.property_county || lead.county}, {lead.property_state || lead.state} &middot; {lead.acres || lead.acreage || '?'} acres
                               </div>
                             )}
+                            {lead && renderNotesPreview(lead)}
                           </div>
 
                           {/* Action Buttons */}
