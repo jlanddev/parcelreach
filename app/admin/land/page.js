@@ -233,8 +233,14 @@ export default function LandLeadsAdminPage() {
         .from('lead_notes')
         .select('id, lead_id, content, created_at, user_id')
         .in('lead_id', ids)
+        // Exclude high-volume auto-activity logs so real notes aren't crowded out.
+        .not('content', 'ilike', '[VM]%')
+        .not('content', 'ilike', '[TEXT]%')
+        .not('content', 'ilike', '[CALL]%')
+        .not('content', 'ilike', '[EMAIL]%')
+        .not('content', 'ilike', '[DAILY RUNDOWN]%')
         .order('created_at', { ascending: false })
-        .limit(800);
+        .limit(1000);
       if (cancelled || !data) return;
       const map = {};
       for (const n of data) {
