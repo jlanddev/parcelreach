@@ -7,6 +7,8 @@ import { useRouter } from 'next/navigation';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import area from '@turf/area';
+import ConversationModal from '@/components/ConversationModal';
+import { timeAgo, channelLabel } from '@/lib/format';
 
 export default function LandLeadsAdminPage() {
   const router = useRouter();
@@ -71,16 +73,15 @@ export default function LandLeadsAdminPage() {
     if (!lead || (!adminUserId && !acquisitionManagerId)) return null;
     // Hide on terminal-status leads — no one is "working" a closed/dead/archived/nurture lead.
     const leadStatus = (lead.pipeline_status || lead.status || '').toUpperCase();
-    if (['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE'].includes(leadStatus)) return null;
-    const ownerId = lead.current_owner_id;
+    if (['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE', 'WE_PASSED'].includes(leadStatus)) return null;
+    // Default unowned leads to Anthony — no more 'Unassigned' label in the wild.
+    const ownerId = lead.current_owner_id || acquisitionManagerId;
     const isAnthony = ownerId === acquisitionManagerId;
     const isJordan = ownerId === adminUserId;
-    const name = isJordan ? 'Jordan' : isAnthony ? 'Anthony' : 'Unassigned';
+    const name = isJordan ? 'Jordan' : isAnthony ? 'Anthony' : 'Anthony';
     const color = isJordan
       ? 'bg-blue-900/40 border-blue-700/50 text-blue-300'
-      : isAnthony
-      ? 'bg-purple-900/40 border-purple-700/50 text-purple-300'
-      : 'bg-slate-800 border-slate-600 text-slate-400';
+      : 'bg-purple-900/40 border-purple-700/50 text-purple-300';
     return (
       <button
         onClick={(e) => { e.stopPropagation(); toggleCurrentOwner(lead.id); }}
@@ -112,6 +113,58 @@ export default function LandLeadsAdminPage() {
   const [callbackTime, setCallbackTime] = useState('');
   const [loggingActivity, setLoggingActivity] = useState(false);
   const [leadActivities, setLeadActivities] = useState({}); // leadId -> activities array
+  const [conversationLead, setConversationLead] = useState(null); // open iMessage-style thread
+  const [contactMeta, setContactMeta] = useState({}); // leadId -> { last, unread } for cards
+  const [contactRefresh, setContactRefresh] = useState(0); // bump to reload contactMeta
+
+  // Live: any new text/call activity refreshes the cards' Last Contacted + unread.
+  useEffect(() => {
+    const ch = supabase
+      .channel('pb-activities-live')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activities' }, () =>
+        setContactRefresh((t) => t + 1)
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, []);
+
+  // Load latest contact + unread-inbound count per visible lead.
+  useEffect(() => {
+    const ids = allLeads.map((l) => l.id).filter(Boolean);
+    if (!ids.length) return;
+    let cancelled = false;
+    (async () => {
+      const cols = 'lead_id, activity_type, direction, message_content, created_at, read_at';
+      let { data: rows, error } = await supabase
+        .from('activities')
+        .select(cols)
+        .in('lead_id', ids)
+        .in('activity_type', ['TEXT', 'CALL'])
+        .order('created_at', { ascending: false });
+      if (error) {
+        // read_at column may not exist pre-migration — retry without it.
+        const r2 = await supabase
+          .from('activities')
+          .select('lead_id, activity_type, direction, message_content, created_at')
+          .in('lead_id', ids)
+          .in('activity_type', ['TEXT', 'CALL'])
+          .order('created_at', { ascending: false });
+        rows = r2.data;
+      }
+      if (cancelled || !rows) return;
+      const meta = {};
+      for (const a of rows) {
+        if (!meta[a.lead_id]) meta[a.lead_id] = { last: a, unread: 0 };
+        if (a.direction === 'INBOUND' && 'read_at' in a && !a.read_at) meta[a.lead_id].unread += 1;
+      }
+      setContactMeta(meta);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [allLeads.length, contactRefresh]); // eslint-disable-line react-hooks/exhaustive-deps
   const [rundownFilter, setRundownFilter] = useState(null); // For Daily Rundown tile clicks
   const [toast, setToast] = useState(null); // { message, type, leadName }
   const [actionInProgress, setActionInProgress] = useState(null); // { leadId, action }
@@ -2611,6 +2664,14 @@ export default function LandLeadsAdminPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
       {/* Toast Notification */}
+      {conversationLead && (
+        <ConversationModal
+          lead={conversationLead}
+          currentUserId={currentUserId}
+          onClose={() => setConversationLead(null)}
+          onActivity={() => setContactRefresh((t) => t + 1)}
+        />
+      )}
       {toast && (
         <div className={`fixed top-4 right-4 z-50 px-6 py-4 rounded-xl shadow-2xl transform transition-all duration-300 animate-slide-in ${
           toast.type === 'success' ? 'bg-green-600 border border-green-400' : 'bg-red-600 border border-red-400'
@@ -2873,14 +2934,12 @@ export default function LandLeadsAdminPage() {
                     return ['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE'].includes(s);
                   }).map(l => l.id));
                   const leadById = new Map(allLeads.map(l => [l.id, l]));
-                  // Admin's default rundown shows BOTH his own tasks and Anthony's — full visibility.
-                  // Acquisition Manager only sees tasks where both the task AND the lead are his:
-                  //   task.assigned_to === him AND lead.current_owner_id === him (or unset).
-                  // Prevents Jordan-claimed leads from showing in Anthony's queue even if the task
-                  // assignment lagged behind the ownership flip.
+                  // Both roles default to ONLY their own tasks now. Admin sees Anthony's via the
+                  // tile-click filter ('Working today' in the AM panel), not by default. Stops
+                  // Anthony's firehose from polluting Jordan's action board.
                   const isMineOrShared = (t) => {
-                    if (isAdmin) return true;
                     if (t.assigned_to !== currentUserId) return false;
+                    if (isAdmin) return true;
                     const leadForTask = leadById.get(t.lead_id);
                     const ownerId = leadForTask?.current_owner_id;
                     return !ownerId || ownerId === currentUserId;
@@ -2955,6 +3014,9 @@ export default function LandLeadsAdminPage() {
                     // the rundown pill mirrors immediately.
                     const liveLeadStatus = (lead?.pipeline_status || lead?.status || '').toUpperCase();
                     const isNewLead = !liveLeadStatus || liveLeadStatus === 'NEW';
+                    // Lead is FRESH if it came in within the last 24h — suppress the OVERDUE label
+                    // in that window since speed-to-lead beats the auto-scheduled due_at.
+                    const isFresh = lead?.created_at && (Date.now() - new Date(lead.created_at).getTime()) < 24 * 60 * 60 * 1000;
                     const isOverdue = !isNewLead && new Date(task.due_at) < new Date();
                     const normalizedType = normalizeTaskType(task.task_type);
                     const taskTypeColor = isNewLead ? 'bg-green-500/20 text-green-400 border-green-500/50' : TASK_TYPE_COLORS[normalizedType];
@@ -3014,10 +3076,10 @@ export default function LandLeadsAdminPage() {
                                     setEditingDateValue(new Date(task.due_at).toISOString().split('T')[0]);
                                     setEditingTimeValue(dueTime);
                                   }}
-                                  className={`text-xs hover:underline cursor-pointer ${isOverdue ? 'text-red-400 font-semibold' : 'text-slate-500 hover:text-blue-400'}`}
+                                  className={`text-xs hover:underline cursor-pointer ${isOverdue && !isFresh ? 'text-red-400 font-semibold' : 'text-slate-500 hover:text-blue-400'}`}
                                   title="Click to reschedule"
                                 >
-                                  {isOverdue ? 'OVERDUE - ' : ''}{dueTime}
+                                  {isOverdue && !isFresh ? 'OVERDUE - ' : ''}{dueTime}
                                 </button>
                               )}
                             </div>
@@ -3512,6 +3574,45 @@ export default function LandLeadsAdminPage() {
                     })()}
 
                     <div className="p-5">
+                      {/* LAST CONTACTED + MESSAGES (Project Blue) */}
+                      {(() => {
+                        const meta = contactMeta[lead.id];
+                        const unread = meta?.unread || 0;
+                        return (
+                          <div className="mb-4 pb-3 border-b border-slate-700/40">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="text-[10px] uppercase tracking-wide text-slate-500">Last Contacted</div>
+                                <div className="text-sm font-bold text-slate-100 truncate">
+                                  {meta?.last ? `${channelLabel(meta.last)} · ${timeAgo(meta.last.created_at)}` : 'No contact yet'}
+                                </div>
+                              </div>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setConversationLead(lead); }}
+                                title="Open conversation"
+                                className="relative px-3 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 text-xs font-medium flex items-center gap-1.5 flex-shrink-0"
+                              >
+                                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                                  <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
+                                </svg>
+                                Messages
+                                {unread > 0 && (
+                                  <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                                    {unread}
+                                  </span>
+                                )}
+                              </button>
+                            </div>
+                            {meta?.last?.message_content && (
+                              <div className={`text-xs mt-1 truncate ${unread ? 'text-slate-100 font-medium' : 'text-slate-400'}`}>
+                                {meta.last.direction === 'INBOUND' ? '↩ ' : '→ '}
+                                {meta.last.message_content}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
                       {/* STATUS DROPDOWN - Prominent at top */}
                       <div className="mb-4">
                         {(() => {
@@ -3746,41 +3847,18 @@ export default function LandLeadsAdminPage() {
                           placeholder="Phone"
                         />
                         {(lead.phone || lead.owner_phone) && (
-                          <>
-                            <a
-                              href={`https://app.openphone.com/dialer?phone=${encodeURIComponent(lead.phone || lead.owner_phone)}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              title="Call via Quo"
-                              className="p-1.5 bg-green-600/20 hover:bg-green-600/40 rounded text-green-400 transition flex-shrink-0"
-                            >
-                              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                                <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/>
-                              </svg>
-                            </a>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const msg = prompt('Send SMS via Quo:');
-                                if (msg) {
-                                  fetch('/api/quo-send-sms', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ to: lead.phone || lead.owner_phone, message: msg })
-                                  }).then(r => r.json()).then(d => {
-                                    alert(d.ok ? 'SMS sent!' : ('SMS failed: ' + (d.error || 'Unknown error')));
-                                  }).catch(() => alert('SMS failed'));
-                                }
-                              }}
-                              title="Text via Quo"
-                              className="p-1.5 bg-blue-600/20 hover:bg-blue-600/40 rounded text-blue-400 transition flex-shrink-0"
-                            >
-                              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                                <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/>
-                              </svg>
-                            </button>
-                          </>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setConversationLead(lead);
+                            }}
+                            title="Open conversation"
+                            className="p-1.5 bg-blue-600/20 hover:bg-blue-600/40 rounded text-blue-400 transition flex-shrink-0"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
+                            </svg>
+                          </button>
                         )}
                       </div>
                       {lead.ip_address && (
