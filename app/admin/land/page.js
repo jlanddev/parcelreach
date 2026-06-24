@@ -3385,8 +3385,8 @@ export default function LandLeadsAdminPage() {
             // with arrow chevrons between them to visualize lead flow.
             const PIPELINE_TABS = ['ppc-inflow', 'appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'];
             const allTabs = isAdmin
-              ? ['daily-rundown', ...PIPELINE_TABS, 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics']
-              : ['daily-rundown', ...PIPELINE_TABS, 'subdivision-inflow', 'all-leads'];
+              ? ['daily-rundown', 'shared-calendar', ...PIPELINE_TABS, 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics']
+              : ['daily-rundown', 'shared-calendar', ...PIPELINE_TABS, 'subdivision-inflow', 'all-leads'];
             return allTabs.map((tab, i) => {
               const prevTab = allTabs[i - 1];
               const showChevron = PIPELINE_TABS.includes(tab) && PIPELINE_TABS.includes(prevTab);
@@ -3430,7 +3430,7 @@ export default function LandLeadsAdminPage() {
                   <path d="M11 7h2v10h-2zm4 4h2v6h-2zM7 9h2v8H7zm12-7H5c-1.1 0-2 .9-2 2v18l4-4h13c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
                 </svg>
               )}
-              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'appointment-set' ? 'Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Agreement Sent' : tab === 'signed-contract' ? 'Signed Contract' : tab === 'closed-deal' ? 'Closed Deal' : tab.replace('-', ' ')}
+              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'appointment-set' ? 'Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Agreement Sent' : tab === 'signed-contract' ? 'Signed Contract' : tab === 'closed-deal' ? 'Closed Deal' : tab.replace('-', ' ')}
               {tab === 'unassigned' && ` (${unassignedLeads.length})`}
               {tab === 'ppc-inflow' && ` (${allLeads.filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })()).length})`}
               {tab === 'appointment-set' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN').length})`}
@@ -4068,6 +4068,96 @@ export default function LandLeadsAdminPage() {
         )}
 
         {/* PPC INFLOW TAB */}
+        {activeTab === 'shared-calendar' && (() => {
+          const start = new Date(); start.setHours(0, 0, 0, 0);
+          const upcoming = (scheduledTasks || [])
+            .filter((t) => t.due_at && new Date(t.due_at) >= start)
+            .sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+          const byDay = {};
+          for (const t of upcoming) {
+            const key = new Date(t.due_at).toDateString();
+            (byDay[key] = byDay[key] || []).push(t);
+          }
+          const days = Object.keys(byDay).sort((a, b) => new Date(a) - new Date(b));
+          const jordanName = usersById[adminUserId] || 'Jordan';
+          const anthonyName = usersById[acquisitionManagerId] || 'Anthony';
+          const jordanTotal = upcoming.filter((t) => t.assigned_to === adminUserId).length;
+          const anthonyTotal = upcoming.filter((t) => t.assigned_to === acquisitionManagerId).length;
+          return (
+            <div className="space-y-6">
+              <div className="bg-gradient-to-br from-indigo-500/10 to-indigo-600/5 border border-indigo-500/40 rounded-xl p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-2xl font-bold text-indigo-300">Shared Calendar</h2>
+                    <p className="text-slate-400 text-sm mt-1">Upcoming tasks for {jordanName} and {anthonyName}</p>
+                  </div>
+                  <div className="flex items-center gap-5 text-center">
+                    <div>
+                      <div className="text-3xl font-bold text-blue-300">{jordanTotal}</div>
+                      <div className="text-xs text-slate-500 uppercase tracking-wide">{jordanName}</div>
+                    </div>
+                    <div>
+                      <div className="text-3xl font-bold text-purple-300">{anthonyTotal}</div>
+                      <div className="text-xs text-slate-500 uppercase tracking-wide">{anthonyName}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {days.length === 0 ? (
+                <div className="text-center py-20 text-slate-500">
+                  <p className="text-lg">No upcoming tasks scheduled.</p>
+                  <p className="text-sm mt-1">Tasks appear here when an appointment or follow-up is scheduled.</p>
+                </div>
+              ) : (
+                days.map((day) => {
+                  const tasks = byDay[day];
+                  const d = new Date(day);
+                  const isToday = d.toDateString() === new Date().toDateString();
+                  const jCount = tasks.filter((t) => t.assigned_to === adminUserId).length;
+                  const aCount = tasks.filter((t) => t.assigned_to === acquisitionManagerId).length;
+                  return (
+                    <div key={day} className="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden">
+                      <div className="flex items-center justify-between px-4 py-3 bg-slate-800/60 border-b border-slate-700">
+                        <div className="font-semibold text-white">
+                          {isToday ? 'Today · ' : ''}{d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                        </div>
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="px-2 py-0.5 rounded-full bg-blue-900/40 text-blue-300 border border-blue-700/50">{jordanName} {jCount}</span>
+                          <span className="px-2 py-0.5 rounded-full bg-purple-900/40 text-purple-300 border border-purple-700/50">{anthonyName} {aCount}</span>
+                        </div>
+                      </div>
+                      <div className="divide-y divide-slate-800">
+                        {tasks.map((t) => {
+                          const lead = allLeads.find((l) => l.id === t.lead_id);
+                          const name = lead?.full_name || lead?.name || 'Lead';
+                          const isJordan = t.assigned_to === adminUserId;
+                          const who = isJordan ? jordanName : (t.assigned_to === acquisitionManagerId ? anthonyName : (usersById[t.assigned_to] || 'Team'));
+                          const chip = isJordan ? 'bg-blue-900/40 text-blue-300 border-blue-700/50' : 'bg-purple-900/40 text-purple-300 border-purple-700/50';
+                          const time = new Date(t.due_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+                          const typeLabel = TASK_TYPE_LABELS[normalizeTaskType(t.task_type)] || 'Task';
+                          return (
+                            <button
+                              key={t.id}
+                              onClick={() => lead && openLeadDetails(lead)}
+                              className="w-full text-left px-4 py-2.5 hover:bg-slate-800/40 transition flex items-center gap-3"
+                            >
+                              <span className="text-sm text-slate-400 w-20 flex-shrink-0">{time}</span>
+                              <span className={`text-[10px] px-2 py-0.5 rounded-full border flex-shrink-0 ${chip}`}>{who}</span>
+                              <span className="text-sm text-white truncate flex-1">{name}</span>
+                              <span className="text-xs text-slate-500 flex-shrink-0">{typeLabel}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          );
+        })()}
+
         {activeTab === 'ppc-inflow' && (
           <div className="space-y-6">
             {/* Stats: action-oriented for Acquisition Manager, PPC funnel for admin */}
