@@ -9,7 +9,7 @@ import { useNotifications } from '@/hooks/useNotifications';
  * Shows unread count and dropdown with recent notifications
  * @param {string} userId - Current user's ID
  */
-export default function NotificationBell({ userId }) {
+export default function NotificationBell({ userId, onOpen }) {
   const { notifications, unreadCount, markAsRead, markAllAsRead } = useNotifications(userId);
   const [isOpen, setIsOpen] = useState(false);
 
@@ -89,11 +89,15 @@ export default function NotificationBell({ userId }) {
                 </div>
               ) : (
                 recentNotifications.map(notification => (
-                  <Link
+                  <button
                     key={notification.id}
-                    href={notification.link || '/dashboard'}
-                    onClick={() => handleNotificationClick(notification)}
-                    className={`block px-4 py-3 hover:bg-slate-700 border-b border-slate-700 transition-colors ${
+                    onClick={() => {
+                      markAsRead(notification.id);
+                      setIsOpen(false);
+                      if (onOpen) onOpen(notification);
+                      else if (notification.link) window.location.href = notification.link;
+                    }}
+                    className={`block w-full text-left px-4 py-3 hover:bg-slate-700 border-b border-slate-700 transition-colors ${
                       !notification.read ? 'bg-slate-700/50' : ''
                     }`}
                   >
@@ -120,7 +124,7 @@ export default function NotificationBell({ userId }) {
                         </div>
                       )}
                     </div>
-                  </Link>
+                  </button>
                 ))
               )}
             </div>

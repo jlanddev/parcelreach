@@ -271,20 +271,23 @@ export default function LandLeadsAdminPage() {
     }
   }, [allLeads.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Clicking a notification dispatches this; open the right view for that lead.
   const allLeadsRef = useRef(allLeads);
   useEffect(() => { allLeadsRef.current = allLeads; }, [allLeads]);
-  useEffect(() => {
-    const handler = (e) => {
-      const { leadId, type } = e.detail || {};
-      const lead = (allLeadsRef.current || []).find((l) => l.id === leadId);
-      if (!lead) return;
-      if (type === 'sms_inbound') setConversationLead(lead);
-      else setNotesModalLead(lead);
-    };
-    window.addEventListener('pb:open-lead', handler);
-    return () => window.removeEventListener('pb:open-lead', handler);
-  }, []);
+
+  // Clicking a notification opens that lead's note (mention) or text (sms) in-page.
+  const handleOpenNotification = async (n) => {
+    let leadId = null;
+    try { leadId = new URL(n?.link || '', window.location.origin).searchParams.get('lead'); } catch {}
+    if (!leadId) return;
+    let lead = (allLeadsRef.current || []).find((l) => l.id === leadId);
+    if (!lead) {
+      const { data } = await supabase.from('leads').select('*').eq('id', leadId).maybeSingle();
+      lead = data;
+    }
+    if (!lead) return;
+    if (n.type === 'sms_inbound') setConversationLead(lead);
+    else setNotesModalLead(lead);
+  };
 
   // Compact notes block shown on every lead card.
   const renderNotesPreview = (lead) => {
@@ -3353,7 +3356,7 @@ export default function LandLeadsAdminPage() {
                 </span>
               </div>
             )}
-            {currentUserId && <NotificationBell userId={currentUserId} />}
+            {currentUserId && <NotificationBell userId={currentUserId} onOpen={handleOpenNotification} />}
             <button
               onClick={async () => {
                 await supabase.auth.signOut();
