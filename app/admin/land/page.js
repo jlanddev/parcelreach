@@ -116,6 +116,7 @@ export default function LandLeadsAdminPage() {
   const [conversationLead, setConversationLead] = useState(null); // open iMessage-style thread
   const [contactMeta, setContactMeta] = useState({}); // leadId -> { last, unread } for cards
   const [contactRefresh, setContactRefresh] = useState(0); // bump to reload contactMeta
+  const [pbDebug, setPbDebug] = useState(null); // TEMP diagnostic for card summaries
 
   // Live: any new text/call activity refreshes the cards' Last Contacted + unread.
   useEffect(() => {
@@ -177,7 +178,15 @@ export default function LandLeadsAdminPage() {
           }
         }
         setContactMeta(meta);
-      } catch {}
+        setPbDebug({
+          recent: data.messages.length,
+          matched: Object.keys(meta).length,
+          leads: phoneIndex.size,
+          sample: data.messages[0] ? `${data.messages[0].direction}:${data.messages[0].from_number}->${data.messages[0].to_number}` : null,
+        });
+      } catch (e) {
+        setPbDebug({ error: String((e && e.message) || e) });
+      }
     };
     compute();
     const iv = setInterval(compute, 30000);
@@ -3618,6 +3627,11 @@ export default function LandLeadsAdminPage() {
                                 <div className="text-sm font-bold text-slate-100 truncate">
                                   {meta?.last ? `${channelLabel(meta.last)} · ${timeAgo(meta.last.created_at)}` : 'No contact yet'}
                                 </div>
+                                {pbDebug && (
+                                  <div className="text-[9px] text-amber-500/80 font-mono">
+                                    dbg recent:{pbDebug.recent ?? '-'} matched:{pbDebug.matched ?? '-'} leads:{pbDebug.leads ?? '-'} {pbDebug.error || ''}
+                                  </div>
+                                )}
                               </div>
                               <button
                                 onClick={(e) => { e.stopPropagation(); openConversation(lead); }}
