@@ -16,6 +16,14 @@ export default function NotificationBell({ userId }) {
   const handleNotificationClick = (notification) => {
     markAsRead(notification.id);
     setIsOpen(false);
+    // Open the specific lead in-page (works even when already on /admin/land,
+    // where a URL query change alone would not re-trigger anything).
+    try {
+      const leadId = new URL(notification.link, window.location.origin).searchParams.get('lead');
+      if (leadId) {
+        window.dispatchEvent(new CustomEvent('pb:open-lead', { detail: { leadId, type: notification.type } }));
+      }
+    } catch {}
   };
 
   const recentNotifications = notifications.slice(0, 5);

@@ -105,6 +105,29 @@ export async function POST(request) {
       if (lead.pipeline_status === 'NEW' || lead.status === 'new') {
         await supabase.from('leads').update({ status: 'contacted' }).eq('id', lead.id);
       }
+
+      // Notify the lead's owner (or the acquisition manager) so the bell lights
+      // up on an inbound text.
+      try {
+        let notifyUserId = lead.current_owner_id;
+        if (!notifyUserId) {
+          const { data: am } = await supabase.from('users').select('id').eq('role', 'acquisition_manager').limit(1).maybeSingle();
+          notifyUserId = am?.id || null;
+        }
+        if (notifyUserId) {
+          const leadName = lead.full_name || lead.name || lead.owner_name || 'a lead';
+          await supabase.from('notifications').insert({
+            user_id: notifyUserId,
+            from_user_id: null,
+            type: 'sms_inbound',
+            title: `New text from ${leadName}`,
+            message: String(message).slice(0, 200),
+            link: `/admin/land?lead=${lead.id}`,
+          });
+        }
+      } catch (e) {
+        console.error('[PB webhook] notify failed', e);
+      }
     } else {
       // App-direct outbound text (not sent through our app, so send-sms didn't
       // run): advance the rundown cadence here.
