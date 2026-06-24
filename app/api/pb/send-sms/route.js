@@ -41,6 +41,10 @@ export async function POST(request) {
         const { error } = await supabase.from('activities').insert({ ...row, read_at: new Date().toISOString() });
         if (error) await supabase.from('activities').insert(row);
         await supabase.from('leads').update({ last_activity_at: new Date().toISOString() }).eq('id', leadId);
+        // Texting an unowned lead claims it for the sender (don't steal owned ones).
+        if (userId) {
+          await supabase.from('leads').update({ current_owner_id: userId }).eq('id', leadId).is('current_owner_id', null);
+        }
       } catch (e) {
         console.error('[PB send-sms] timeline log failed', e);
       }

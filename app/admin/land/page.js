@@ -992,7 +992,7 @@ export default function LandLeadsAdminPage() {
     let nextOwner;
     if (currentOwner === adminUserId) nextOwner = acquisitionManagerId;
     else if (currentOwner === acquisitionManagerId) nextOwner = adminUserId;
-    else nextOwner = adminUserId; // null → admin claims
+    else nextOwner = currentUserId; // null → whoever clicked claims it (was wrongly hardcoded to admin)
     if (!nextOwner) {
       showToast('No teammate to toggle to', 'error');
       return;
@@ -1019,6 +1019,24 @@ export default function LandLeadsAdminPage() {
     ));
     const newName = nextOwner === adminUserId ? 'Jordan' : 'Anthony';
     showToast(`Now working: ${newName}`, 'success', lead.full_name || lead.name);
+  };
+
+  // Whoever first engages an unowned lead claims it, so it lands in THEIR feed
+  // (fixes "leads stay Unassigned after I work them"). No-op if already owned.
+  const claimLeadIfUnowned = async (leadId) => {
+    const lead = allLeads.find(l => l.id === leadId);
+    if (!lead || lead.current_owner_id || !currentUserId) return;
+    await supabase.from('leads').update({ current_owner_id: currentUserId }).eq('id', leadId);
+    setAllLeads(prev => prev.map(l => l.id === leadId ? { ...l, current_owner_id: currentUserId } : l));
+    if (selectedLead && selectedLead.id === leadId) {
+      setSelectedLead(prev => ({ ...prev, current_owner_id: currentUserId }));
+    }
+    await supabase.from('scheduled_tasks')
+      .update({ assigned_to: currentUserId })
+      .eq('lead_id', leadId).eq('status', 'pending');
+    setScheduledTasks(prev => prev.map(t =>
+      t.lead_id === leadId && t.status === 'pending' ? { ...t, assigned_to: currentUserId } : t
+    ));
   };
 
   // Push a lead to Anthony's queue. Creates a scheduled_task assigned to him at "now",
@@ -1148,6 +1166,7 @@ export default function LandLeadsAdminPage() {
 
     try {
       const lead = allLeads.find(l => l.id === activityLeadId);
+      await claimLeadIfUnowned(activityLeadId);
 
       // Try to log to activity_log table (may not exist yet)
       try {
@@ -1427,6 +1446,7 @@ export default function LandLeadsAdminPage() {
     const lead = allLeads.find(l => l.id === task.lead_id);
     const leadName = lead?.full_name || lead?.name || 'Lead';
     const { data: { user } } = await supabase.auth.getUser();
+    await claimLeadIfUnowned(task.lead_id);
 
     // Log the VM note
     await supabase.from('lead_notes').insert({
@@ -1513,6 +1533,7 @@ export default function LandLeadsAdminPage() {
     const lead = allLeads.find(l => l.id === task.lead_id);
     const leadName = lead?.full_name || lead?.name || 'Lead';
     const { data: { user } } = await supabase.auth.getUser();
+    await claimLeadIfUnowned(task.lead_id);
 
     await supabase.from('lead_notes').insert({
       lead_id: task.lead_id, user_id: user?.id,
@@ -1557,6 +1578,7 @@ export default function LandLeadsAdminPage() {
       const { data: { user } } = await supabase.auth.getUser();
       const lead = convoCompleteTask.lead;
       const leadName = lead?.full_name || lead?.name || 'Lead';
+      await claimLeadIfUnowned(convoCompleteTask.lead_id);
 
       // Log notes
       if (convoNotes.trim()) {
