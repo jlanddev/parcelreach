@@ -10,6 +10,9 @@ import area from '@turf/area';
 import ConversationModal from '@/components/ConversationModal';
 import { timeAgo, channelLabel } from '@/lib/format';
 
+// Last 10 digits of a phone — the stable key for matching messages to leads.
+const phoneKey = (p) => (p || '').replace(/\D/g, '').slice(-10);
+
 export default function LandLeadsAdminPage() {
   const router = useRouter();
   const [organizations, setOrganizations] = useState([]);
@@ -116,7 +119,6 @@ export default function LandLeadsAdminPage() {
   const [conversationLead, setConversationLead] = useState(null); // open iMessage-style thread
   const [contactMeta, setContactMeta] = useState({}); // leadId -> { last, unread } for cards
   const [contactRefresh, setContactRefresh] = useState(0); // bump to reload contactMeta
-  const [pbDebug, setPbDebug] = useState(null); // TEMP diagnostic for card summaries
 
   // Live: any new text/call activity refreshes the cards' Last Contacted + unread.
   useEffect(() => {
@@ -138,14 +140,6 @@ export default function LandLeadsAdminPage() {
   useEffect(() => {
     if (!allLeads.length) return;
     let cancelled = false;
-    const last10 = (p) => (p || '').replace(/\D/g, '').slice(-10);
-    const phoneIndex = new Map();
-    for (const l of allLeads) {
-      for (const p of [l.phone, l.owner_phone]) {
-        const k = last10(p);
-        if (k.length === 10 && !phoneIndex.has(k)) phoneIndex.set(k, l.id);
-      }
-    }
     const compute = async () => {
       try {
         const res = await fetch('/api/pb/recent?limit=100');
@@ -155,14 +149,16 @@ export default function LandLeadsAdminPage() {
         try {
           lastViewed = JSON.parse(localStorage.getItem('pb_last_viewed') || '{}');
         } catch {}
+        // Key by phone (last 10 digits), NOT lead id — so every lead record
+        // sharing a number (duplicates included) gets the summary.
         const meta = {};
         for (const m of data.messages) {
           const outbound = m.direction === 'outbound';
-          const leadId = phoneIndex.get(last10(outbound ? m.to_number : m.from_number));
-          if (!leadId) continue;
+          const key = phoneKey(outbound ? m.to_number : m.from_number);
+          if (key.length !== 10) continue;
           const ts = m.sent_at || m.created_at;
-          if (!meta[leadId]) {
-            meta[leadId] = {
+          if (!meta[key]) {
+            meta[key] = {
               last: {
                 activity_type: 'TEXT',
                 direction: outbound ? 'OUTBOUND' : 'INBOUND',
@@ -173,20 +169,12 @@ export default function LandLeadsAdminPage() {
             };
           }
           if (!outbound) {
-            const lv = lastViewed[leadId];
-            if (!lv || new Date(ts) > new Date(lv)) meta[leadId].unread += 1;
+            const lv = lastViewed[key];
+            if (!lv || new Date(ts) > new Date(lv)) meta[key].unread += 1;
           }
         }
         setContactMeta(meta);
-        setPbDebug({
-          recent: data.messages.length,
-          matched: Object.keys(meta).length,
-          leads: phoneIndex.size,
-          sample: data.messages[0] ? `${data.messages[0].direction}:${data.messages[0].from_number}->${data.messages[0].to_number}` : null,
-        });
-      } catch (e) {
-        setPbDebug({ error: String((e && e.message) || e) });
-      }
+      } catch {}
     };
     compute();
     const iv = setInterval(compute, 30000);
@@ -198,9 +186,10 @@ export default function LandLeadsAdminPage() {
 
   // Mark a lead's thread viewed (clears its unread badge) and open it.
   const openConversation = (lead) => {
+    const key = phoneKey(lead?.phone || lead?.owner_phone);
     try {
       const lv = JSON.parse(localStorage.getItem('pb_last_viewed') || '{}');
-      lv[lead.id] = new Date().toISOString();
+      if (key) lv[key] = new Date().toISOString();
       localStorage.setItem('pb_last_viewed', JSON.stringify(lv));
     } catch {}
     setConversationLead(lead);
@@ -3617,7 +3606,7 @@ export default function LandLeadsAdminPage() {
                     <div className="p-5">
                       {/* LAST CONTACTED + MESSAGES (Project Blue) */}
                       {(() => {
-                        const meta = contactMeta[lead.id];
+                        const meta = contactMeta[phoneKey(lead.phone || lead.owner_phone)];
                         const unread = meta?.unread || 0;
                         return (
                           <div className="mb-4 pb-3 border-b border-slate-700/40">
@@ -3627,11 +3616,6 @@ export default function LandLeadsAdminPage() {
                                 <div className="text-sm font-bold text-slate-100 truncate">
                                   {meta?.last ? `${channelLabel(meta.last)} · ${timeAgo(meta.last.created_at)}` : 'No contact yet'}
                                 </div>
-                                {pbDebug && (
-                                  <div className="text-[9px] text-amber-500/80 font-mono">
-                                    dbg recent:{pbDebug.recent ?? '-'} matched:{pbDebug.matched ?? '-'} leads:{pbDebug.leads ?? '-'} {pbDebug.error || ''}
-                                  </div>
-                                )}
                               </div>
                               <button
                                 onClick={(e) => { e.stopPropagation(); openConversation(lead); }}
