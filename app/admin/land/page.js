@@ -225,29 +225,29 @@ export default function LandLeadsAdminPage() {
 
   // Batch-load recent conversation notes for every visible lead (all authors).
   useEffect(() => {
-    const ids = allLeads.map((l) => l.id).filter(Boolean);
-    if (!ids.length) return;
+    if (!allLeads.length) return;
     let cancelled = false;
     const loadNotes = async () => {
+      // Fetch recent notes GLOBALLY (not .in() over hundreds of lead ids, which
+      // overflows the request URL and fails). Group by lead_id client-side.
+      // PostgREST ilike wildcard is *, not % — exclude auto-activity logs.
       const { data } = await supabase
         .from('lead_notes')
         .select('id, lead_id, content, created_at, user_id')
-        .in('lead_id', ids)
-        // Exclude high-volume auto-activity logs so real notes aren't crowded out.
-        .not('content', 'ilike', '[VM]%')
-        .not('content', 'ilike', '[TEXT]%')
-        .not('content', 'ilike', '[CALL]%')
-        .not('content', 'ilike', '[EMAIL]%')
-        .not('content', 'ilike', '[DAILY RUNDOWN]%')
+        .not('content', 'ilike', '[VM]*')
+        .not('content', 'ilike', '[TEXT]*')
+        .not('content', 'ilike', '[CALL]*')
+        .not('content', 'ilike', '[EMAIL]*')
+        .not('content', 'ilike', '[DAILY RUNDOWN]*')
         .order('created_at', { ascending: false })
-        .limit(1000);
+        .limit(1500);
       if (cancelled || !data) return;
       const map = {};
       for (const n of data) {
         if (!isConversationNote(n.content)) continue;
-        (map[n.lead_id] = map[n.lead_id] || []).push(n);
+        if (!map[n.lead_id]) map[n.lead_id] = [];
+        if (map[n.lead_id].length < 3) map[n.lead_id].push(n); // newest 3
       }
-      for (const k of Object.keys(map)) map[k] = map[k].slice(0, 3); // newest 3
       setNotesByLead(map);
     };
     loadNotes();
