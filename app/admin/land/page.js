@@ -9,6 +9,7 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import area from '@turf/area';
 import ConversationModal from '@/components/ConversationModal';
 import NotesModal from '@/components/NotesModal';
+import NotificationBell from '@/components/NotificationBell';
 import { timeAgo, channelLabel } from '@/lib/format';
 
 // A conversation note is anything that isn't an auto-logged activity marker.
@@ -3350,6 +3351,7 @@ export default function LandLeadsAdminPage() {
                 </span>
               </div>
             )}
+            {currentUserId && <NotificationBell userId={currentUserId} />}
             <button
               onClick={async () => {
                 await supabase.auth.signOut();
