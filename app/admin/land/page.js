@@ -826,14 +826,12 @@ export default function LandLeadsAdminPage() {
     {
       const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
       const existingTaskLeadIds = new Set((tasksData || []).map(t => t.lead_id));
-      // Acquisition Manager: auto-schedule ALL of his 7 leads (regardless of age) so his
-      // rundown isn't empty on first login. Admin: only same-day leads (existing behavior).
-      const isAM = currentUserRole === 'acquisition_manager';
+      // Speed-to-lead: ONLY today's fresh leads auto-surface (both roles). Old leads no
+      // longer auto-flood the rundown — they appear only when they have a real task
+      // (follow-up, appointment, or one a rep deliberately schedules).
       const newLeadsWithoutTask = (leadsData || []).filter(l => {
-        if (!isAM) {
-          const created = new Date(l.created_at);
-          if (created < todayStart) return false; // Admin: only today's leads
-        }
+        const created = new Date(l.created_at);
+        if (created < todayStart) return false; // only today's leads
         if (existingTaskLeadIds.has(l.id)) return false; // Already has a task
         const status = (l.pipeline_status || l.status || '').toUpperCase();
         if (['DEAD', 'CLOSED', 'NURTURE', 'UNDER_CONTRACT', 'ANTHONY_CONTACTED', 'APPT_SET_FOR_JORDAN'].includes(status)) return false;
@@ -859,33 +857,10 @@ export default function LandLeadsAdminPage() {
         if (newTasks) setScheduledTasks(prev => [...prev, ...newTasks]);
       }
 
-      // WATCHDOG: any non-terminal lead with no pending task gets a generic check-in
-      // scheduled for today so nothing falls through. Assigned to current owner (fallback Anthony).
-      const allPendingLeadIds = new Set((tasksData || []).map(t => t.lead_id));
-      const orphanedLeads = (leadsData || []).filter(l => {
-        const s = (l.pipeline_status || l.status || '').toUpperCase();
-        if (TERMINAL_STATUSES.includes(s)) return false;
-        if (l.status === 'archived') return false;
-        if (existingTaskLeadIds.has(l.id)) return false;
-        if (allPendingLeadIds.has(l.id)) return false;
-        return true;
-      });
-      if (orphanedLeads.length > 0) {
-        const today11 = new Date(); today11.setHours(11, 0, 0, 0);
-        const watchdogTasks = orphanedLeads.map(l => ({
-          lead_id: l.id,
-          created_by: user?.id,
-          assigned_to: l.current_owner_id || acquisitionManagerId || user?.id,
-          task_type: 'callback',
-          title: `Check In: ${l.full_name || l.name || 'Unknown'}`,
-          description: 'Watchdog: no follow-up scheduled — check in and decide next step',
-          due_at: (today11 > new Date() ? today11 : new Date()).toISOString(),
-          status: 'pending',
-          priority: 'high'
-        }));
-        const { data: dogTasks } = await supabase.from('scheduled_tasks').insert(watchdogTasks).select();
-        if (dogTasks) setScheduledTasks(prev => [...prev, ...dogTasks]);
-      }
+      // WATCHDOG DISABLED — old non-terminal leads no longer auto-generate "Check In"
+      // tasks (it was flooding the rundown with every lead). Leads now surface only via
+      // speed-to-lead (today's new leads) or a deliberately created task / follow-up /
+      // appointment. We'll add smarter "pull old leads back in" logic later.
     }
   };
 
