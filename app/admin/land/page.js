@@ -829,48 +829,11 @@ export default function LandLeadsAdminPage() {
     setScheduledTasks(tasksData || []);
     setLoading(false);
 
-    // Auto-schedule + watchdog run on EVERY fetchAllData (every 30s) so fresh leads
-    // landing mid-session still get a task immediately. Both branches are idempotent —
-    // they check for an existing pending task per lead before inserting.
-    {
-      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-      const existingTaskLeadIds = new Set((tasksData || []).map(t => t.lead_id));
-      // Speed-to-lead: ONLY today's fresh leads auto-surface (both roles). Old leads no
-      // longer auto-flood the rundown — they appear only when they have a real task
-      // (follow-up, appointment, or one a rep deliberately schedules).
-      const newLeadsWithoutTask = (leadsData || []).filter(l => {
-        const created = new Date(l.created_at);
-        if (created < todayStart) return false; // only today's leads
-        if (existingTaskLeadIds.has(l.id)) return false; // Already has a task
-        const status = (l.pipeline_status || l.status || '').toUpperCase();
-        if (['DEAD', 'CLOSED', 'NURTURE', 'UNDER_CONTRACT', 'ANTHONY_CONTACTED', 'APPT_SET_FOR_JORDAN'].includes(status)) return false;
-        return true;
-      });
-
-      if (newLeadsWithoutTask.length > 0) {
-        const { data: { user } } = await supabase.auth.getUser();
-        const tasksToInsert = newLeadsWithoutTask.map(l => ({
-          lead_id: l.id,
-          created_by: user?.id,
-          // Task lands with whoever owns the lead — falls back to the logged-in user if unset.
-          assigned_to: l.current_owner_id || user?.id,
-          task_type: 'callback',
-          title: `NEW LEAD: ${l.full_name || l.name || 'Unknown'}`,
-          description: `New lead - contact immediately`,
-          // Speed-to-lead: fresh leads land at "now" so they surface to the top of the rundown.
-          due_at: new Date().toISOString(),
-          status: 'pending',
-          priority: 'high'
-        }));
-        const { data: newTasks } = await supabase.from('scheduled_tasks').insert(tasksToInsert).select();
-        if (newTasks) setScheduledTasks(prev => [...prev, ...newTasks]);
-      }
-
-      // WATCHDOG DISABLED — old non-terminal leads no longer auto-generate "Check In"
-      // tasks (it was flooding the rundown with every lead). Leads now surface only via
-      // speed-to-lead (today's new leads) or a deliberately created task / follow-up /
-      // appointment. We'll add smarter "pull old leads back in" logic later.
-    }
+    // AUTO-TASK GENERATION DISABLED (speed-to-lead + watchdog). The rundown now
+    // holds only DELIBERATE tasks: appointments, text-cadence follow-ups, and
+    // tasks a rep schedules by hand. New leads are triaged from the PPC Inflow
+    // tab, not auto-pushed here, so the rundown can't auto-flood. Smarter "push a
+    // lead into the rundown" logic will come later.
   };
 
   // Update lead pipeline status
