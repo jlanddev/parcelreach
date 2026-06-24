@@ -91,6 +91,7 @@ export default function NotificationBell({ userId, onOpen }) {
                 recentNotifications.map(notification => (
                   <button
                     key={notification.id}
+                    type="button"
                     onClick={() => {
                       markAsRead(notification.id);
                       setIsOpen(false);

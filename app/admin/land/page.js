@@ -278,13 +278,19 @@ export default function LandLeadsAdminPage() {
   const handleOpenNotification = async (n) => {
     let leadId = null;
     try { leadId = new URL(n?.link || '', window.location.origin).searchParams.get('lead'); } catch {}
-    if (!leadId) return;
+    if (!leadId) {
+      showToast('This alert was created before deep-links existed, so it has no lead attached. Newer ones open the lead.', 'error');
+      return;
+    }
     let lead = (allLeadsRef.current || []).find((l) => l.id === leadId);
     if (!lead) {
       const { data } = await supabase.from('leads').select('*').eq('id', leadId).maybeSingle();
       lead = data;
     }
-    if (!lead) return;
+    if (!lead) {
+      showToast('Could not load that lead.', 'error');
+      return;
+    }
     if (n.type === 'sms_inbound') setConversationLead(lead);
     else setNotesModalLead(lead);
   };
