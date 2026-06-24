@@ -130,41 +130,73 @@ export default function LandLeadsAdminPage() {
     };
   }, []);
 
-  // Load latest contact + unread-inbound count per visible lead.
+  // Card summaries (Last Contacted + on-card snippet + unread) come straight
+  // from Project Blue's recent-message feed in one call, so they always match
+  // reality regardless of where a text was sent from. Unread is tracked per
+  // lead in localStorage (cleared when you open the thread).
   useEffect(() => {
-    const ids = allLeads.map((l) => l.id).filter(Boolean);
-    if (!ids.length) return;
+    if (!allLeads.length) return;
     let cancelled = false;
-    (async () => {
-      const cols = 'lead_id, activity_type, direction, message_content, created_at, read_at';
-      let { data: rows, error } = await supabase
-        .from('activities')
-        .select(cols)
-        .in('lead_id', ids)
-        .in('activity_type', ['TEXT', 'CALL'])
-        .order('created_at', { ascending: false });
-      if (error) {
-        // read_at column may not exist pre-migration — retry without it.
-        const r2 = await supabase
-          .from('activities')
-          .select('lead_id, activity_type, direction, message_content, created_at')
-          .in('lead_id', ids)
-          .in('activity_type', ['TEXT', 'CALL'])
-          .order('created_at', { ascending: false });
-        rows = r2.data;
+    const last10 = (p) => (p || '').replace(/\D/g, '').slice(-10);
+    const phoneIndex = new Map();
+    for (const l of allLeads) {
+      for (const p of [l.phone, l.owner_phone]) {
+        const k = last10(p);
+        if (k.length === 10 && !phoneIndex.has(k)) phoneIndex.set(k, l.id);
       }
-      if (cancelled || !rows) return;
-      const meta = {};
-      for (const a of rows) {
-        if (!meta[a.lead_id]) meta[a.lead_id] = { last: a, unread: 0 };
-        if (a.direction === 'INBOUND' && 'read_at' in a && !a.read_at) meta[a.lead_id].unread += 1;
-      }
-      setContactMeta(meta);
-    })();
+    }
+    const compute = async () => {
+      try {
+        const res = await fetch('/api/pb/recent?limit=100');
+        const data = await res.json();
+        if (cancelled || !Array.isArray(data.messages)) return;
+        let lastViewed = {};
+        try {
+          lastViewed = JSON.parse(localStorage.getItem('pb_last_viewed') || '{}');
+        } catch {}
+        const meta = {};
+        for (const m of data.messages) {
+          const outbound = m.direction === 'outbound';
+          const leadId = phoneIndex.get(last10(outbound ? m.to_number : m.from_number));
+          if (!leadId) continue;
+          const ts = m.sent_at || m.created_at;
+          if (!meta[leadId]) {
+            meta[leadId] = {
+              last: {
+                activity_type: 'TEXT',
+                direction: outbound ? 'OUTBOUND' : 'INBOUND',
+                message_content: m.content,
+                created_at: ts,
+              },
+              unread: 0,
+            };
+          }
+          if (!outbound) {
+            const lv = lastViewed[leadId];
+            if (!lv || new Date(ts) > new Date(lv)) meta[leadId].unread += 1;
+          }
+        }
+        setContactMeta(meta);
+      } catch {}
+    };
+    compute();
+    const iv = setInterval(compute, 30000);
     return () => {
       cancelled = true;
+      clearInterval(iv);
     };
   }, [allLeads.length, contactRefresh]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Mark a lead's thread viewed (clears its unread badge) and open it.
+  const openConversation = (lead) => {
+    try {
+      const lv = JSON.parse(localStorage.getItem('pb_last_viewed') || '{}');
+      lv[lead.id] = new Date().toISOString();
+      localStorage.setItem('pb_last_viewed', JSON.stringify(lv));
+    } catch {}
+    setConversationLead(lead);
+    setContactRefresh((t) => t + 1);
+  };
   const [rundownFilter, setRundownFilter] = useState(null); // For Daily Rundown tile clicks
   const [toast, setToast] = useState(null); // { message, type, leadName }
   const [actionInProgress, setActionInProgress] = useState(null); // { leadId, action }
@@ -3588,7 +3620,7 @@ export default function LandLeadsAdminPage() {
                                 </div>
                               </div>
                               <button
-                                onClick={(e) => { e.stopPropagation(); setConversationLead(lead); }}
+                                onClick={(e) => { e.stopPropagation(); openConversation(lead); }}
                                 title="Open conversation"
                                 className="relative px-3 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 text-xs font-medium flex items-center gap-1.5 flex-shrink-0"
                               >
@@ -3850,7 +3882,7 @@ export default function LandLeadsAdminPage() {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              setConversationLead(lead);
+                              openConversation(lead);
                             }}
                             title="Open conversation"
                             className="p-1.5 bg-blue-600/20 hover:bg-blue-600/40 rounded text-blue-400 transition flex-shrink-0"
