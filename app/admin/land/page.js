@@ -2713,6 +2713,521 @@ export default function LandLeadsAdminPage() {
     return `${days}d ago`;
   };
 
+
+  // Rich lead card shared by PPC Inflow and every pipeline-bucket tab.
+  const renderLeadCard = (lead) => (
+                  <div
+                    key={lead.id}
+                    className="bg-slate-800/50 border border-slate-700/50 rounded-xl overflow-hidden hover:border-blue-500/50 hover:shadow-xl hover:shadow-blue-500/10 transition-all"
+                  >
+                    {/* NEXT TOUCH POINT BANNER - Always at TOP */}
+                    {(() => {
+                      const hasCallback = lead.next_callback_at && new Date(lead.next_callback_at) > new Date();
+                      const isOverdue = lead.next_callback_at && new Date(lead.next_callback_at) < new Date();
+                      const smartStatus = getSmartStatus(lead);
+                      const needsAction = smartStatus === 'NEW' || smartStatus === 'NEEDS_ATTENTION';
+
+                      if (hasCallback) {
+                        return (
+                          <div className="bg-orange-500/30 border-b border-orange-500/50 px-4 py-3 flex items-center gap-2">
+                            <svg className="w-5 h-5 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span className="font-semibold text-orange-300">
+                              Next Touch: {new Date(lead.next_callback_at).toLocaleDateString()} at {new Date(lead.next_callback_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                            </span>
+                          </div>
+                        );
+                      } else if (isOverdue) {
+                        return (
+                          <div className="bg-red-500/30 border-b border-red-500/50 px-4 py-3 flex items-center gap-2">
+                            <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                            <span className="font-semibold text-red-300">
+                              OVERDUE: Was due {new Date(lead.next_callback_at).toLocaleDateString()}
+                            </span>
+                          </div>
+                        );
+                      } else if (needsAction) {
+                        return (
+                          <div className={`${smartStatus === 'NEW' ? 'bg-green-500/30 border-green-500/50' : 'bg-red-500/30 border-red-500/50'} border-b px-4 py-3 flex items-center gap-2`}>
+                            <svg className={`w-5 h-5 ${smartStatus === 'NEW' ? 'text-green-400' : 'text-red-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                            </svg>
+                            <span className={`font-semibold ${smartStatus === 'NEW' ? 'text-green-300' : 'text-red-300'}`}>
+                              {smartStatus === 'NEW' ? 'NEW LEAD - Contact Now!' : 'NEEDS ATTENTION - Follow Up!'}
+                            </span>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+
+                    <div className="p-5">
+                      {/* LAST CONTACTED + MESSAGES (Project Blue) */}
+                      {(() => {
+                        const meta = contactMeta[phoneKey(lead.phone || lead.owner_phone)];
+                        const unread = meta?.unread || 0;
+                        return (
+                          <div className="mb-4 pb-3 border-b border-slate-700/40">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="text-[10px] uppercase tracking-wide text-slate-500">Last Contacted</div>
+                                <div className="text-sm font-bold text-slate-100 truncate">
+                                  {meta?.last ? `${channelLabel(meta.last)} · ${timeAgo(meta.last.created_at)}` : 'No contact yet'}
+                                </div>
+                              </div>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); openConversation(lead); }}
+                                title="Open conversation"
+                                className="relative px-3 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 text-xs font-medium flex items-center gap-1.5 flex-shrink-0"
+                              >
+                                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                                  <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
+                                </svg>
+                                Messages
+                                {unread > 0 && (
+                                  <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                                    {unread}
+                                  </span>
+                                )}
+                              </button>
+                            </div>
+                            {meta?.last?.message_content && (
+                              <div className={`text-xs mt-1 truncate ${unread ? 'text-slate-100 font-medium' : 'text-slate-400'}`}>
+                                {meta.last.direction === 'INBOUND' ? '↩ ' : '→ '}
+                                {meta.last.message_content}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {/* STATUS DROPDOWN - Prominent at top */}
+                      <div className="mb-4">
+                        {(() => {
+                          const smartStatus = getSmartStatus(lead);
+                          const statusInfo = STATUS_CONFIG[smartStatus] || STATUS_CONFIG.NEW;
+                          return (
+                            <select
+                              value={smartStatus}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                updateLeadStatus(lead.id, e.target.value);
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              className={`w-full px-4 py-2.5 text-sm font-bold rounded-lg cursor-pointer border-2 focus:outline-none focus:ring-2 focus:ring-blue-500 ${statusInfo.color}`}
+                            >
+                              {PIPELINE_STATUSES.map(status => (
+                                <option key={status.value} value={status.value}>{status.label}</option>
+                              ))}
+                            </select>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Owner Name & Time */}
+                      <div className="mb-4">
+                        <input
+                          type="text"
+                          value={lead.name || lead.full_name || ''}
+                          onChange={async (e) => {
+                            const { error } = await supabase
+                              .from('leads')
+                              .update({ name: e.target.value, full_name: e.target.value })
+                              .eq('id', lead.id);
+                            if (!error) {
+                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, name: e.target.value, full_name: e.target.value} : l));
+                            }
+                          }}
+                          className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-2 text-white font-semibold text-lg focus:outline-none focus:border-blue-500/50"
+                          placeholder="Owner name"
+                        />
+                        <div className="mt-1 text-xs text-slate-500">Lead received {timeAgo(lead.created_at)}</div>
+                      </div>
+
+                    {/* Property Location */}
+                    <div className="space-y-2 mb-3 pb-3 border-b border-slate-700/50">
+                      <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Property Location</div>
+                      <input
+                        type="text"
+                        value={lead.form_data?.streetAddress || lead.street_address || lead.address || ''}
+                        onChange={async (e) => {
+                          const updatedFormData = { ...lead.form_data, streetAddress: e.target.value };
+                          const { error } = await supabase
+                            .from('leads')
+                            .update({
+                              form_data: updatedFormData,
+                              street_address: e.target.value,
+                              address: e.target.value
+                            })
+                            .eq('id', lead.id);
+                          if (!error) {
+                            setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, street_address: e.target.value, address: e.target.value} : l));
+                          }
+                        }}
+                        className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50"
+                        placeholder="Street address"
+                      />
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={lead.form_data?.propertyCounty || lead.property_county || lead.county || ''}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={async (e) => {
+                            const updatedFormData = { ...lead.form_data, propertyCounty: e.target.value };
+                            const { error } = await supabase
+                              .from('leads')
+                              .update({
+                                form_data: updatedFormData,
+                                property_county: e.target.value,
+                                county: e.target.value
+                              })
+                              .eq('id', lead.id);
+                            if (!error) {
+                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, property_county: e.target.value, county: e.target.value} : l));
+                            }
+                          }}
+                          className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50"
+                          placeholder="County"
+                        />
+                        <input
+                          type="text"
+                          value={lead.form_data?.propertyState || lead.property_state || lead.state || ''}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={async (e) => {
+                            const updatedFormData = { ...lead.form_data, propertyState: e.target.value };
+                            const { error } = await supabase
+                              .from('leads')
+                              .update({
+                                form_data: updatedFormData,
+                                property_state: e.target.value,
+                                state: e.target.value
+                              })
+                              .eq('id', lead.id);
+                            if (!error) {
+                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, property_state: e.target.value, state: e.target.value} : l));
+                            }
+                          }}
+                          className="w-20 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50"
+                          placeholder="State"
+                        />
+                      </div>
+                      <input
+                        type="text"
+                        value={lead.form_data?.acres || lead.acres || lead.acreage || ''}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={async (e) => {
+                          const updatedFormData = { ...lead.form_data, acres: e.target.value };
+                          const { error } = await supabase
+                            .from('leads')
+                            .update({
+                              form_data: updatedFormData,
+                              acres: parseFloat(e.target.value) || null,
+                              acreage: parseFloat(e.target.value) || null
+                            })
+                            .eq('id', lead.id);
+                          if (!error) {
+                            setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, acres: parseFloat(e.target.value) || null, acreage: parseFloat(e.target.value) || null} : l));
+                          }
+                        }}
+                        className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm font-semibold text-orange-400 focus:outline-none focus:border-blue-500/50"
+                        placeholder="Acres"
+                      />
+                    </div>
+
+                    {/* Property Details */}
+                    <div className="space-y-2 mb-3 pb-3 border-b border-slate-700/50">
+                      <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Property Details</div>
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        {lead.form_data?.homeOnProperty && (
+                          <div>
+                            <span className="text-slate-500">Home:</span>{' '}
+                            <span className={lead.form_data.homeOnProperty === 'no' ? 'text-green-400 font-semibold' : 'text-yellow-400'}>
+                              {lead.form_data.homeOnProperty.toUpperCase()}
+                            </span>
+                          </div>
+                        )}
+                        {lead.form_data?.propertyListed && (
+                          <div>
+                            <span className="text-slate-500">Listed:</span>{' '}
+                            <span className={lead.form_data.propertyListed === 'no' ? 'text-green-400 font-semibold' : 'text-yellow-400'}>
+                              {lead.form_data.propertyListed.toUpperCase()}
+                            </span>
+                          </div>
+                        )}
+                        {lead.form_data?.isInherited && (
+                          <div>
+                            <span className="text-slate-500">Inherited:</span>{' '}
+                            <span className={lead.form_data.isInherited === 'yes' ? 'text-purple-400 font-semibold' : 'text-slate-300'}>
+                              {lead.form_data.isInherited.toUpperCase()}
+                            </span>
+                          </div>
+                        )}
+                        {lead.form_data?.ownedFourYears && (
+                          <div>
+                            <span className="text-slate-500">4+ Years:</span>{' '}
+                            <span className={lead.form_data.ownedFourYears === 'yes' ? 'text-green-400 font-semibold' : 'text-yellow-400'}>
+                              {lead.form_data.ownedFourYears.toUpperCase()}
+                            </span>
+                          </div>
+                        )}
+                        {lead.form_data?.namesOnDeed && (
+                          <div className="col-span-2">
+                            <span className="text-slate-500">On Deed:</span>{' '}
+                            <span className="text-slate-300">{lead.form_data.namesOnDeed}</span>
+                          </div>
+                        )}
+                        {lead.form_data?.priceRange && (
+                          <div className="col-span-2 mt-1 pt-1 border-t border-slate-700/30">
+                            <span className="text-slate-500">Price Range:</span>{' '}
+                            <span className="text-green-400 font-semibold">{lead.form_data.priceRange.replace(/-/g, ' ').replace('plus', '+').replace('under', 'Under ').replace('k', 'K').replace('m', 'M')}</span>
+                          </div>
+                        )}
+                        {lead.form_data?.whySelling && (
+                          <div className="col-span-2 mt-1 pt-1 border-t border-slate-700/30">
+                            <span className="text-slate-500">Why Selling:</span>{' '}
+                            <span className="text-cyan-400 italic">{lead.form_data.whySelling}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Contact Info */}
+                    <div className="space-y-2 text-sm mb-3">
+                      <div className="flex items-center gap-2">
+                        <svg className="w-4 h-4 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                        </svg>
+                        <input
+                          type="email"
+                          value={lead.email || lead.owner_email || ''}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={async (e) => {
+                            const { error } = await supabase
+                              .from('leads')
+                              .update({ email: e.target.value, owner_email: e.target.value })
+                              .eq('id', lead.id);
+                            if (!error) {
+                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, email: e.target.value, owner_email: e.target.value} : l));
+                            }
+                          }}
+                          className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-slate-300 focus:outline-none focus:border-blue-500/50"
+                          placeholder="Email"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <svg className="w-4 h-4 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                        </svg>
+                        <input
+                          type="tel"
+                          value={lead.phone || lead.owner_phone || ''}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={async (e) => {
+                            const { error } = await supabase
+                              .from('leads')
+                              .update({ phone: e.target.value, owner_phone: e.target.value })
+                              .eq('id', lead.id);
+                            if (!error) {
+                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, phone: e.target.value, owner_phone: e.target.value} : l));
+                            }
+                          }}
+                          className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-slate-300 focus:outline-none focus:border-blue-500/50"
+                          placeholder="Phone"
+                        />
+                        {(lead.phone || lead.owner_phone) && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openConversation(lead);
+                            }}
+                            title="Open conversation"
+                            className="p-1.5 bg-blue-600/20 hover:bg-blue-600/40 rounded text-blue-400 transition flex-shrink-0"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                      {lead.ip_address && (
+                        <div className="flex items-center gap-2 text-slate-400 text-xs">
+                          <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+                          </svg>
+                          IP: {lead.ip_address}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Quick CRM Actions */}
+                    <div className="mt-3 pt-3 border-t border-slate-700/50">
+                      <div className="flex gap-1 mb-2">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openActivityModal(lead.id, 'CALL_OUTBOUND');
+                          }}
+                          title="Log Call"
+                          className="flex-1 px-2 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                          </svg>
+                          Call
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openActivityModal(lead.id, 'TEXT_SENT');
+                          }}
+                          title="Log Text"
+                          className="flex-1 px-2 py-1.5 bg-green-600/20 hover:bg-green-600/40 text-green-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                          </svg>
+                          Text
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openActivityModal(lead.id, 'EMAIL_SENT');
+                          }}
+                          title="Log Email"
+                          className="flex-1 px-2 py-1.5 bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                          </svg>
+                          Email
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openActivityModal(lead.id, 'NOTE_ADDED');
+                          }}
+                          title="Add Note"
+                          className="flex-1 px-2 py-1.5 bg-slate-600/20 hover:bg-slate-600/40 text-slate-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                          Note
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openScheduleModal(lead.id);
+                          }}
+                          title="Schedule Task"
+                          className="flex-1 px-2 py-1.5 bg-orange-600/20 hover:bg-orange-600/40 text-orange-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                          Schedule
+                        </button>
+                      </div>
+                      {/* Last Activity Indicator */}
+                      {lead.last_activity_at && (
+                        <div className="text-xs text-slate-500 mb-2">
+                          Last activity: {new Date(lead.last_activity_at).toLocaleDateString()} at {new Date(lead.last_activity_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Actions */}
+                    <div className="mt-2 pt-2 border-t border-slate-700/50 flex gap-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setLeadForMapSearch(lead);
+                          setFindMapModalOpen(true);
+                          setKmlFile(null);
+                          setUploadedGeometry(null);
+                        }}
+                        className={`flex-1 px-4 py-2 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2 ${lead.parcel_geometry ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}
+                      >
+                        {lead.parcel_geometry ? (
+                          <>
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            </svg>
+                            Map Attached
+                          </>
+                        ) : (
+                          <>
+                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+                            </svg>
+                            Attach Map
+                          </>
+                        )}
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openCalendarModal(lead);
+                        }}
+                        className="px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        Calendar
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openLeadDetails(lead);
+                        }}
+                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold rounded-lg transition-colors"
+                      >
+                        View Details
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedLead(lead);
+                          setAssignModalOpen(true);
+                          setSelectedOrgsForAssignment([]);
+                          setLeadPrice('');
+                        }}
+                        className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white text-sm font-semibold rounded-lg transition-colors"
+                      >
+                        Assign
+                      </button>
+                    </div>
+
+                    {/* Archive / Delete */}
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); archiveLead(lead.id); }}
+                        className="flex-1 px-3 py-1.5 bg-zinc-700/50 hover:bg-zinc-600/50 text-zinc-400 hover:text-zinc-300 text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>
+                        Archive
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); if (confirm(`Permanently delete ${lead.full_name || lead.name}? This cannot be undone.`)) deleteLead(lead.id); }}
+                        className="px-3 py-1.5 bg-red-900/30 hover:bg-red-800/40 text-red-400 hover:text-red-300 text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                        Delete
+                      </button>
+                    </div>
+
+                    {/* Footer */}
+                    <div className="mt-2 text-xs text-slate-500 text-center">
+                      {new Date(lead.created_at).toLocaleString()}
+                    </div>
+                    </div>{/* End p-5 wrapper */}
+                  </div>
+  );
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
       {/* Toast Notification */}
@@ -3576,518 +4091,7 @@ export default function LandLeadsAdminPage() {
                     (l.property_state || l.state || '').toLowerCase().includes(q) ||
                     (l.form_data?.streetAddress || '').toLowerCase().includes(q);
                 })
-                .map((lead) => (
-                  <div
-                    key={lead.id}
-                    className="bg-slate-800/50 border border-slate-700/50 rounded-xl overflow-hidden hover:border-blue-500/50 hover:shadow-xl hover:shadow-blue-500/10 transition-all"
-                  >
-                    {/* NEXT TOUCH POINT BANNER - Always at TOP */}
-                    {(() => {
-                      const hasCallback = lead.next_callback_at && new Date(lead.next_callback_at) > new Date();
-                      const isOverdue = lead.next_callback_at && new Date(lead.next_callback_at) < new Date();
-                      const smartStatus = getSmartStatus(lead);
-                      const needsAction = smartStatus === 'NEW' || smartStatus === 'NEEDS_ATTENTION';
-
-                      if (hasCallback) {
-                        return (
-                          <div className="bg-orange-500/30 border-b border-orange-500/50 px-4 py-3 flex items-center gap-2">
-                            <svg className="w-5 h-5 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                            </svg>
-                            <span className="font-semibold text-orange-300">
-                              Next Touch: {new Date(lead.next_callback_at).toLocaleDateString()} at {new Date(lead.next_callback_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                            </span>
-                          </div>
-                        );
-                      } else if (isOverdue) {
-                        return (
-                          <div className="bg-red-500/30 border-b border-red-500/50 px-4 py-3 flex items-center gap-2">
-                            <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                            </svg>
-                            <span className="font-semibold text-red-300">
-                              OVERDUE: Was due {new Date(lead.next_callback_at).toLocaleDateString()}
-                            </span>
-                          </div>
-                        );
-                      } else if (needsAction) {
-                        return (
-                          <div className={`${smartStatus === 'NEW' ? 'bg-green-500/30 border-green-500/50' : 'bg-red-500/30 border-red-500/50'} border-b px-4 py-3 flex items-center gap-2`}>
-                            <svg className={`w-5 h-5 ${smartStatus === 'NEW' ? 'text-green-400' : 'text-red-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-                            </svg>
-                            <span className={`font-semibold ${smartStatus === 'NEW' ? 'text-green-300' : 'text-red-300'}`}>
-                              {smartStatus === 'NEW' ? 'NEW LEAD - Contact Now!' : 'NEEDS ATTENTION - Follow Up!'}
-                            </span>
-                          </div>
-                        );
-                      }
-                      return null;
-                    })()}
-
-                    <div className="p-5">
-                      {/* LAST CONTACTED + MESSAGES (Project Blue) */}
-                      {(() => {
-                        const meta = contactMeta[phoneKey(lead.phone || lead.owner_phone)];
-                        const unread = meta?.unread || 0;
-                        return (
-                          <div className="mb-4 pb-3 border-b border-slate-700/40">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="min-w-0">
-                                <div className="text-[10px] uppercase tracking-wide text-slate-500">Last Contacted</div>
-                                <div className="text-sm font-bold text-slate-100 truncate">
-                                  {meta?.last ? `${channelLabel(meta.last)} · ${timeAgo(meta.last.created_at)}` : 'No contact yet'}
-                                </div>
-                              </div>
-                              <button
-                                onClick={(e) => { e.stopPropagation(); openConversation(lead); }}
-                                title="Open conversation"
-                                className="relative px-3 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 text-xs font-medium flex items-center gap-1.5 flex-shrink-0"
-                              >
-                                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                                  <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
-                                </svg>
-                                Messages
-                                {unread > 0 && (
-                                  <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
-                                    {unread}
-                                  </span>
-                                )}
-                              </button>
-                            </div>
-                            {meta?.last?.message_content && (
-                              <div className={`text-xs mt-1 truncate ${unread ? 'text-slate-100 font-medium' : 'text-slate-400'}`}>
-                                {meta.last.direction === 'INBOUND' ? '↩ ' : '→ '}
-                                {meta.last.message_content}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
-
-                      {/* STATUS DROPDOWN - Prominent at top */}
-                      <div className="mb-4">
-                        {(() => {
-                          const smartStatus = getSmartStatus(lead);
-                          const statusInfo = STATUS_CONFIG[smartStatus] || STATUS_CONFIG.NEW;
-                          return (
-                            <select
-                              value={smartStatus}
-                              onChange={(e) => {
-                                e.stopPropagation();
-                                updateLeadStatus(lead.id, e.target.value);
-                              }}
-                              onClick={(e) => e.stopPropagation()}
-                              className={`w-full px-4 py-2.5 text-sm font-bold rounded-lg cursor-pointer border-2 focus:outline-none focus:ring-2 focus:ring-blue-500 ${statusInfo.color}`}
-                            >
-                              {PIPELINE_STATUSES.map(status => (
-                                <option key={status.value} value={status.value}>{status.label}</option>
-                              ))}
-                            </select>
-                          );
-                        })()}
-                      </div>
-
-                      {/* Owner Name & Time */}
-                      <div className="mb-4">
-                        <input
-                          type="text"
-                          value={lead.name || lead.full_name || ''}
-                          onChange={async (e) => {
-                            const { error } = await supabase
-                              .from('leads')
-                              .update({ name: e.target.value, full_name: e.target.value })
-                              .eq('id', lead.id);
-                            if (!error) {
-                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, name: e.target.value, full_name: e.target.value} : l));
-                            }
-                          }}
-                          className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-2 text-white font-semibold text-lg focus:outline-none focus:border-blue-500/50"
-                          placeholder="Owner name"
-                        />
-                        <div className="mt-1 text-xs text-slate-500">Lead received {timeAgo(lead.created_at)}</div>
-                      </div>
-
-                    {/* Property Location */}
-                    <div className="space-y-2 mb-3 pb-3 border-b border-slate-700/50">
-                      <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Property Location</div>
-                      <input
-                        type="text"
-                        value={lead.form_data?.streetAddress || lead.street_address || lead.address || ''}
-                        onChange={async (e) => {
-                          const updatedFormData = { ...lead.form_data, streetAddress: e.target.value };
-                          const { error } = await supabase
-                            .from('leads')
-                            .update({
-                              form_data: updatedFormData,
-                              street_address: e.target.value,
-                              address: e.target.value
-                            })
-                            .eq('id', lead.id);
-                          if (!error) {
-                            setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, street_address: e.target.value, address: e.target.value} : l));
-                          }
-                        }}
-                        className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50"
-                        placeholder="Street address"
-                      />
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={lead.form_data?.propertyCounty || lead.property_county || lead.county || ''}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={async (e) => {
-                            const updatedFormData = { ...lead.form_data, propertyCounty: e.target.value };
-                            const { error } = await supabase
-                              .from('leads')
-                              .update({
-                                form_data: updatedFormData,
-                                property_county: e.target.value,
-                                county: e.target.value
-                              })
-                              .eq('id', lead.id);
-                            if (!error) {
-                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, property_county: e.target.value, county: e.target.value} : l));
-                            }
-                          }}
-                          className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50"
-                          placeholder="County"
-                        />
-                        <input
-                          type="text"
-                          value={lead.form_data?.propertyState || lead.property_state || lead.state || ''}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={async (e) => {
-                            const updatedFormData = { ...lead.form_data, propertyState: e.target.value };
-                            const { error } = await supabase
-                              .from('leads')
-                              .update({
-                                form_data: updatedFormData,
-                                property_state: e.target.value,
-                                state: e.target.value
-                              })
-                              .eq('id', lead.id);
-                            if (!error) {
-                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, property_state: e.target.value, state: e.target.value} : l));
-                            }
-                          }}
-                          className="w-20 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50"
-                          placeholder="State"
-                        />
-                      </div>
-                      <input
-                        type="text"
-                        value={lead.form_data?.acres || lead.acres || lead.acreage || ''}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={async (e) => {
-                          const updatedFormData = { ...lead.form_data, acres: e.target.value };
-                          const { error } = await supabase
-                            .from('leads')
-                            .update({
-                              form_data: updatedFormData,
-                              acres: parseFloat(e.target.value) || null,
-                              acreage: parseFloat(e.target.value) || null
-                            })
-                            .eq('id', lead.id);
-                          if (!error) {
-                            setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, acres: parseFloat(e.target.value) || null, acreage: parseFloat(e.target.value) || null} : l));
-                          }
-                        }}
-                        className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm font-semibold text-orange-400 focus:outline-none focus:border-blue-500/50"
-                        placeholder="Acres"
-                      />
-                    </div>
-
-                    {/* Property Details */}
-                    <div className="space-y-2 mb-3 pb-3 border-b border-slate-700/50">
-                      <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Property Details</div>
-                      <div className="grid grid-cols-2 gap-2 text-xs">
-                        {lead.form_data?.homeOnProperty && (
-                          <div>
-                            <span className="text-slate-500">Home:</span>{' '}
-                            <span className={lead.form_data.homeOnProperty === 'no' ? 'text-green-400 font-semibold' : 'text-yellow-400'}>
-                              {lead.form_data.homeOnProperty.toUpperCase()}
-                            </span>
-                          </div>
-                        )}
-                        {lead.form_data?.propertyListed && (
-                          <div>
-                            <span className="text-slate-500">Listed:</span>{' '}
-                            <span className={lead.form_data.propertyListed === 'no' ? 'text-green-400 font-semibold' : 'text-yellow-400'}>
-                              {lead.form_data.propertyListed.toUpperCase()}
-                            </span>
-                          </div>
-                        )}
-                        {lead.form_data?.isInherited && (
-                          <div>
-                            <span className="text-slate-500">Inherited:</span>{' '}
-                            <span className={lead.form_data.isInherited === 'yes' ? 'text-purple-400 font-semibold' : 'text-slate-300'}>
-                              {lead.form_data.isInherited.toUpperCase()}
-                            </span>
-                          </div>
-                        )}
-                        {lead.form_data?.ownedFourYears && (
-                          <div>
-                            <span className="text-slate-500">4+ Years:</span>{' '}
-                            <span className={lead.form_data.ownedFourYears === 'yes' ? 'text-green-400 font-semibold' : 'text-yellow-400'}>
-                              {lead.form_data.ownedFourYears.toUpperCase()}
-                            </span>
-                          </div>
-                        )}
-                        {lead.form_data?.namesOnDeed && (
-                          <div className="col-span-2">
-                            <span className="text-slate-500">On Deed:</span>{' '}
-                            <span className="text-slate-300">{lead.form_data.namesOnDeed}</span>
-                          </div>
-                        )}
-                        {lead.form_data?.priceRange && (
-                          <div className="col-span-2 mt-1 pt-1 border-t border-slate-700/30">
-                            <span className="text-slate-500">Price Range:</span>{' '}
-                            <span className="text-green-400 font-semibold">{lead.form_data.priceRange.replace(/-/g, ' ').replace('plus', '+').replace('under', 'Under ').replace('k', 'K').replace('m', 'M')}</span>
-                          </div>
-                        )}
-                        {lead.form_data?.whySelling && (
-                          <div className="col-span-2 mt-1 pt-1 border-t border-slate-700/30">
-                            <span className="text-slate-500">Why Selling:</span>{' '}
-                            <span className="text-cyan-400 italic">{lead.form_data.whySelling}</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Contact Info */}
-                    <div className="space-y-2 text-sm mb-3">
-                      <div className="flex items-center gap-2">
-                        <svg className="w-4 h-4 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                        </svg>
-                        <input
-                          type="email"
-                          value={lead.email || lead.owner_email || ''}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={async (e) => {
-                            const { error } = await supabase
-                              .from('leads')
-                              .update({ email: e.target.value, owner_email: e.target.value })
-                              .eq('id', lead.id);
-                            if (!error) {
-                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, email: e.target.value, owner_email: e.target.value} : l));
-                            }
-                          }}
-                          className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-slate-300 focus:outline-none focus:border-blue-500/50"
-                          placeholder="Email"
-                        />
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <svg className="w-4 h-4 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-                        </svg>
-                        <input
-                          type="tel"
-                          value={lead.phone || lead.owner_phone || ''}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={async (e) => {
-                            const { error } = await supabase
-                              .from('leads')
-                              .update({ phone: e.target.value, owner_phone: e.target.value })
-                              .eq('id', lead.id);
-                            if (!error) {
-                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, phone: e.target.value, owner_phone: e.target.value} : l));
-                            }
-                          }}
-                          className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-slate-300 focus:outline-none focus:border-blue-500/50"
-                          placeholder="Phone"
-                        />
-                        {(lead.phone || lead.owner_phone) && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openConversation(lead);
-                            }}
-                            title="Open conversation"
-                            className="p-1.5 bg-blue-600/20 hover:bg-blue-600/40 rounded text-blue-400 transition flex-shrink-0"
-                          >
-                            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                              <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
-                            </svg>
-                          </button>
-                        )}
-                      </div>
-                      {lead.ip_address && (
-                        <div className="flex items-center gap-2 text-slate-400 text-xs">
-                          <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
-                          </svg>
-                          IP: {lead.ip_address}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Quick CRM Actions */}
-                    <div className="mt-3 pt-3 border-t border-slate-700/50">
-                      <div className="flex gap-1 mb-2">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openActivityModal(lead.id, 'CALL_OUTBOUND');
-                          }}
-                          title="Log Call"
-                          className="flex-1 px-2 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
-                        >
-                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-                          </svg>
-                          Call
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openActivityModal(lead.id, 'TEXT_SENT');
-                          }}
-                          title="Log Text"
-                          className="flex-1 px-2 py-1.5 bg-green-600/20 hover:bg-green-600/40 text-green-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
-                        >
-                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                          </svg>
-                          Text
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openActivityModal(lead.id, 'EMAIL_SENT');
-                          }}
-                          title="Log Email"
-                          className="flex-1 px-2 py-1.5 bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
-                        >
-                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                          </svg>
-                          Email
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openActivityModal(lead.id, 'NOTE_ADDED');
-                          }}
-                          title="Add Note"
-                          className="flex-1 px-2 py-1.5 bg-slate-600/20 hover:bg-slate-600/40 text-slate-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
-                        >
-                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                          </svg>
-                          Note
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openScheduleModal(lead.id);
-                          }}
-                          title="Schedule Task"
-                          className="flex-1 px-2 py-1.5 bg-orange-600/20 hover:bg-orange-600/40 text-orange-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
-                        >
-                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                          </svg>
-                          Schedule
-                        </button>
-                      </div>
-                      {/* Last Activity Indicator */}
-                      {lead.last_activity_at && (
-                        <div className="text-xs text-slate-500 mb-2">
-                          Last activity: {new Date(lead.last_activity_at).toLocaleDateString()} at {new Date(lead.last_activity_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Actions */}
-                    <div className="mt-2 pt-2 border-t border-slate-700/50 flex gap-2">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setLeadForMapSearch(lead);
-                          setFindMapModalOpen(true);
-                          setKmlFile(null);
-                          setUploadedGeometry(null);
-                        }}
-                        className={`flex-1 px-4 py-2 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2 ${lead.parcel_geometry ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}
-                      >
-                        {lead.parcel_geometry ? (
-                          <>
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                            </svg>
-                            Map Attached
-                          </>
-                        ) : (
-                          <>
-                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                              <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
-                            </svg>
-                            Attach Map
-                          </>
-                        )}
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openCalendarModal(lead);
-                        }}
-                        className="px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                        </svg>
-                        Calendar
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openLeadDetails(lead);
-                        }}
-                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold rounded-lg transition-colors"
-                      >
-                        View Details
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedLead(lead);
-                          setAssignModalOpen(true);
-                          setSelectedOrgsForAssignment([]);
-                          setLeadPrice('');
-                        }}
-                        className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white text-sm font-semibold rounded-lg transition-colors"
-                      >
-                        Assign
-                      </button>
-                    </div>
-
-                    {/* Archive / Delete */}
-                    <div className="mt-2 flex gap-2">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); archiveLead(lead.id); }}
-                        className="flex-1 px-3 py-1.5 bg-zinc-700/50 hover:bg-zinc-600/50 text-zinc-400 hover:text-zinc-300 text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1"
-                      >
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>
-                        Archive
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); if (confirm(`Permanently delete ${lead.full_name || lead.name}? This cannot be undone.`)) deleteLead(lead.id); }}
-                        className="px-3 py-1.5 bg-red-900/30 hover:bg-red-800/40 text-red-400 hover:text-red-300 text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1"
-                      >
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                        Delete
-                      </button>
-                    </div>
-
-                    {/* Footer */}
-                    <div className="mt-2 text-xs text-slate-500 text-center">
-                      {new Date(lead.created_at).toLocaleString()}
-                    </div>
-                    </div>{/* End p-5 wrapper */}
-                  </div>
-                ))}
+                .map((lead) => renderLeadCard(lead))}
             </div>
 
             {allLeads.filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })()).length === 0 && (
@@ -4166,52 +4170,8 @@ export default function LandLeadsAdminPage() {
                   <p className="text-sm mt-1">Leads land here when their status moves into {cfg.statuses.join(' / ')}.</p>
                 </div>
               ) : (
-                <div className="bg-slate-900 rounded-xl border border-slate-700 divide-y divide-slate-800">
-                  {leadsInBucket.map(lead => {
-                    const status = (lead.pipeline_status || lead.status || '').toUpperCase();
-                    return (
-                      <div key={lead.id} className="p-4 hover:bg-slate-800/40 transition flex items-center justify-between gap-4">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap mb-1">
-                            <span className="font-semibold text-white">{lead.full_name || lead.name || 'Unknown'}</span>
-                            <FreshBadge lead={lead} />
-                            {lead.map_uploaded && <MappedBadge />}
-                            <HammerBadge lead={lead} />
-                            <TeammateBadge lead={lead} />
-                          </div>
-                          <div className="text-sm text-slate-400">
-                            {lead.phone || 'No phone'} · {lead.property_county || lead.county || '?'}, {lead.property_state || lead.state || '?'} · {lead.acres || lead.acreage || '?'} acres
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          {!lead.hammer_mode && !TERMINAL_STATUSES.includes(status) && (
-                            <button
-                              onClick={() => toggleHammerMode(lead.id)}
-                              className="px-3 py-1.5 bg-red-600/20 hover:bg-red-600/40 border border-red-600/50 text-red-300 text-sm rounded transition"
-                              title="Hammer mode: daily callbacks until status changes"
-                            >
-                              🔨 Hammer
-                            </button>
-                          )}
-                          <select
-                            value={status}
-                            onChange={(e) => updateLeadStatus(lead.id, e.target.value)}
-                            className="px-3 py-1.5 bg-slate-800 border border-slate-700 rounded text-sm text-white focus:outline-none focus:border-blue-500"
-                          >
-                            {PIPELINE_STATUSES.map(s => (
-                              <option key={s.value} value={s.value}>{s.label}</option>
-                            ))}
-                          </select>
-                          <button
-                            onClick={() => openLeadDetails(lead)}
-                            className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-sm rounded transition"
-                          >
-                            View
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
+                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {leadsInBucket.map((lead) => renderLeadCard(lead))}
                 </div>
               )}
             </div>
