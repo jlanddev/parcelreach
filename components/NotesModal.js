@@ -34,7 +34,11 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
     setLoading(false);
   }, [lead?.id]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    const iv = setInterval(load, 8000); // live even if lead_notes isn't in the realtime publication
+    return () => clearInterval(iv);
+  }, [load]);
 
   // Live: new notes from teammates appear without refresh.
   useEffect(() => {
@@ -93,7 +97,7 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
             type: 'mention',
             title: `${currentUserName || 'A teammate'} mentioned you on ${name}`,
             message: content.slice(0, 200),
-            link: '/admin/land',
+            link: `/admin/land?lead=${lead.id}`,
             notePreview: content.slice(0, 200),
           }),
         }).catch(() => {});

@@ -228,7 +228,7 @@ export default function LandLeadsAdminPage() {
     const ids = allLeads.map((l) => l.id).filter(Boolean);
     if (!ids.length) return;
     let cancelled = false;
-    (async () => {
+    const loadNotes = async () => {
       const { data } = await supabase
         .from('lead_notes')
         .select('id, lead_id, content, created_at, user_id')
@@ -249,11 +249,27 @@ export default function LandLeadsAdminPage() {
       }
       for (const k of Object.keys(map)) map[k] = map[k].slice(0, 3); // newest 3
       setNotesByLead(map);
-    })();
-    return () => { cancelled = true; };
+    };
+    loadNotes();
+    const iv = setInterval(loadNotes, 20000); // live for teammates' notes
+    return () => { cancelled = true; clearInterval(iv); };
   }, [allLeads.length, notesRefresh]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openNotes = (lead) => setNotesModalLead(lead);
+
+  // Deep link from a notification: /admin/land?lead=<id> opens that lead's notes.
+  const openedFromParam = useRef(false);
+  useEffect(() => {
+    if (openedFromParam.current || !allLeads.length || typeof window === 'undefined') return;
+    const leadId = new URLSearchParams(window.location.search).get('lead');
+    if (!leadId) return;
+    const lead = allLeads.find((l) => l.id === leadId);
+    if (lead) {
+      openedFromParam.current = true;
+      setNotesModalLead(lead);
+      window.history.replaceState({}, '', '/admin/land');
+    }
+  }, [allLeads.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Compact notes block shown on every lead card.
   const renderNotesPreview = (lead) => {
