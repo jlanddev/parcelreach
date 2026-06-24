@@ -3627,12 +3627,20 @@ export default function LandLeadsAdminPage() {
                     // Lead is FRESH if it came in within the last 24h — suppress the OVERDUE label
                     // in that window since speed-to-lead beats the auto-scheduled due_at.
                     const isFresh = lead?.created_at && (Date.now() - new Date(lead.created_at).getTime()) < 24 * 60 * 60 * 1000;
-                    const isOverdue = !isNewLead && new Date(task.due_at) < new Date();
+                    // Friendlier than a red "OVERDUE": say what the lead actually needs.
+                    // Never spoken to them at all -> discovery call. Been trying (VMs,
+                    // CONTACTING) but not connected -> callback time.
+                    const pastDue = new Date(task.due_at) < new Date() && !isFresh;
+                    let urgentLabel = null;
+                    if (pastDue) {
+                      if (isNewLead) urgentLabel = 'Needs Discovery Call';
+                      else if (liveLeadStatus === 'CONTACTING') urgentLabel = 'Callback Time';
+                    }
                     const normalizedType = normalizeTaskType(task.task_type);
                     const taskTypeColor = isNewLead ? 'bg-green-500/20 text-green-400 border-green-500/50' : TASK_TYPE_COLORS[normalizedType];
 
                     return (
-                      <div key={task.id} className={`p-4 hover:bg-slate-800/50 transition-all ${isOverdue ? 'bg-red-900/10' : ''}`}>
+                      <div key={task.id} className={`p-4 hover:bg-slate-800/50 transition-all ${urgentLabel ? 'bg-amber-900/10' : ''}`}>
                         <div className="flex items-start gap-4">
                           {/* Lead Info */}
                           <div className="flex-1 min-w-0">
@@ -3686,10 +3694,10 @@ export default function LandLeadsAdminPage() {
                                     setEditingDateValue(new Date(task.due_at).toISOString().split('T')[0]);
                                     setEditingTimeValue(dueTime);
                                   }}
-                                  className={`text-xs hover:underline cursor-pointer ${isOverdue && !isFresh ? 'text-red-400 font-semibold' : 'text-slate-500 hover:text-blue-400'}`}
+                                  className={`text-xs hover:underline cursor-pointer ${urgentLabel ? 'text-amber-300 font-semibold' : 'text-slate-500 hover:text-blue-400'}`}
                                   title="Click to reschedule"
                                 >
-                                  {isOverdue && !isFresh ? 'OVERDUE - ' : ''}{dueTime}
+                                  {urgentLabel ? `${urgentLabel} · ` : ''}{dueTime}
                                 </button>
                               )}
                             </div>
