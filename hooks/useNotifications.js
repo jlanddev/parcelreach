@@ -148,9 +148,13 @@ export function useNotifications(userId) {
 
     fetchNotifications();
 
+    // Safety-net poll so the bell updates even if the notifications table isn't
+    // in the realtime publication.
+    const poll = setInterval(fetchNotifications, 30000);
+
     // Set up real-time subscription
     const channel = supabase
-      .channel('notifications')
+      .channel(`notifications-${userId}`)
       .on(
         'postgres_changes',
         {
@@ -168,6 +172,7 @@ export function useNotifications(userId) {
       .subscribe();
 
     return () => {
+      clearInterval(poll);
       supabase.removeChannel(channel);
     };
   }, [userId]);

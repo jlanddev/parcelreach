@@ -269,18 +269,20 @@ export default function LandLeadsAdminPage() {
             {recent.length ? 'Open thread' : 'Add note'}
           </button>
         </div>
-        {recent.length === 0 ? (
-          <div className="text-xs text-slate-600 italic">No notes yet — tag a teammate with @</div>
-        ) : (
-          <div className="space-y-1">
-            {recent.map((n) => (
-              <div key={n.id} className="text-xs text-slate-300 truncate">
-                <span className="text-slate-500">{(usersById[n.user_id] || 'Teammate').split(' ')[0]} · {timeAgo(n.created_at)}:</span>{' '}
-                {n.content}
-              </div>
-            ))}
-          </div>
-        )}
+        <div className="bg-slate-900/40 border border-slate-700/40 rounded-lg px-3 py-2">
+          {recent.length === 0 ? (
+            <div className="text-xs text-slate-500 text-center">No notes yet. Tag a teammate with @ to start.</div>
+          ) : (
+            <div className="space-y-1.5">
+              {recent.map((n) => (
+                <div key={n.id} className="text-xs text-slate-300 truncate">
+                  <span className="text-slate-500">{(usersById[n.user_id] || 'Teammate').split(' ')[0]} · {timeAgo(n.created_at)}:</span>{' '}
+                  {n.content}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     );
   };

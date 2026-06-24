@@ -198,7 +198,7 @@ export default function ConversationModal({ lead, currentUserId, onClose, onActi
                 {m.outbound && m.status === 'sending' && <span>· Sending…</span>}
                 {m.outbound && m.failed && (
                   <button onClick={m.onRetry} className="text-red-400 hover:underline">
-                    · Failed — Retry
+                    · Failed, tap to retry
                   </button>
                 )}
                 {m.outbound && m.status === 'delivered' && <span>· Delivered</span>}
