@@ -18,6 +18,7 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
   const [draft, setDraft] = useState('');
   const [posting, setPosting] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
+  const [reads, setReads] = useState([]); // [{user_id, read_at}] read receipts
   const taRef = useRef(null);
   const scrollRef = useRef(null);
 
@@ -49,6 +50,25 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, [lead?.id, load]);
+
+  // Read receipts: mark this teammate as having read the thread, and load who
+  // else has. Degrades silently if the note_reads table isn't created yet.
+  useEffect(() => {
+    if (!lead?.id || !currentUserId) return;
+    let cancelled = false;
+    const sync = async () => {
+      try {
+        await supabase
+          .from('note_reads')
+          .upsert({ lead_id: lead.id, user_id: currentUserId, read_at: new Date().toISOString() }, { onConflict: 'lead_id,user_id' });
+        const { data } = await supabase.from('note_reads').select('user_id, read_at').eq('lead_id', lead.id);
+        if (!cancelled && data) setReads(data);
+      } catch {}
+    };
+    sync();
+    const iv = setInterval(sync, 8000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [lead?.id, currentUserId]);
 
   useEffect(() => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; }, [notes, loading]);
 
@@ -151,6 +171,26 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
             );
           })}
         </div>
+
+        {/* Read receipts: who has seen the thread */}
+        {(() => {
+          const latestTs = notes.length ? new Date(notes[notes.length - 1].created_at).getTime() : 0;
+          const others = reads.filter((r) => r.user_id !== currentUserId && usersById[r.user_id]);
+          if (others.length === 0) return null;
+          return (
+            <div className="px-4 py-1 text-[10px] text-slate-500 flex flex-wrap gap-x-3 border-t border-slate-800/60">
+              {others.map((r) => {
+                const caught = new Date(r.read_at).getTime() >= latestTs;
+                const who = (usersById[r.user_id] || 'Teammate').split(' ')[0];
+                return (
+                  <span key={r.user_id} className={caught ? 'text-green-500/80' : ''}>
+                    {caught ? '✓✓ Seen by' : 'Last read by'} {who} {timeAgo(r.read_at)}
+                  </span>
+                );
+              })}
+            </div>
+          );
+        })()}
 
         <div className="border-t border-slate-700/70 p-2 bg-slate-800/40 relative">
           {mentionOpen && roster.length > 0 && (
