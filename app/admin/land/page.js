@@ -305,7 +305,12 @@ export default function LandLeadsAdminPage() {
   // Clicking a notification opens that lead's note (mention) or text (sms) in-page.
   const handleOpenNotification = async (n) => {
     let leadId = null;
-    try { leadId = new URL(n?.link || '', window.location.origin).searchParams.get('lead'); } catch {}
+    let view = null;
+    try {
+      const u = new URL(n?.link || '', window.location.origin);
+      leadId = u.searchParams.get('lead');
+      view = u.searchParams.get('view');
+    } catch {}
     if (!leadId) {
       showToast('This alert was created before deep-links existed, so it has no lead attached. Newer ones open the lead.', 'error');
       return;
@@ -319,7 +324,7 @@ export default function LandLeadsAdminPage() {
       showToast('Could not load that lead.', 'error');
       return;
     }
-    if (n.type === 'sms_inbound') setConversationLead(lead);
+    if (view === 'sms' || n.type === 'sms_inbound') setConversationLead(lead);
     else setNotesModalLead(lead);
   };
 

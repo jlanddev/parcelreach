@@ -115,15 +115,19 @@ export async function POST(request) {
           notifyUserId = am?.id || null;
         }
         if (notifyUserId) {
-          const leadName = lead.full_name || lead.name || lead.owner_name || 'a lead';
-          await supabase.from('notifications').insert({
+          const leadName = lead.full_name || lead.name || 'a lead';
+          // `view=sms` tells the click handler to open the conversation. The
+          // notifications.type CHECK only allows mention/lead_assigned/team_invite,
+          // so try sms_inbound then fall back to mention.
+          const notif = {
             user_id: notifyUserId,
             from_user_id: null,
-            type: 'sms_inbound',
             title: `New text from ${leadName}`,
             message: String(message).slice(0, 200),
-            link: `/admin/land?lead=${lead.id}`,
-          });
+            link: `/admin/land?lead=${lead.id}&view=sms`,
+          };
+          const { error: nerr } = await supabase.from('notifications').insert({ ...notif, type: 'sms_inbound' });
+          if (nerr) await supabase.from('notifications').insert({ ...notif, type: 'mention' });
         }
       } catch (e) {
         console.error('[PB webhook] notify failed', e);
