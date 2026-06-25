@@ -20,6 +20,10 @@ const isConversationNote = (content) =>
 // Last 10 digits of a phone — the stable key for matching messages to leads.
 const phoneKey = (p) => (p || '').replace(/\D/g, '').slice(-10);
 
+// activities.created_at is a naive `timestamp` storing the UTC instant. Force
+// UTC parsing so it isn't re-read as local time (adds the tz offset otherwise).
+const parseTs = (s) => new Date(/Z|[+-]\d\d:?\d\d$/.test(s || '') ? s : (s || '') + 'Z');
+
 export default function LandLeadsAdminPage() {
   const router = useRouter();
   const [organizations, setOrganizations] = useState([]);
@@ -3459,7 +3463,7 @@ export default function LandLeadsAdminPage() {
             const PIPELINE_TABS = ['ppc-inflow', 'appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'];
             const allTabs = isAdmin
               ? ['daily-rundown', 'shared-calendar', 'activity-log', ...PIPELINE_TABS, 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics']
-              : ['daily-rundown', 'shared-calendar', 'activity-log', ...PIPELINE_TABS, 'subdivision-inflow', 'all-leads'];
+              : ['daily-rundown', 'shared-calendar', ...PIPELINE_TABS, 'subdivision-inflow', 'all-leads'];
             return allTabs.map((tab, i) => {
               const prevTab = allTabs[i - 1];
               const showChevron = PIPELINE_TABS.includes(tab) && PIPELINE_TABS.includes(prevTab);
@@ -4141,7 +4145,7 @@ export default function LandLeadsAdminPage() {
         )}
 
         {/* PPC INFLOW TAB */}
-        {activeTab === 'activity-log' && (() => {
+        {activeTab === 'activity-log' && isAdmin && (() => {
           const byUser = {};
           for (const it of activityLog) {
             const u = it.user_id || 'system';
@@ -4206,7 +4210,7 @@ export default function LandLeadsAdminPage() {
                     const isJ = it.user_id === adminUserId;
                     const who = usersById[it.user_id] ? usersById[it.user_id].split(' ')[0] : (it.user_id ? 'Team' : 'System');
                     const chip = isJ ? 'bg-blue-900/40 text-blue-300 border-blue-700/50' : (it.user_id === acquisitionManagerId ? 'bg-purple-900/40 text-purple-300 border-purple-700/50' : 'bg-slate-700/40 text-slate-400 border-slate-600/50');
-                    const time = new Date(it.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+                    const time = parseTs(it.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
                     return (
                       <button key={`${it.kind}-${it.id}`} onClick={() => lead && openLeadDetails(lead)} className="w-full text-left px-4 py-2.5 hover:bg-slate-800/40 transition flex items-center gap-3">
                         <span className="text-xs text-slate-500 w-16 flex-shrink-0">{time}</span>
