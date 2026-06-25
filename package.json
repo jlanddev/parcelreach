@@ -22,6 +22,7 @@
     "@supabase/auth-ui-shared": "^0.1.8",
     "@supabase/supabase-js": "^2.81.1",
     "@turf/area": "^7.2.0",
+    "@twilio/voice-sdk": "^2.18.3",
     "dotenv": "^17.2.3",
     "mapbox-gl": "^3.16.0",
     "next": "^16.1.1",
@@ -32,7 +33,8 @@
     "react-signature-canvas": "^1.1.0-alpha.2",
     "rrweb-player": "^2.0.0-alpha.17",
     "stripe": "^19.3.1",
-    "tailwindcss": "^3.4.18"
+    "tailwindcss": "^3.4.18",
+    "twilio": "^5.13.1"
   },
   "devDependencies": {
     "autoprefixer": "^10.4.21",

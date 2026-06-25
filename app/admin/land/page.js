@@ -9,6 +9,7 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import area from '@turf/area';
 import ConversationModal from '@/components/ConversationModal';
 import NotesModal from '@/components/NotesModal';
+import CallModal from '@/components/CallModal';
 import NotificationBell from '@/components/NotificationBell';
 import { timeAgo, channelLabel } from '@/lib/format';
 
@@ -123,6 +124,7 @@ export default function LandLeadsAdminPage() {
   const [loggingActivity, setLoggingActivity] = useState(false);
   const [leadActivities, setLeadActivities] = useState({}); // leadId -> activities array
   const [conversationLead, setConversationLead] = useState(null); // open iMessage-style thread
+  const [callLead, setCallLead] = useState(null); // active Twilio call
   const [contactMeta, setContactMeta] = useState({}); // leadId -> { last, unread } for cards
   const [contactRefresh, setContactRefresh] = useState(0); // bump to reload contactMeta
   const [notesByLead, setNotesByLead] = useState({}); // leadId -> recent conversation notes
@@ -2897,21 +2899,33 @@ export default function LandLeadsAdminPage() {
                                   {meta?.last ? `${channelLabel(meta.last)} · ${timeAgo(meta.last.created_at)}` : 'No contact yet'}
                                 </div>
                               </div>
-                              <button
-                                onClick={(e) => { e.stopPropagation(); openConversation(lead); }}
-                                title="Open conversation"
-                                className="relative px-3 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 text-xs font-medium flex items-center gap-1.5 flex-shrink-0"
-                              >
-                                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                                  <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
-                                </svg>
-                                Messages
-                                {unread > 0 && (
-                                  <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
-                                    {unread}
-                                  </span>
+                              <div className="flex items-center gap-1.5 flex-shrink-0">
+                                {(lead.phone || lead.owner_phone) && (
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); setCallLead(lead); }}
+                                    title="Call"
+                                    className="px-3 py-1.5 rounded-lg bg-green-600/20 hover:bg-green-600/40 text-green-300 text-xs font-medium flex items-center gap-1.5"
+                                  >
+                                    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" /></svg>
+                                    Call
+                                  </button>
                                 )}
-                              </button>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); openConversation(lead); }}
+                                  title="Open conversation"
+                                  className="relative px-3 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 text-xs font-medium flex items-center gap-1.5"
+                                >
+                                  <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
+                                  </svg>
+                                  Messages
+                                  {unread > 0 && (
+                                    <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                                      {unread}
+                                    </span>
+                                  )}
+                                </button>
+                              </div>
                             </div>
                             {meta?.last?.message_content && (
                               <div className={`text-xs mt-1 truncate ${unread ? 'text-slate-100 font-medium' : 'text-slate-400'}`}>
@@ -3358,6 +3372,7 @@ export default function LandLeadsAdminPage() {
           currentUserId={currentUserId}
           onClose={() => setConversationLead(null)}
           onActivity={() => setContactRefresh((t) => t + 1)}
+          onCall={(l) => setCallLead(l)}
         />
       )}
       {notesModalLead && (
@@ -3369,6 +3384,14 @@ export default function LandLeadsAdminPage() {
           usersById={usersById}
           onClose={() => setNotesModalLead(null)}
           onPosted={() => setNotesRefresh((t) => t + 1)}
+        />
+      )}
+      {callLead && (
+        <CallModal
+          lead={callLead}
+          currentUserId={currentUserId}
+          onClose={() => setCallLead(null)}
+          onLogged={() => setContactRefresh((t) => t + 1)}
         />
       )}
       {toast && (
