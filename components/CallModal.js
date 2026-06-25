@@ -72,7 +72,10 @@ export default function CallModal({ lead, currentUserId, onClose, onLogged }) {
         const device = new Device(data.token, { codecPreferences: ['opus', 'pcmu'] });
         deviceRef.current = device;
 
-        const call = await device.connect({ params: { To: toE164(phone) } });
+        // Project Blue's TwiML app reads one of these; send the common names so
+        // whichever it expects gets the number to dial.
+        const num = toE164(phone);
+        const call = await device.connect({ params: { To: num, to: num, phone: num, PhoneNumber: num, number: num, Called: num } });
         callRef.current = call;
         call.on('ringing', () => setStatus('ringing'));
         call.on('accept', () => {
