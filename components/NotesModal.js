@@ -70,7 +70,14 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
     return () => { cancelled = true; clearInterval(iv); };
   }, [lead?.id, currentUserId]);
 
-  useEffect(() => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; }, [notes, loading]);
+  // Only auto-scroll when a NEW note arrives (or first load), not on every poll,
+  // otherwise the view bounces to the bottom while you're reading.
+  const prevCount = useRef(0);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && notes.length > prevCount.current) el.scrollTop = el.scrollHeight;
+    prevCount.current = notes.length;
+  }, [notes]);
 
   const onChange = (e) => {
     setDraft(e.target.value);
@@ -158,15 +165,22 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
           {!loading && notes.length === 0 && <div className="text-slate-500 text-sm text-center mt-6">No notes yet. Start the thread.</div>}
           {notes.map((n) => {
             const mine = n.user_id === currentUserId;
+            const who = (usersById[n.user_id] || (mine ? 'You' : 'Teammate')).split(' ')[0];
             return (
-              <div key={n.id} className="flex flex-col">
-                <div className="flex items-baseline gap-2">
-                  <span className={`text-xs font-semibold ${mine ? 'text-blue-300' : 'text-slate-300'}`}>
-                    {usersById[n.user_id] || (mine ? 'You' : 'Teammate')}
-                  </span>
+              <div key={n.id} className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                <div className="flex items-baseline gap-2 px-1">
+                  <span className={`text-[11px] font-semibold ${mine ? 'text-blue-300' : 'text-purple-300'}`}>{who}</span>
                   <span className="text-[10px] text-slate-500">{timeAgo(n.created_at)}</span>
                 </div>
-                <div className="text-sm text-slate-200 whitespace-pre-wrap break-words mt-0.5">{renderContent(n.content)}</div>
+                <div
+                  className={`max-w-[80%] px-3 py-2 rounded-2xl text-sm whitespace-pre-wrap break-words mt-0.5 ${
+                    mine
+                      ? 'bg-blue-600/30 border border-blue-600/40 text-blue-50'
+                      : 'bg-slate-700/70 border border-slate-600/40 text-slate-100'
+                  }`}
+                >
+                  {renderContent(n.content)}
+                </div>
               </div>
             );
           })}
