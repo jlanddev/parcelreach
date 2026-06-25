@@ -128,6 +128,9 @@ export default function LandLeadsAdminPage() {
   const [notesByLead, setNotesByLead] = useState({}); // leadId -> recent conversation notes
   const [notesModalLead, setNotesModalLead] = useState(null); // open notes thread
   const [notesRefresh, setNotesRefresh] = useState(0);
+  const [activityLogDate, setActivityLogDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [activityLog, setActivityLog] = useState([]);
+  const [activityLogLoading, setActivityLogLoading] = useState(false);
   const [noteRoster, setNoteRoster] = useState([]); // [{id,name}] taggable teammates
   const [usersById, setUsersById] = useState({}); // userId -> display name
 
@@ -254,6 +257,31 @@ export default function LandLeadsAdminPage() {
     const iv = setInterval(loadNotes, 20000); // live for teammates' notes
     return () => { cancelled = true; clearInterval(iv); };
   }, [allLeads.length, notesRefresh]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Activity Log: load every call/text/note for the selected day, attributed.
+  useEffect(() => {
+    if (activeTab !== 'activity-log') return;
+    let cancelled = false;
+    (async () => {
+      setActivityLogLoading(true);
+      const start = new Date(activityLogDate + 'T00:00:00');
+      const end = new Date(start); end.setDate(end.getDate() + 1);
+      const [acts, notesRes] = await Promise.all([
+        supabase.from('activities').select('id, lead_id, user_id, activity_type, direction, outcome, message_content, created_at').gte('created_at', start.toISOString()).lt('created_at', end.toISOString()).order('created_at', { ascending: false }),
+        supabase.from('lead_notes').select('id, lead_id, user_id, content, created_at').gte('created_at', start.toISOString()).lt('created_at', end.toISOString()).order('created_at', { ascending: false }),
+      ]);
+      if (cancelled) return;
+      const items = [];
+      for (const a of (acts.data || [])) items.push({ kind: 'activity', ...a });
+      for (const n of (notesRes.data || [])) {
+        if (isConversationNote(n.content)) items.push({ kind: 'note', id: n.id, lead_id: n.lead_id, user_id: n.user_id, activity_type: 'NOTE', direction: null, outcome: null, message_content: n.content, created_at: n.created_at });
+      }
+      items.sort((x, y) => new Date(y.created_at) - new Date(x.created_at));
+      setActivityLog(items);
+      setActivityLogLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [activeTab, activityLogDate]);
 
   const openNotes = (lead) => setNotesModalLead(lead);
 
@@ -3402,8 +3430,8 @@ export default function LandLeadsAdminPage() {
             // with arrow chevrons between them to visualize lead flow.
             const PIPELINE_TABS = ['ppc-inflow', 'appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'];
             const allTabs = isAdmin
-              ? ['daily-rundown', 'shared-calendar', ...PIPELINE_TABS, 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics']
-              : ['daily-rundown', 'shared-calendar', ...PIPELINE_TABS, 'subdivision-inflow', 'all-leads'];
+              ? ['daily-rundown', 'shared-calendar', 'activity-log', ...PIPELINE_TABS, 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics']
+              : ['daily-rundown', 'shared-calendar', 'activity-log', ...PIPELINE_TABS, 'subdivision-inflow', 'all-leads'];
             return allTabs.map((tab, i) => {
               const prevTab = allTabs[i - 1];
               const showChevron = PIPELINE_TABS.includes(tab) && PIPELINE_TABS.includes(prevTab);
@@ -3447,7 +3475,7 @@ export default function LandLeadsAdminPage() {
                   <path d="M11 7h2v10h-2zm4 4h2v6h-2zM7 9h2v8H7zm12-7H5c-1.1 0-2 .9-2 2v18l4-4h13c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
                 </svg>
               )}
-              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'appointment-set' ? 'Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Agreement Sent' : tab === 'signed-contract' ? 'Signed Contract' : tab === 'closed-deal' ? 'Closed Deal' : tab.replace('-', ' ')}
+              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'appointment-set' ? 'Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Agreement Sent' : tab === 'signed-contract' ? 'Signed Contract' : tab === 'closed-deal' ? 'Closed Deal' : tab.replace('-', ' ')}
               {tab === 'unassigned' && ` (${unassignedLeads.length})`}
               {tab === 'ppc-inflow' && ` (${allLeads.filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })()).length})`}
               {tab === 'appointment-set' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN').length})`}
@@ -4085,6 +4113,88 @@ export default function LandLeadsAdminPage() {
         )}
 
         {/* PPC INFLOW TAB */}
+        {activeTab === 'activity-log' && (() => {
+          const byUser = {};
+          for (const it of activityLog) {
+            const u = it.user_id || 'system';
+            byUser[u] = byUser[u] || { texts: 0, calls: 0, notes: 0 };
+            if (it.activity_type === 'NOTE') byUser[u].notes++;
+            else if (it.activity_type === 'CALL') byUser[u].calls++;
+            else if (it.activity_type === 'TEXT') byUser[u].texts++;
+          }
+          const actionLabel = (it) => {
+            if (it.activity_type === 'NOTE') return 'Note';
+            if (it.activity_type === 'CALL') return it.outcome ? `Call · ${it.outcome}` : 'Call';
+            if (it.activity_type === 'TEXT') return it.direction === 'INBOUND' ? 'Text received' : 'Text sent';
+            if (it.activity_type === 'STATUS_CHANGE') return 'Status change';
+            return it.activity_type || 'Activity';
+          };
+          const shiftDay = (delta) => {
+            const d = new Date(activityLogDate + 'T00:00:00');
+            d.setDate(d.getDate() + delta);
+            setActivityLogDate(d.toISOString().split('T')[0]);
+          };
+          return (
+            <div className="space-y-6">
+              <div className="bg-gradient-to-br from-cyan-500/10 to-cyan-600/5 border border-cyan-500/40 rounded-xl p-6">
+                <div className="flex items-center justify-between flex-wrap gap-4">
+                  <div>
+                    <h2 className="text-2xl font-bold text-cyan-300">Activity Log</h2>
+                    <p className="text-slate-400 text-sm mt-1">Every call, text, and note for the day, and who did it</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => shiftDay(-1)} className="px-2.5 py-1 bg-slate-800 border border-slate-700 rounded text-slate-300 hover:bg-slate-700">‹</button>
+                    <input type="date" value={activityLogDate} onChange={(e) => setActivityLogDate(e.target.value)} className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200 text-sm" />
+                    <button onClick={() => shiftDay(1)} className="px-2.5 py-1 bg-slate-800 border border-slate-700 rounded text-slate-300 hover:bg-slate-700">›</button>
+                  </div>
+                </div>
+                <div className="flex gap-3 mt-4 flex-wrap">
+                  {[adminUserId, acquisitionManagerId].filter(Boolean).map((uid) => {
+                    const s = byUser[uid] || { texts: 0, calls: 0, notes: 0 };
+                    const nm = usersById[uid] || 'User';
+                    const isJ = uid === adminUserId;
+                    return (
+                      <div key={uid} className={`px-4 py-2 rounded-lg border ${isJ ? 'bg-blue-900/30 border-blue-700/50' : 'bg-purple-900/30 border-purple-700/50'}`}>
+                        <div className={`font-semibold ${isJ ? 'text-blue-300' : 'text-purple-300'}`}>{nm}</div>
+                        <div className="text-xs text-slate-400 mt-0.5">{s.calls} calls · {s.texts} texts · {s.notes} notes</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {activityLogLoading ? (
+                <div className="text-center py-12 text-slate-500">Loading…</div>
+              ) : activityLog.length === 0 ? (
+                <div className="text-center py-20 text-slate-500">
+                  <p className="text-lg">No activity logged on this day.</p>
+                  <p className="text-sm mt-1">Calls, texts, and notes show up here as they happen.</p>
+                </div>
+              ) : (
+                <div className="bg-slate-900 rounded-xl border border-slate-700 divide-y divide-slate-800">
+                  {activityLog.map((it) => {
+                    const lead = allLeads.find((l) => l.id === it.lead_id);
+                    const name = lead?.full_name || lead?.name || 'Lead';
+                    const isJ = it.user_id === adminUserId;
+                    const who = usersById[it.user_id] ? usersById[it.user_id].split(' ')[0] : (it.user_id ? 'Team' : 'System');
+                    const chip = isJ ? 'bg-blue-900/40 text-blue-300 border-blue-700/50' : (it.user_id === acquisitionManagerId ? 'bg-purple-900/40 text-purple-300 border-purple-700/50' : 'bg-slate-700/40 text-slate-400 border-slate-600/50');
+                    const time = new Date(it.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+                    return (
+                      <button key={`${it.kind}-${it.id}`} onClick={() => lead && openLeadDetails(lead)} className="w-full text-left px-4 py-2.5 hover:bg-slate-800/40 transition flex items-center gap-3">
+                        <span className="text-xs text-slate-500 w-16 flex-shrink-0">{time}</span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full border flex-shrink-0 ${chip}`}>{who}</span>
+                        <span className="text-xs font-medium text-slate-300 w-28 flex-shrink-0">{actionLabel(it)}</span>
+                        <span className="text-sm text-white truncate w-40 flex-shrink-0">{name}</span>
+                        <span className="text-xs text-slate-500 truncate flex-1">{it.message_content || ''}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {activeTab === 'shared-calendar' && (() => {
           const start = new Date(); start.setHours(0, 0, 0, 0);
           const upcoming = (scheduledTasks || [])
