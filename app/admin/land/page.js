@@ -554,7 +554,9 @@ export default function LandLeadsAdminPage() {
     setDetailsModalOpen(true);
   };
 
-  // Which pipeline tab a lead lives in, based on its stage.
+  // Which tab a lead's card lives in, based on its stage. Active pipeline stages
+  // land on their rich-card bucket; everything else (DEAD, not interested, etc.)
+  // lives in the All Leads master list, and archived in Archive.
   const tabForLead = (lead) => {
     if ((lead.status || '').toLowerCase() === 'archived') return 'archive';
     const s = (lead.pipeline_status || lead.status || '').toUpperCase();
@@ -563,28 +565,43 @@ export default function LandLeadsAdminPage() {
     if (s === 'AGREEMENT_SENT') return 'agreement-sent';
     if (s === 'UNDER_CONTRACT') return 'signed-contract';
     if (s === 'CLOSED') return 'closed-deal';
-    return 'ppc-inflow'; // NEW / CONTACTING / CONTACTED / etc.
+    if (['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s)) return 'ppc-inflow';
+    return 'all-leads'; // DEAD / NOT_INTERESTED / QUALIFIED / anything else
   };
 
-  // Jump to the lead's actual card in whatever pipeline stage it sits in, then
-  // scroll it into view and flash a ring. Closes any open modal first.
+  // Jump to the lead's actual card in whatever stage it sits in, scroll it into
+  // view and flash a ring. Retries because the tab needs a beat to render; if
+  // the card still can't be found, falls back to opening the lead details so
+  // the click never silently does nothing.
   const navigateToLeadCard = (lead) => {
     if (!lead?.id) return;
     setConversationLead(null);
     setNotesModalLead(null);
     setDetailsModalOpen(false);
-    // Clear filters that could hide the card in its bucket.
+    // Clear filters that could hide the card in its tab.
     setPipelineSearch('');
     setPpcSearch('');
     setPipelineMapped(false);
     setActiveTab(tabForLead(lead));
     setHighlightLeadId(lead.id);
-    // Wait for the tab to render, then scroll + flash.
-    setTimeout(() => {
+    let tries = 0;
+    const find = () => {
       const el = document.getElementById(`lead-card-${lead.id}`);
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 220);
-    setTimeout(() => setHighlightLeadId(null), 2600);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setTimeout(() => setHighlightLeadId(null), 2600);
+        return;
+      }
+      if (++tries < 8) {
+        setTimeout(find, 200);
+      } else {
+        // Could not locate the card anywhere it renders — open the lead so the
+        // click always lands somewhere useful.
+        setHighlightLeadId(null);
+        openLeadDetails(lead);
+      }
+    };
+    setTimeout(find, 180);
   };
 
   // Quick log activity (one-tap)
@@ -5171,7 +5188,7 @@ export default function LandLeadsAdminPage() {
                 <tbody className="divide-y divide-slate-700/50">
                   {allLeads.filter(l => l.status !== 'archived').map((lead) => {
                     return (
-                      <tr key={lead.id} className="hover:bg-slate-700/30">
+                      <tr key={lead.id} id={`lead-card-${lead.id}`} className={`hover:bg-slate-700/30 ${highlightLeadId === lead.id ? 'ring-2 ring-inset ring-blue-400/70 bg-blue-500/10' : ''}`}>
                         <td className="px-6 py-4 text-sm">
                           {new Date(lead.created_at).toLocaleDateString()}
                         </td>
@@ -5349,7 +5366,7 @@ export default function LandLeadsAdminPage() {
                     </thead>
                     <tbody className="divide-y divide-slate-700/50">
                       {allLeads.filter(l => l.status === 'archived').map((lead) => (
-                        <tr key={lead.id} className="hover:bg-slate-700/30">
+                        <tr key={lead.id} id={`lead-card-${lead.id}`} className={`hover:bg-slate-700/30 ${highlightLeadId === lead.id ? 'ring-2 ring-inset ring-blue-400/70 bg-blue-500/10' : ''}`}>
                           <td className="px-6 py-4 text-sm text-slate-400">
                             {new Date(lead.created_at).toLocaleDateString()}
                           </td>
