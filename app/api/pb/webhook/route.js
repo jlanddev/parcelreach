@@ -119,7 +119,7 @@ export async function POST(request) {
           const am = (staff || []).find((u) => u.role === 'acquisition_manager');
           if (am) recipients.add(am.id);
         }
-        const leadName = lead.full_name || lead.name || 'a lead';
+        const leadName = lead.name || lead.full_name || 'a lead';
         // `view=sms` tells the click handler to open the conversation. The
         // notifications.type CHECK only allows mention/lead_assigned/team_invite,
         // so try sms_inbound then fall back to mention.

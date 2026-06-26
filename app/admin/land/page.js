@@ -109,6 +109,7 @@ export default function LandLeadsAdminPage() {
   };
   const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [detailsModalOpen, setDetailsModalOpen] = useState(false);
+  const [highlightLeadId, setHighlightLeadId] = useState(null); // briefly ring the card we jumped to
   const [selectedLead, setSelectedLead] = useState(null);
   const [selectedOrgsForAssignment, setSelectedOrgsForAssignment] = useState([]);
   const [leadPrice, setLeadPrice] = useState(''); // Price for marketplace leads
@@ -551,6 +552,39 @@ export default function LandLeadsAdminPage() {
 
     setSelectedLead({ ...lead, notes: notes || [] });
     setDetailsModalOpen(true);
+  };
+
+  // Which pipeline tab a lead lives in, based on its stage.
+  const tabForLead = (lead) => {
+    if ((lead.status || '').toLowerCase() === 'archived') return 'archive';
+    const s = (lead.pipeline_status || lead.status || '').toUpperCase();
+    if (s === 'APPT_SET_FOR_JORDAN') return 'appointment-set';
+    if (['OFFER_SENT', 'NEGOTIATING'].includes(s)) return 'offer-made';
+    if (s === 'AGREEMENT_SENT') return 'agreement-sent';
+    if (s === 'UNDER_CONTRACT') return 'signed-contract';
+    if (s === 'CLOSED') return 'closed-deal';
+    return 'ppc-inflow'; // NEW / CONTACTING / CONTACTED / etc.
+  };
+
+  // Jump to the lead's actual card in whatever pipeline stage it sits in, then
+  // scroll it into view and flash a ring. Closes any open modal first.
+  const navigateToLeadCard = (lead) => {
+    if (!lead?.id) return;
+    setConversationLead(null);
+    setNotesModalLead(null);
+    setDetailsModalOpen(false);
+    // Clear filters that could hide the card in its bucket.
+    setPipelineSearch('');
+    setPpcSearch('');
+    setPipelineMapped(false);
+    setActiveTab(tabForLead(lead));
+    setHighlightLeadId(lead.id);
+    // Wait for the tab to render, then scroll + flash.
+    setTimeout(() => {
+      const el = document.getElementById(`lead-card-${lead.id}`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 220);
+    setTimeout(() => setHighlightLeadId(null), 2600);
   };
 
   // Quick log activity (one-tap)
@@ -2838,7 +2872,12 @@ export default function LandLeadsAdminPage() {
   const renderLeadCard = (lead) => (
                   <div
                     key={lead.id}
-                    className="bg-slate-800/50 border border-slate-700/50 rounded-xl overflow-hidden hover:border-blue-500/50 hover:shadow-xl hover:shadow-blue-500/10 transition-all"
+                    id={`lead-card-${lead.id}`}
+                    className={`bg-slate-800/50 border rounded-xl overflow-hidden hover:border-blue-500/50 hover:shadow-xl hover:shadow-blue-500/10 transition-all ${
+                      highlightLeadId === lead.id
+                        ? 'border-blue-400 ring-2 ring-blue-400/70 shadow-xl shadow-blue-500/20'
+                        : 'border-slate-700/50'
+                    }`}
                   >
                     {/* NEXT TOUCH POINT BANNER - Always at TOP */}
                     {(() => {
@@ -3380,7 +3419,7 @@ export default function LandLeadsAdminPage() {
           onClose={() => setConversationLead(null)}
           onActivity={() => setContactRefresh((t) => t + 1)}
           onCall={(l) => setCallLead(l)}
-          onOpenLead={(l) => openLeadDetails(l)}
+          onOpenLead={(l) => navigateToLeadCard(l)}
         />
       )}
       {notesModalLead && (
@@ -3392,7 +3431,7 @@ export default function LandLeadsAdminPage() {
           usersById={usersById}
           onClose={() => setNotesModalLead(null)}
           onPosted={() => setNotesRefresh((t) => t + 1)}
-          onOpenLead={(l) => openLeadDetails(l)}
+          onOpenLead={(l) => navigateToLeadCard(l)}
         />
       )}
       {callLead && (
