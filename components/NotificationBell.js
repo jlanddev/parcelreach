@@ -26,7 +26,7 @@ export default function NotificationBell({ userId, onOpen }) {
     } catch {}
   };
 
-  const recentNotifications = notifications.slice(0, 5);
+  const recentNotifications = notifications.slice(0, 50);
 
   return (
     <div className="relative">
