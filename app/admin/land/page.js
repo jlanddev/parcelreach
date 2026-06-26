@@ -373,6 +373,9 @@ export default function LandLeadsAdminPage() {
   const [selectedCalendarDay, setSelectedCalendarDay] = useState(null); // For calendar day click
   const [rundownVisibleCount, setRundownVisibleCount] = useState(20);
   const [ppcSearch, setPpcSearch] = useState('');
+  const [pipelineSearch, setPipelineSearch] = useState('');
+  const [pipelineMapped, setPipelineMapped] = useState(false);
+  const [pipelineSort, setPipelineSort] = useState('activity_desc');
   const [convoCompleteTask, setConvoCompleteTask] = useState(null);
   const [convoNotes, setConvoNotes] = useState('');
   const [convoModalOpen, setConvoModalOpen] = useState(false);
@@ -4491,9 +4494,24 @@ export default function LandLeadsAdminPage() {
             emerald:{ ring: 'border-emerald-500/40',text: 'text-emerald-300',bg: 'from-emerald-500/10 to-emerald-600/5' },
           };
           const c = accentMap[cfg.accent];
-          const leadsInBucket = allLeads
-            .filter(l => cfg.statuses.includes((l.pipeline_status || l.status || '').toUpperCase()))
-            .sort((a, b) => new Date(b.last_activity_at || b.created_at) - new Date(a.last_activity_at || a.created_at));
+          const sorters = {
+            activity_desc: (a, b) => new Date(b.last_activity_at || b.created_at) - new Date(a.last_activity_at || a.created_at),
+            activity_asc: (a, b) => new Date(a.last_activity_at || a.created_at) - new Date(b.last_activity_at || b.created_at),
+            created_desc: (a, b) => new Date(b.created_at) - new Date(a.created_at),
+            created_asc: (a, b) => new Date(a.created_at) - new Date(b.created_at),
+          };
+          const q = pipelineSearch.trim().toLowerCase();
+          const bucketAll = allLeads.filter(l => cfg.statuses.includes((l.pipeline_status || l.status || '').toUpperCase()));
+          const leadsInBucket = bucketAll
+            .filter(l => !pipelineMapped || l.map_uploaded)
+            .filter(l => !q ||
+              (l.full_name || l.name || '').toLowerCase().includes(q) ||
+              (l.phone || '').toLowerCase().includes(q) ||
+              (l.email || '').toLowerCase().includes(q) ||
+              (l.property_county || l.county || '').toLowerCase().includes(q) ||
+              (l.property_state || l.state || '').toLowerCase().includes(q) ||
+              (l.form_data?.streetAddress || '').toLowerCase().includes(q))
+            .sort(sorters[pipelineSort] || sorters.activity_desc);
 
           return (
             <div className="space-y-6">
@@ -4504,16 +4522,48 @@ export default function LandLeadsAdminPage() {
                     <p className="text-slate-400 text-sm mt-1">{cfg.subtitle}</p>
                   </div>
                   <div className="text-right">
-                    <div className={`text-4xl font-bold ${c.text}`}>{leadsInBucket.length}</div>
+                    <div className={`text-4xl font-bold ${c.text}`}>{bucketAll.length}</div>
                     <div className="text-xs text-slate-500 uppercase tracking-wide">leads</div>
                   </div>
                 </div>
               </div>
 
+              {/* Search + filter + sort */}
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="relative flex-1 min-w-[220px]">
+                  <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                  <input
+                    value={pipelineSearch}
+                    onChange={(e) => setPipelineSearch(e.target.value)}
+                    placeholder="Search name, phone, county, address…"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-8 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500/50"
+                  />
+                  {pipelineSearch && (
+                    <button onClick={() => setPipelineSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">&times;</button>
+                  )}
+                </div>
+                <button
+                  onClick={() => setPipelineMapped((v) => !v)}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium border ${pipelineMapped ? 'bg-green-600/30 border-green-600/50 text-green-300' : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800'}`}
+                >
+                  {pipelineMapped ? '✓ ' : ''}Mapped only
+                </button>
+                <select
+                  value={pipelineSort}
+                  onChange={(e) => setPipelineSort(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500/50"
+                >
+                  <option value="activity_desc">Last activity: newest first</option>
+                  <option value="activity_asc">Last activity: oldest first</option>
+                  <option value="created_desc">Newest leads</option>
+                  <option value="created_asc">Oldest leads</option>
+                </select>
+              </div>
+
               {leadsInBucket.length === 0 ? (
                 <div className="text-center py-20 text-slate-500">
-                  <p className="text-lg">No leads in this bucket yet.</p>
-                  <p className="text-sm mt-1">Leads land here when their status moves into {cfg.statuses.join(' / ')}.</p>
+                  <p className="text-lg">{bucketAll.length === 0 ? 'No leads in this bucket yet.' : 'No leads match your filters.'}</p>
+                  <p className="text-sm mt-1">{bucketAll.length === 0 ? `Leads land here when their status moves into ${cfg.statuses.join(' / ')}.` : 'Try clearing the search or the Mapped filter.'}</p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
