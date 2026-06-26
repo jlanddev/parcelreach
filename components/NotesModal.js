@@ -12,7 +12,7 @@ import { timeAgo } from '@/lib/format';
  * roster: [{ id, name }] of taggable teammates (admin + acquisition manager).
  * usersById: { [userId]: name } for author labels.
  */
-export default function NotesModal({ lead, currentUserId, currentUserName, roster = [], usersById = {}, onClose, onPosted }) {
+export default function NotesModal({ lead, currentUserId, currentUserName, roster = [], usersById = {}, onClose, onPosted, onOpenLead }) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState('');
@@ -152,8 +152,15 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
       <div className="w-full max-w-md h-[620px] bg-slate-900 border border-slate-700 rounded-xl flex flex-col overflow-hidden shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-700/70 bg-slate-800/60">
           <div className="flex-1 min-w-0">
-            <div className="text-slate-100 font-semibold truncate">Notes: {name}</div>
-            <div className="text-slate-400 text-xs">{notes.length} note{notes.length === 1 ? '' : 's'} · tag with @</div>
+            <button
+              type="button"
+              onClick={() => { if (onOpenLead) { onOpenLead(lead); onClose(); } }}
+              className="text-slate-100 font-semibold truncate hover:text-blue-300 hover:underline text-left max-w-full"
+              title="Open lead card"
+            >
+              {name}
+            </button>
+            <div className="text-slate-400 text-xs">{notes.length} note{notes.length === 1 ? '' : 's'} · tap name for the lead card</div>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-700/60 text-slate-400">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>

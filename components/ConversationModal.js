@@ -9,7 +9,7 @@ import { clockTime } from '@/lib/format';
  * right/blue, chronological. Composer sends via Project Blue with optimistic
  * bubbles + retry on failure. Live inbound arrives over Supabase Realtime.
  */
-export default function ConversationModal({ lead, currentUserId, onClose, onActivity, onCall }) {
+export default function ConversationModal({ lead, currentUserId, onClose, onActivity, onCall, onOpenLead }) {
   const phone = lead?.phone || lead?.owner_phone || '';
   const name = lead?.owner_name || lead?.name || lead?.full_name || 'Lead';
 
@@ -153,7 +153,14 @@ export default function ConversationModal({ lead, currentUserId, onClose, onActi
         {/* Header */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-700/70 bg-slate-800/60">
           <div className="flex-1 min-w-0">
-            <div className="text-slate-100 font-semibold truncate">{name}</div>
+            <button
+              type="button"
+              onClick={() => { if (onOpenLead) { onOpenLead(lead); onClose(); } }}
+              className="text-slate-100 font-semibold truncate hover:text-blue-300 hover:underline text-left max-w-full block"
+              title="Open lead card"
+            >
+              {name}
+            </button>
             <div className="text-slate-400 text-xs">{phone || 'no phone'}</div>
           </div>
           <button

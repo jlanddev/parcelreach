@@ -3380,6 +3380,7 @@ export default function LandLeadsAdminPage() {
           onClose={() => setConversationLead(null)}
           onActivity={() => setContactRefresh((t) => t + 1)}
           onCall={(l) => setCallLead(l)}
+          onOpenLead={(l) => openLeadDetails(l)}
         />
       )}
       {notesModalLead && (
@@ -3391,6 +3392,7 @@ export default function LandLeadsAdminPage() {
           usersById={usersById}
           onClose={() => setNotesModalLead(null)}
           onPosted={() => setNotesRefresh((t) => t + 1)}
+          onOpenLead={(l) => openLeadDetails(l)}
         />
       )}
       {callLead && (
@@ -4407,23 +4409,41 @@ export default function LandLeadsAdminPage() {
               })()
             )}
 
-            {/* PPC Search */}
-            <div className="relative">
-              <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-              <input
-                type="text"
-                value={ppcSearch}
-                onChange={(e) => setPpcSearch(e.target.value)}
-                placeholder="Search leads by name, phone, county, state, email..."
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-10 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
-              />
-              {ppcSearch && (
-                <button onClick={() => setPpcSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                </button>
-              )}
+            {/* PPC Search + filters */}
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="relative flex-1 min-w-[220px]">
+                <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <input
+                  type="text"
+                  value={ppcSearch}
+                  onChange={(e) => setPpcSearch(e.target.value)}
+                  placeholder="Search leads by name, phone, county, state, email..."
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-10 pr-10 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                />
+                {ppcSearch && (
+                  <button onClick={() => setPpcSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={() => setPipelineMapped((v) => !v)}
+                className={`px-4 py-3 rounded-xl text-sm font-medium border ${pipelineMapped ? 'bg-green-600/30 border-green-600/50 text-green-300' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}
+              >
+                {pipelineMapped ? '✓ ' : ''}Mapped only
+              </button>
+              <select
+                value={pipelineSort}
+                onChange={(e) => setPipelineSort(e.target.value)}
+                className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-3 text-sm text-white focus:outline-none focus:border-blue-500"
+              >
+                <option value="activity_desc">Last activity: newest first</option>
+                <option value="activity_asc">Last activity: oldest first</option>
+                <option value="created_desc">Newest leads</option>
+                <option value="created_asc">Oldest leads</option>
+              </select>
             </div>
 
             {/* PPC Leads Grid */}
@@ -4439,6 +4459,13 @@ export default function LandLeadsAdminPage() {
                     (l.property_county || l.county || '').toLowerCase().includes(q) ||
                     (l.property_state || l.state || '').toLowerCase().includes(q) ||
                     (l.form_data?.streetAddress || '').toLowerCase().includes(q);
+                })
+                .filter(l => !pipelineMapped || l.map_uploaded)
+                .sort((a, b) => {
+                  const useCreated = pipelineSort.startsWith('created');
+                  const av = new Date(useCreated ? a.created_at : (a.last_activity_at || a.created_at));
+                  const bv = new Date(useCreated ? b.created_at : (b.last_activity_at || b.created_at));
+                  return pipelineSort.endsWith('asc') ? av - bv : bv - av;
                 })
                 .map((lead) => renderLeadCard(lead))}
             </div>
