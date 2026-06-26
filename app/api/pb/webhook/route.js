@@ -106,28 +106,32 @@ export async function POST(request) {
         await supabase.from('leads').update({ status: 'contacted' }).eq('id', lead.id);
       }
 
-      // Notify the lead's owner (or the acquisition manager) so the bell lights
-      // up on an inbound text.
+      // Notify on an inbound text: the lead's owner (or the acquisition manager
+      // if unowned) PLUS all admins, so the admin sees every inbound for oversight.
       try {
-        let notifyUserId = lead.current_owner_id;
-        if (!notifyUserId) {
-          const { data: am } = await supabase.from('users').select('id').eq('role', 'acquisition_manager').limit(1).maybeSingle();
-          notifyUserId = am?.id || null;
+        const { data: staff } = await supabase.from('users').select('id, role').in('role', ['admin', 'acquisition_manager']);
+        const recipients = new Set();
+        if (lead.current_owner_id) recipients.add(lead.current_owner_id);
+        for (const u of staff || []) {
+          if (u.role === 'admin') recipients.add(u.id);
         }
-        if (notifyUserId) {
-          const leadName = lead.full_name || lead.name || 'a lead';
-          // `view=sms` tells the click handler to open the conversation. The
-          // notifications.type CHECK only allows mention/lead_assigned/team_invite,
-          // so try sms_inbound then fall back to mention.
-          const notif = {
-            user_id: notifyUserId,
-            from_user_id: null,
-            title: `New text from ${leadName}`,
-            message: String(message).slice(0, 200),
-            link: `/admin/land?lead=${lead.id}&view=sms`,
-          };
-          const { error: nerr } = await supabase.from('notifications').insert({ ...notif, type: 'sms_inbound' });
-          if (nerr) await supabase.from('notifications').insert({ ...notif, type: 'mention' });
+        if (!lead.current_owner_id) {
+          const am = (staff || []).find((u) => u.role === 'acquisition_manager');
+          if (am) recipients.add(am.id);
+        }
+        const leadName = lead.full_name || lead.name || 'a lead';
+        // `view=sms` tells the click handler to open the conversation. The
+        // notifications.type CHECK only allows mention/lead_assigned/team_invite,
+        // so try sms_inbound then fall back to mention.
+        const notif = {
+          from_user_id: null,
+          title: `New text from ${leadName}`,
+          message: String(message).slice(0, 200),
+          link: `/admin/land?lead=${lead.id}&view=sms`,
+        };
+        for (const uid of recipients) {
+          const { error: nerr } = await supabase.from('notifications').insert({ ...notif, user_id: uid, type: 'sms_inbound' });
+          if (nerr) await supabase.from('notifications').insert({ ...notif, user_id: uid, type: 'mention' });
         }
       } catch (e) {
         console.error('[PB webhook] notify failed', e);
