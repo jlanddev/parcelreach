@@ -1,74 +1,59 @@
 -- ============================================================================
--- Acquisition Manager Role Migration
+-- ONE-SHOT SETUP: Acquisition Manager Role (Anthony)
 -- ============================================================================
--- Adds role-based access for cold callers (Anthony), property map upload,
--- and the "Mapped" badge on lead cards.
---
--- Run this in Supabase SQL Editor:
--- https://supabase.com/dashboard/project/snfttvopjrpzsypteiby/editor
+-- 1. Supabase Dashboard → Authentication → Users → Add User
+--    Enter Anthony's email + a temp password. Click Create.
+-- 2. Change the email on the next line to match what you just used.
+-- 3. Paste this whole file into Supabase SQL Editor → Run. Done.
 -- ============================================================================
 
--- 1. ROLE COLUMN on users table
--- Default 'admin' so Jordan (the only existing user) stays admin.
--- Anthony's row will be flipped to 'acquisition_manager' after his auth account is created.
-ALTER TABLE users
-  ADD COLUMN IF NOT EXISTS role TEXT
-  DEFAULT 'admin'
-  CHECK (role IN ('admin', 'acquisition_manager'));
+DO $$
+DECLARE
+  anthony_email TEXT := 'anthony@yourdomain.com';  -- <<< CHANGE THIS
+BEGIN
 
-UPDATE users SET role = 'admin' WHERE role IS NULL;
+  -- Role column on users (default 'admin' so Jordan stays admin)
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'admin'
+    CHECK (role IN ('admin', 'acquisition_manager'));
+  UPDATE users SET role = 'admin' WHERE role IS NULL;
 
+  -- Property map fields on leads
+  ALTER TABLE leads ADD COLUMN IF NOT EXISTS map_uploaded BOOLEAN DEFAULT FALSE;
+  ALTER TABLE leads ADD COLUMN IF NOT EXISTS map_image_url TEXT;
+
+  -- Storage bucket for map screenshots
+  INSERT INTO storage.buckets (id, name, public)
+  VALUES ('lead-maps', 'lead-maps', true)
+  ON CONFLICT (id) DO NOTHING;
+
+  -- Upsert Anthony's profile row + set role from his auth account
+  INSERT INTO users (id, email, full_name, role)
+  SELECT id, email, 'Anthony', 'acquisition_manager'
+  FROM auth.users
+  WHERE email = anthony_email
+  ON CONFLICT (id) DO UPDATE SET role = 'acquisition_manager';
+
+END $$;
+
+-- Indexes (outside DO block — IF NOT EXISTS handles re-runs)
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
-
-
--- 2. PROPERTY MAP UPLOAD fields on leads
-ALTER TABLE leads
-  ADD COLUMN IF NOT EXISTS map_uploaded BOOLEAN DEFAULT FALSE;
-
-ALTER TABLE leads
-  ADD COLUMN IF NOT EXISTS map_image_url TEXT;
-
 CREATE INDEX IF NOT EXISTS idx_leads_map_uploaded ON leads(map_uploaded) WHERE map_uploaded = TRUE;
 
-
--- 3. STORAGE BUCKET for property map screenshots
--- Public bucket so the image URL renders directly in the lead card.
-INSERT INTO storage.buckets (id, name, public)
-VALUES ('lead-maps', 'lead-maps', true)
-ON CONFLICT (id) DO NOTHING;
-
--- Allow any authenticated user to upload map screenshots (both Jordan + Anthony)
+-- Storage policies (outside DO block — CREATE POLICY doesn't accept variables)
 DROP POLICY IF EXISTS "Authenticated users can upload lead maps" ON storage.objects;
 CREATE POLICY "Authenticated users can upload lead maps"
-ON storage.objects FOR INSERT
-TO authenticated
+ON storage.objects FOR INSERT TO authenticated
 WITH CHECK (bucket_id = 'lead-maps');
 
--- Allow any authenticated user to update/replace map screenshots
 DROP POLICY IF EXISTS "Authenticated users can update lead maps" ON storage.objects;
 CREATE POLICY "Authenticated users can update lead maps"
-ON storage.objects FOR UPDATE
-TO authenticated
+ON storage.objects FOR UPDATE TO authenticated
 USING (bucket_id = 'lead-maps');
 
--- Public read so the <img> renders without a signed URL
 DROP POLICY IF EXISTS "Public can read lead maps" ON storage.objects;
 CREATE POLICY "Public can read lead maps"
-ON storage.objects FOR SELECT
-TO public
+ON storage.objects FOR SELECT TO public
 USING (bucket_id = 'lead-maps');
 
-
--- ============================================================================
--- AFTER you create Anthony's auth user in Supabase Dashboard
--- (Authentication → Users → Add User → his email + password),
--- run this to set his role:
--- ============================================================================
---
--- INSERT INTO users (id, email, full_name, role)
--- SELECT id, email, 'Anthony', 'acquisition_manager'
--- FROM auth.users
--- WHERE email = 'anthony@yourdomain.com'  -- <<< replace with Anthony's email
--- ON CONFLICT (id) DO UPDATE SET role = 'acquisition_manager';
---
--- ============================================================================
+-- Sanity check — should return Jordan as admin + Anthony as acquisition_manager
+SELECT email, role FROM users ORDER BY role;

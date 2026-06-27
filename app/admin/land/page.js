@@ -11,7 +11,9 @@ import ConversationModal from '@/components/ConversationModal';
 import NotesModal from '@/components/NotesModal';
 import CallModal from '@/components/CallModal';
 import NotificationBell from '@/components/NotificationBell';
+import DealStrip from '@/components/DealStrip';
 import { timeAgo, channelLabel } from '@/lib/format';
+import { OFFER_DIRECTIONS, GENERAL_DIRECTIONS, FOLLOWUP_BUCKETS, FOLLOWUP_KEYS, LOST_REASONS, formatOffer, mergeScript, firstTouch, touchForStep } from '@/lib/followups';
 
 // A conversation note is anything that isn't an auto-logged activity marker.
 const isConversationNote = (content) =>
@@ -538,6 +540,8 @@ export default function LandLeadsAdminPage() {
     CLOSED: { label: 'Closed', color: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50' },
     DEAD: { label: 'Dead', color: 'bg-slate-500/20 text-slate-400 border-slate-500/50' },
     NURTURE: { label: 'Nurture', color: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/50' },
+    FOLLOW_UP: { label: 'Follow-Up', color: 'bg-rose-500/20 text-rose-400 border-rose-500/50' },
+    LOST: { label: 'Lost', color: 'bg-zinc-500/20 text-zinc-400 border-zinc-500/50' },
     ARCHIVED: { label: 'Archived', color: 'bg-zinc-500/20 text-zinc-400 border-zinc-500/50' }
   };
 
@@ -571,6 +575,8 @@ export default function LandLeadsAdminPage() {
   const tabForLead = (lead) => {
     if ((lead.status || '').toLowerCase() === 'archived') return 'archive';
     const s = (lead.pipeline_status || lead.status || '').toUpperCase();
+    if (s === 'FOLLOW_UP') return 'follow-up';
+    if (s === 'LOST') return 'lost';
     if (s === 'APPT_SET_FOR_JORDAN') return 'appointment-set';
     if (['OFFER_SENT', 'NEGOTIATING'].includes(s)) return 'offer-made';
     if (s === 'AGREEMENT_SENT') return 'agreement-sent';
@@ -613,6 +619,78 @@ export default function LandLeadsAdminPage() {
       }
     };
     setTimeout(find, 180);
+  };
+
+  // --- Offer, direction, and Follow-Up handlers -------------------------------
+
+  const patchLead = (leadId, patch) => {
+    setAllLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, ...patch } : l)));
+    setSelectedLead((prev) => (prev && prev.id === leadId ? { ...prev, ...patch } : prev));
+    supabase.from('leads').update(patch).eq('id', leadId).then(() => {}, () => {});
+  };
+
+  const setOfferAmount = (leadId, amount) => {
+    const n = amount === '' || amount === null ? null : Number(String(amount).replace(/[^0-9.]/g, ''));
+    patchLead(leadId, { offer_amount: Number.isNaN(n) ? null : n });
+  };
+  const toggleOfferConfirmed = (lead) => patchLead(lead.id, { offer_confirmed: !lead.offer_confirmed });
+  const setDealDirection = (leadId, value) => patchLead(leadId, { deal_direction: value || null });
+
+  // Park a lead into a Follow-Up bucket: set status, bucket, and schedule touch 1.
+  const moveToFollowUp = (lead, bucketKey) => {
+    const startedAt = new Date().toISOString();
+    const t = firstTouch(bucketKey, startedAt);
+    patchLead(lead.id, {
+      pipeline_status: 'FOLLOW_UP',
+      status: 'follow_up',
+      deal_direction: null,
+      follow_up_bucket: bucketKey,
+      follow_up_step: 0,
+      follow_up_started_at: startedAt,
+      next_follow_up_at: t ? t.at.toISOString() : startedAt,
+    });
+    showToast(`Moved to Follow-Up · ${FOLLOWUP_BUCKETS[bucketKey]?.label || ''}`, 'success');
+  };
+
+  // Did the current touch: advance to the next step and schedule it.
+  const advanceFollowUp = (lead) => {
+    const nextStep = (lead.follow_up_step || 0) + 1;
+    const t = touchForStep(lead.follow_up_bucket, nextStep, lead.follow_up_started_at);
+    patchLead(lead.id, {
+      follow_up_step: nextStep,
+      next_follow_up_at: t ? t.at.toISOString() : null,
+    });
+    showToast('Touch logged · next one scheduled', 'success');
+  };
+
+  // Push the next touch out by N days without advancing the step.
+  const snoozeFollowUp = (lead, days = 3) => {
+    const base = lead.next_follow_up_at ? new Date(lead.next_follow_up_at) : new Date();
+    if (base < new Date()) base.setTime(Date.now());
+    base.setDate(base.getDate() + days);
+    patchLead(lead.id, { next_follow_up_at: base.toISOString() });
+    showToast(`Snoozed ${days} days`, 'success');
+  };
+
+  // Bring a parked lead back into the active pipeline.
+  const reviveFollowUp = (lead) => {
+    patchLead(lead.id, {
+      pipeline_status: 'NEGOTIATING',
+      status: 'negotiating',
+      follow_up_bucket: null,
+      next_follow_up_at: null,
+    });
+    showToast('Back in play · Negotiating', 'success');
+  };
+
+  const markLost = (lead, reason) => {
+    patchLead(lead.id, {
+      pipeline_status: 'LOST',
+      status: 'lost',
+      lost_reason: reason || null,
+      next_follow_up_at: null,
+    });
+    showToast('Marked Lost', 'success');
   };
 
   // Quick log activity (one-tap)
@@ -3036,6 +3114,20 @@ export default function LandLeadsAdminPage() {
                         })()}
                       </div>
 
+                      {/* Deal strip: offer, direction, follow-up */}
+                      <DealStrip
+                        lead={lead}
+                        repName={currentUserName}
+                        onSetOffer={setOfferAmount}
+                        onToggleOfferConfirmed={toggleOfferConfirmed}
+                        onSetDirection={setDealDirection}
+                        onMoveToFollowUp={moveToFollowUp}
+                        onAdvance={advanceFollowUp}
+                        onSnooze={snoozeFollowUp}
+                        onRevive={reviveFollowUp}
+                        onMarkLost={markLost}
+                      />
+
                       {/* Owner Name & Time */}
                       <div className="mb-4">
                         <input
@@ -3535,8 +3627,8 @@ export default function LandLeadsAdminPage() {
             // with arrow chevrons between them to visualize lead flow.
             const PIPELINE_TABS = ['ppc-inflow', 'appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'];
             const allTabs = isAdmin
-              ? ['daily-rundown', 'shared-calendar', 'activity-log', ...PIPELINE_TABS, 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics']
-              : ['daily-rundown', 'shared-calendar', ...PIPELINE_TABS, 'subdivision-inflow', 'all-leads'];
+              ? ['daily-rundown', 'shared-calendar', 'activity-log', ...PIPELINE_TABS, 'follow-up', 'lost', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics']
+              : ['daily-rundown', 'shared-calendar', ...PIPELINE_TABS, 'follow-up', 'lost', 'subdivision-inflow', 'all-leads'];
             return allTabs.map((tab, i) => {
               const prevTab = allTabs[i - 1];
               const showChevron = PIPELINE_TABS.includes(tab) && PIPELINE_TABS.includes(prevTab);
@@ -3580,7 +3672,7 @@ export default function LandLeadsAdminPage() {
                   <path d="M11 7h2v10h-2zm4 4h2v6h-2zM7 9h2v8H7zm12-7H5c-1.1 0-2 .9-2 2v18l4-4h13c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
                 </svg>
               )}
-              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'appointment-set' ? 'Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Agreement Sent' : tab === 'signed-contract' ? 'Signed Contract' : tab === 'closed-deal' ? 'Closed Deal' : tab.replace('-', ' ')}
+              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'appointment-set' ? 'Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Agreement Sent' : tab === 'signed-contract' ? 'Signed Contract' : tab === 'closed-deal' ? 'Closed Deal' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab.replace('-', ' ')}
               {tab === 'unassigned' && ` (${unassignedLeads.length})`}
               {tab === 'ppc-inflow' && ` (${allLeads.filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })()).length})`}
               {tab === 'appointment-set' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN').length})`}
@@ -3588,6 +3680,8 @@ export default function LandLeadsAdminPage() {
               {tab === 'agreement-sent' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'AGREEMENT_SENT').length})`}
               {tab === 'signed-contract' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'UNDER_CONTRACT').length})`}
               {tab === 'closed-deal' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'CLOSED').length})`}
+              {tab === 'follow-up' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'FOLLOW_UP').length})`}
+              {tab === 'lost' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'LOST').length})`}
               {tab === 'subdivision-inflow' && ` (${allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived').length})`}
               {tab === 'archive' && ` (${allLeads.filter(l => l.status === 'archived').length})`}
                   </button>
@@ -4547,8 +4641,20 @@ export default function LandLeadsAdminPage() {
         )}
 
         {/* PIPELINE BUCKETS — Appointment Set / Offer Made / Agreement Sent / Signed Contract / Closed Deal */}
-        {['appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'].includes(activeTab) && (() => {
+        {['appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal', 'follow-up', 'lost'].includes(activeTab) && (() => {
           const bucketConfig = {
+            'follow-up': {
+              title: 'Follow-Up',
+              subtitle: 'Parked deals on a drip. Most overdue first, work the top of the list.',
+              statuses: ['FOLLOW_UP'],
+              accent: 'rose',
+            },
+            'lost': {
+              title: 'Lost',
+              subtitle: 'Dead deals, kept for the record. Reopen any time.',
+              statuses: ['LOST'],
+              accent: 'zinc',
+            },
             'appointment-set': {
               title: 'Appointment Set',
               subtitle: "Sellers we've connected with — appointments on the calendar",
@@ -4587,6 +4693,8 @@ export default function LandLeadsAdminPage() {
             amber:  { ring: 'border-amber-500/40',  text: 'text-amber-300',  bg: 'from-amber-500/10 to-amber-600/5' },
             blue:   { ring: 'border-blue-500/40',   text: 'text-blue-300',   bg: 'from-blue-500/10 to-blue-600/5' },
             emerald:{ ring: 'border-emerald-500/40',text: 'text-emerald-300',bg: 'from-emerald-500/10 to-emerald-600/5' },
+            rose:   { ring: 'border-rose-500/40',   text: 'text-rose-300',   bg: 'from-rose-500/10 to-rose-600/5' },
+            zinc:   { ring: 'border-zinc-500/40',   text: 'text-zinc-300',   bg: 'from-zinc-500/10 to-zinc-600/5' },
           };
           const c = accentMap[cfg.accent];
           const sorters = {
@@ -4606,7 +4714,9 @@ export default function LandLeadsAdminPage() {
               (l.property_county || l.county || '').toLowerCase().includes(q) ||
               (l.property_state || l.state || '').toLowerCase().includes(q) ||
               (l.form_data?.streetAddress || '').toLowerCase().includes(q))
-            .sort(sorters[pipelineSort] || sorters.activity_desc);
+            .sort(activeTab === 'follow-up'
+              ? (a, b) => new Date(a.next_follow_up_at || a.created_at) - new Date(b.next_follow_up_at || b.created_at)
+              : (sorters[pipelineSort] || sorters.activity_desc));
 
           return (
             <div className="space-y-6">
