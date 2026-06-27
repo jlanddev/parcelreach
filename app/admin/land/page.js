@@ -626,14 +626,18 @@ export default function LandLeadsAdminPage() {
   const patchLead = (leadId, patch) => {
     setAllLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, ...patch } : l)));
     setSelectedLead((prev) => (prev && prev.id === leadId ? { ...prev, ...patch } : prev));
-    supabase.from('leads').update(patch).eq('id', leadId).then(() => {}, () => {});
+    supabase.from('leads').update(patch).eq('id', leadId).then(
+      ({ error }) => { if (error) showToast(`Could not save: ${error.message}`, 'error'); },
+      (e) => showToast(`Could not save: ${e?.message || e}`, 'error')
+    );
   };
 
   const setOfferAmount = (leadId, amount) => {
-    const n = amount === '' || amount === null ? null : Number(String(amount).replace(/[^0-9.]/g, ''));
-    patchLead(leadId, { offer_amount: Number.isNaN(n) ? null : n });
+    const raw = amount === '' || amount === null ? null : Number(String(amount).replace(/[^0-9.]/g, ''));
+    const n = raw === null || Number.isNaN(raw) ? null : raw;
+    // Entering an offer locks it (green); clearing it unlocks.
+    patchLead(leadId, { offer_amount: n, offer_confirmed: n != null });
   };
-  const toggleOfferConfirmed = (lead) => patchLead(lead.id, { offer_confirmed: !lead.offer_confirmed });
   const setDealDirection = (leadId, value) => patchLead(leadId, { deal_direction: value || null });
 
   // Park a lead into a Follow-Up bucket: set status, bucket, and schedule touch 1.
@@ -3119,7 +3123,6 @@ export default function LandLeadsAdminPage() {
                         lead={lead}
                         repName={currentUserName}
                         onSetOffer={setOfferAmount}
-                        onToggleOfferConfirmed={toggleOfferConfirmed}
                         onSetDirection={setDealDirection}
                         onMoveToFollowUp={moveToFollowUp}
                         onAdvance={advanceFollowUp}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   OFFER_DIRECTIONS,
   GENERAL_DIRECTIONS,
@@ -33,7 +33,6 @@ export default function DealStrip({
   lead,
   repName,
   onSetOffer,
-  onToggleOfferConfirmed,
   onSetDirection,
   onMoveToFollowUp,
   onAdvance,
@@ -48,45 +47,55 @@ export default function DealStrip({
   const directions = isOfferStage ? OFFER_DIRECTIONS : GENERAL_DIRECTIONS;
 
   const [draft, setDraft] = useState(lead.offer_amount ?? '');
+  const [editingOffer, setEditingOffer] = useState(lead.offer_amount == null);
   const [pickBucket, setPickBucket] = useState(false);
   const [pickLost, setPickLost] = useState(false);
   const [showScript, setShowScript] = useState(false);
+  const offerRef = useRef(null);
 
   const stop = (e) => e.stopPropagation();
+  const offerDisplay = lead.offer_amount != null ? `$${Number(lead.offer_amount).toLocaleString()}` : '';
+  const commitOffer = () => {
+    onSetOffer(lead.id, draft);
+    if (String(draft).trim() !== '') setEditingOffer(false);
+  };
+  const startEdit = () => {
+    setDraft(lead.offer_amount ?? '');
+    setEditingOffer(true);
+    setTimeout(() => offerRef.current && offerRef.current.focus(), 0);
+  };
   const bucket = inFollowUp ? FOLLOWUP_BUCKETS[lead.follow_up_bucket] : null;
   const touch = inFollowUp ? touchForStep(lead.follow_up_bucket, lead.follow_up_step || 0, lead.follow_up_started_at) : null;
 
   return (
     <div className="mb-4 rounded-lg border border-slate-700/60 bg-slate-900/40 p-3" onClick={stop}>
-      {/* Offer + reviewed check */}
+      {/* Offer: type a number and it locks green. Edit to change. */}
       <div className="flex items-center gap-2">
         <span className="text-[10px] uppercase tracking-wide text-slate-500 w-10">Offer</span>
-        <div className="relative flex-1">
-          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-500 text-sm">$</span>
-          <input
-            type="text"
-            inputMode="numeric"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value.replace(/[^0-9.]/g, ''))}
-            onBlur={() => onSetOffer(lead.id, draft)}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onSetOffer(lead.id, draft); e.target.blur(); } }}
-            placeholder="No offer yet"
-            className="w-full bg-slate-900/70 border border-slate-700 rounded pl-5 pr-2 py-1 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-blue-500/60"
-          />
-        </div>
-        <button
-          type="button"
-          onClick={() => onToggleOfferConfirmed(lead)}
-          title={lead.offer_confirmed ? 'Reviewed and locked' : 'Mark offer reviewed'}
-          className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold border ${
-            lead.offer_confirmed
-              ? 'bg-green-600/25 border-green-500/50 text-green-300'
-              : 'bg-slate-800 border-slate-600 text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
-          {lead.offer_confirmed ? 'Reviewed' : 'Review'}
-        </button>
+        {editingOffer ? (
+          <div className="relative flex-1">
+            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-500 text-sm">$</span>
+            <input
+              ref={offerRef}
+              type="text"
+              inputMode="numeric"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value.replace(/[^0-9.]/g, ''))}
+              onBlur={commitOffer}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitOffer(); } }}
+              placeholder="Enter offer to lock it"
+              className="w-full bg-slate-900/70 border border-blue-500/50 rounded pl-5 pr-2 py-1 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-blue-500"
+            />
+          </div>
+        ) : (
+          <div className="flex-1 flex items-center justify-between gap-2 px-2 py-1 rounded bg-green-600/20 border border-green-500/50">
+            <span className="inline-flex items-center gap-1.5 text-sm font-bold text-green-200">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+              {offerDisplay}
+            </span>
+            <button type="button" onClick={startEdit} className="text-[11px] text-green-200/80 hover:text-white">Edit</button>
+          </div>
+        )}
       </div>
 
       {/* Direction tag (live stages) */}
