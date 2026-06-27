@@ -134,6 +134,7 @@ export default function LandLeadsAdminPage() {
   const [contactRefresh, setContactRefresh] = useState(0); // bump to reload contactMeta
   const [notesByLead, setNotesByLead] = useState({}); // leadId -> recent conversation notes
   const [notesModalLead, setNotesModalLead] = useState(null); // open notes thread
+  const [frozenBoardLeads, setFrozenBoardLeads] = useState(null); // snapshot so cards don't reshuffle while a modal is open
   const [notesRefresh, setNotesRefresh] = useState(0);
   const [activityLogDate, setActivityLogDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [activityLog, setActivityLog] = useState([]);
@@ -308,6 +309,16 @@ export default function LandLeadsAdminPage() {
 
   const allLeadsRef = useRef(allLeads);
   useEffect(() => { allLeadsRef.current = allLeads; }, [allLeads]);
+
+  // While any lead modal is open (texting, calling, notes, details), freeze the
+  // board's contents and order so cards don't jump around while you read info
+  // off a card or type a message. It refreshes the moment everything closes.
+  useEffect(() => {
+    const open = !!(conversationLead || notesModalLead || callLead || detailsModalOpen);
+    if (open) setFrozenBoardLeads((cur) => cur || allLeadsRef.current);
+    else setFrozenBoardLeads(null);
+  }, [conversationLead, notesModalLead, callLead, detailsModalOpen]);
+  const boardLeads = frozenBoardLeads || allLeads;
 
   // Clicking a notification opens that lead's note (mention) or text (sms) in-page.
   const handleOpenNotification = async (n) => {
@@ -3433,6 +3444,7 @@ export default function LandLeadsAdminPage() {
         <ConversationModal
           lead={conversationLead}
           currentUserId={currentUserId}
+          currentUserName={currentUserName}
           onClose={() => setConversationLead(null)}
           onActivity={() => setContactRefresh((t) => t + 1)}
           onCall={(l) => setCallLead(l)}
@@ -4504,7 +4516,7 @@ export default function LandLeadsAdminPage() {
 
             {/* PPC Leads Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-              {allLeads
+              {boardLeads
                 .filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })())
                 .filter(l => {
                   if (!ppcSearch.trim()) return true;
@@ -4584,7 +4596,7 @@ export default function LandLeadsAdminPage() {
             created_asc: (a, b) => new Date(a.created_at) - new Date(b.created_at),
           };
           const q = pipelineSearch.trim().toLowerCase();
-          const bucketAll = allLeads.filter(l => cfg.statuses.includes((l.pipeline_status || l.status || '').toUpperCase()));
+          const bucketAll = boardLeads.filter(l => cfg.statuses.includes((l.pipeline_status || l.status || '').toUpperCase()));
           const leadsInBucket = bucketAll
             .filter(l => !pipelineMapped || l.map_uploaded)
             .filter(l => !q ||

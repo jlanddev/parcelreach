@@ -9,9 +9,27 @@ import { clockTime } from '@/lib/format';
  * right/blue, chronological. Composer sends via Project Blue with optimistic
  * bubbles + retry on failure. Live inbound arrives over Supabase Realtime.
  */
-export default function ConversationModal({ lead, currentUserId, onClose, onActivity, onCall, onOpenLead }) {
+export default function ConversationModal({ lead, currentUserId, currentUserName, onClose, onActivity, onCall, onOpenLead }) {
   const phone = lead?.phone || lead?.owner_phone || '';
   const name = lead?.owner_name || lead?.name || lead?.full_name || 'Lead';
+
+  // Smart message suggestions, merge-filled from the lead card.
+  const firstName = (lead?.name || lead?.full_name || lead?.owner_name || 'there').trim().split(/\s+/)[0];
+  const county = lead?.property_county || lead?.county || lead?.form_data?.propertyCounty || lead?.form_data?.county || 'your area';
+  const repName = (currentUserName || '').trim().split(/\s+/)[0];
+  const intro = repName ? `this is ${repName} with Haven Ground` : `this is the team at Haven Ground`;
+  const leadStatus = (lead?.pipeline_status || lead?.status || '').toUpperCase();
+  const suggestions = {
+    first: { label: 'First touch', text: `Hey ${firstName}, ${intro}. Reaching out about the land you wanted us to check out in ${county}. When's a good time to call and discuss?` },
+    checkin: { label: 'Check-in', text: `Hey ${firstName}, checking in on the land you wanted us to check out in ${county}. Did you end up getting that sold, or are you still interested in us buying?` },
+    offer: { label: 'Offer follow-up', text: `Hey ${firstName}, wanted to check in on the offer we made on the land in ${county}. Very confident in our underwriting and our ability to close this without a hitch.` },
+  };
+  const order = ['OFFER_SENT', 'NEGOTIATING', 'AGREEMENT_SENT', 'APPT_SET_FOR_JORDAN'].includes(leadStatus)
+    ? ['offer', 'checkin', 'first']
+    : ['CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(leadStatus)
+      ? ['checkin', 'first', 'offer']
+      : ['first', 'checkin', 'offer'];
+  const orderedSuggestions = order.map((k) => ({ key: k, ...suggestions[k] }));
 
   const [messages, setMessages] = useState([]);
   const [optimistic, setOptimistic] = useState([]); // local-only bubbles
@@ -19,6 +37,7 @@ export default function ConversationModal({ lead, currentUserId, onClose, onActi
   const [error, setError] = useState(null);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  const [suggestOpen, setSuggestOpen] = useState(false);
   const scrollRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -215,7 +234,45 @@ export default function ConversationModal({ lead, currentUserId, onClose, onActi
         </div>
 
         {/* Composer */}
-        <div className="border-t border-slate-700/70 p-2 bg-slate-800/40">
+        <div className="border-t border-slate-700/70 p-2 bg-slate-800/40 relative">
+          {/* Generative Responses popup */}
+          {suggestOpen && (
+            <div className="absolute bottom-full left-2 right-2 mb-2 bg-slate-800 border border-slate-600 rounded-xl shadow-2xl overflow-hidden z-10">
+              <div className="px-3 py-2 text-[11px] uppercase tracking-wide text-slate-400 border-b border-slate-700 flex items-center justify-between">
+                <span>Suggested messages</span>
+                <button type="button" onClick={() => setSuggestOpen(false)} className="text-slate-500 hover:text-slate-300 normal-case">Close</button>
+              </div>
+              <div className="max-h-64 overflow-y-auto">
+                {orderedSuggestions.map((s, i) => (
+                  <button
+                    key={s.key}
+                    type="button"
+                    onClick={() => { setDraft(s.text); setSuggestOpen(false); }}
+                    className="block w-full text-left px-3 py-2.5 hover:bg-blue-600/20 border-b border-slate-700/50 last:border-0"
+                  >
+                    <div className="text-[11px] font-semibold text-purple-300 mb-0.5">{s.label}{i === 0 ? ' · suggested' : ''}</div>
+                    <div className="text-xs text-slate-300 line-clamp-3">{s.text}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="mb-1.5">
+            <button
+              type="button"
+              onClick={() => setSuggestOpen((o) => !o)}
+              disabled={!phone}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-purple-300 hover:text-purple-200 disabled:opacity-40"
+            >
+              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 2l1.9 5.1L19 9l-5.1 1.9L12 16l-1.9-5.1L5 9l5.1-1.9L12 2zm6 12l.95 2.55L21.5 17.5l-2.55.95L18 21l-.95-2.55L14.5 17.5l2.55-.95L18 14z" />
+              </svg>
+              Generative Responses
+              <svg className={`w-3 h-3 transition-transform ${suggestOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+              </svg>
+            </button>
+          </div>
           <div className="flex items-end gap-2">
             <textarea
               value={draft}
