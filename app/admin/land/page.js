@@ -773,6 +773,32 @@ export default function LandLeadsAdminPage() {
     showToast('Marked Lost', 'success');
   };
 
+  // From Smart Suggest: create a rundown task at the AI-read time + set the
+  // card's Next Touch banner.
+  const scheduleSmartFollowUp = async (leadId, whenISO, label) => {
+    const due = whenISO ? new Date(whenISO) : null;
+    if (!due || isNaN(due.getTime())) { showToast('Could not read the follow-up time', 'error'); return; }
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const lead = (allLeadsRef.current || []).find((l) => l.id === leadId);
+      const { data: task } = await supabase.from('scheduled_tasks').insert({
+        lead_id: leadId,
+        assigned_to: user?.id || lead?.current_owner_id || null,
+        task_type: 'follow_up',
+        title: `${label || 'Follow up'}: ${lead?.name || lead?.full_name || 'Lead'}`,
+        description: 'Scheduled from Smart Suggest',
+        due_at: due.toISOString(),
+        status: 'pending',
+        priority: 'normal',
+      }).select().single();
+      if (task) setScheduledTasks((prev) => [...prev, task]);
+      patchLead(leadId, { next_callback_at: due.toISOString() });
+      showToast(`Follow-up set for ${due.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`, 'success');
+    } catch (e) {
+      showToast('Could not schedule: ' + (e?.message || e), 'error');
+    }
+  };
+
   // Quick log activity (one-tap)
   const quickLogActivity = async (leadId, outcome) => {
     const lead = allLeads.find(l => l.id === leadId);
@@ -3657,6 +3683,8 @@ export default function LandLeadsAdminPage() {
           onActivity={() => setContactRefresh((t) => t + 1)}
           onCall={(l) => setCallLead(l)}
           onOpenLead={(l) => navigateToLeadCard(l)}
+          onSetDirection={(id, val) => setDealDirection(id, val)}
+          onScheduleFollowUp={scheduleSmartFollowUp}
         />
       )}
       {notesModalLead && (

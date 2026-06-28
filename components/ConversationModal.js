@@ -3,13 +3,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { clockTime } from '@/lib/format';
+import { OFFER_DIRECTIONS, GENERAL_DIRECTIONS } from '@/lib/followups';
+
+const LEAN_LABEL = Object.fromEntries([...OFFER_DIRECTIONS, ...GENERAL_DIRECTIONS].map((d) => [d.value, d.label]));
 
 /**
  * iMessage-style conversation for one lead. Inbound left/gray, outbound
  * right/blue, chronological. Composer sends via Project Blue with optimistic
  * bubbles + retry on failure. Live inbound arrives over Supabase Realtime.
  */
-export default function ConversationModal({ lead, currentUserId, currentUserName, onClose, onActivity, onCall, onOpenLead }) {
+export default function ConversationModal({ lead, currentUserId, currentUserName, onClose, onActivity, onCall, onOpenLead, onSetDirection, onScheduleFollowUp }) {
   const phone = lead?.phone || lead?.owner_phone || '';
   const name = lead?.owner_name || lead?.name || lead?.full_name || 'Lead';
 
@@ -38,7 +41,30 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [suggestOpen, setSuggestOpen] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [ai, setAi] = useState(null); // { lean, follow_up, draft_reply, summary } or { error }
+  const [aiApplied, setAiApplied] = useState({});
   const scrollRef = useRef(null);
+
+  const runSmartSuggest = async () => {
+    setAiLoading(true);
+    setAi(null);
+    setAiApplied({});
+    try {
+      const res = await fetch('/api/ai/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadId: lead.id }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'No suggestion');
+      setAi(data);
+    } catch (e) {
+      setAi({ error: e.message });
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   const load = useCallback(async () => {
     if (!phone) {
@@ -257,7 +283,53 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
               </div>
             </div>
           )}
-          <div className="mb-1.5">
+          {/* Smart Suggest result */}
+          {(aiLoading || ai) && (
+            <div className="mb-2 rounded-xl border border-cyan-500/40 bg-cyan-500/5 p-2.5">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[11px] font-bold text-cyan-300 uppercase tracking-wide">Smart Suggest</span>
+                <button type="button" onClick={() => setAi(null)} className="text-slate-500 hover:text-slate-300 text-xs">Clear</button>
+              </div>
+              {aiLoading && <div className="text-xs text-slate-400 py-1">Reading the thread…</div>}
+              {ai?.error && <div className="text-xs text-red-400 py-1">{ai.error}</div>}
+              {ai && !ai.error && (
+                <div className="space-y-1.5">
+                  {ai.summary && <div className="text-xs text-slate-300">{ai.summary}</div>}
+                  {ai.lean && onSetDirection && (
+                    <button type="button" disabled={aiApplied.lean}
+                      onClick={() => { onSetDirection(lead.id, ai.lean); setAiApplied((a) => ({ ...a, lean: true })); }}
+                      className="block w-full text-left text-xs px-2 py-1.5 rounded bg-slate-800/70 hover:bg-slate-700 border border-slate-700/60 disabled:opacity-50">
+                      {aiApplied.lean ? '✓ Set lean: ' : 'Set lean: '}<span className="text-cyan-300 font-medium">{LEAN_LABEL[ai.lean] || ai.lean}</span>
+                    </button>
+                  )}
+                  {ai.follow_up && onScheduleFollowUp && (
+                    <button type="button" disabled={aiApplied.fu}
+                      onClick={() => { onScheduleFollowUp(lead.id, ai.follow_up.when, ai.follow_up.label); setAiApplied((a) => ({ ...a, fu: true })); }}
+                      className="block w-full text-left text-xs px-2 py-1.5 rounded bg-slate-800/70 hover:bg-slate-700 border border-slate-700/60 disabled:opacity-50">
+                      {aiApplied.fu ? '✓ Scheduled: ' : 'Schedule: '}<span className="text-cyan-300 font-medium">{ai.follow_up.label} · {new Date(ai.follow_up.when).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+                    </button>
+                  )}
+                  {ai.draft_reply && (
+                    <button type="button"
+                      onClick={() => { setDraft(ai.draft_reply); }}
+                      className="block w-full text-left text-xs px-2 py-1.5 rounded bg-slate-800/70 hover:bg-slate-700 border border-slate-700/60">
+                      Use draft reply: <span className="text-slate-200">{ai.draft_reply.slice(0, 60)}{ai.draft_reply.length > 60 ? '…' : ''}</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          <div className="mb-1.5 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={runSmartSuggest}
+              disabled={aiLoading}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-cyan-300 hover:text-cyan-200 disabled:opacity-40"
+            >
+              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2l1.9 5.1L19 9l-5.1 1.9L12 16l-1.9-5.1L5 9l5.1-1.9L12 2z" /></svg>
+              {aiLoading ? 'Thinking…' : 'Smart Suggest'}
+            </button>
             <button
               type="button"
               onClick={() => setSuggestOpen((o) => !o)}
