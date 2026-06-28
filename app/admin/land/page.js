@@ -781,8 +781,9 @@ export default function LandLeadsAdminPage() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       const lead = (allLeadsRef.current || []).find((l) => l.id === leadId);
-      const { data: task } = await supabase.from('scheduled_tasks').insert({
+      const { data: task, error } = await supabase.from('scheduled_tasks').insert({
         lead_id: leadId,
+        created_by: user?.id || null,
         assigned_to: user?.id || lead?.current_owner_id || null,
         task_type: 'follow_up',
         title: `${label || 'Follow up'}: ${lead?.name || lead?.full_name || 'Lead'}`,
@@ -790,7 +791,8 @@ export default function LandLeadsAdminPage() {
         due_at: due.toISOString(),
         status: 'pending',
         priority: 'normal',
-      }).select().single();
+      }).select().maybeSingle();
+      if (error) throw error;
       if (task) setScheduledTasks((prev) => [...prev, task]);
       patchLead(leadId, { next_callback_at: due.toISOString() });
       showToast(`Follow-up set for ${due.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`, 'success');
