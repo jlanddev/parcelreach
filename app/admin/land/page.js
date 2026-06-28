@@ -327,23 +327,24 @@ export default function LandLeadsAdminPage() {
   // Order is recomputed only when the view key changes (tab, sort, filters);
   // within a view, live data updates a card's contents but not its position.
   // New leads that appear are appended at the end.
-  const boardOrderRef = useRef({ key: '', rank: new Map() });
+  const boardOrderRef = useRef({ key: '', rank: new Map(), next: 0 });
   const stableOrder = (list, comparator, viewKey) => {
     const ref = boardOrderRef.current;
     if (ref.key !== viewKey) {
       const sorted = [...list].sort(comparator);
       const rank = new Map();
       sorted.forEach((l, i) => rank.set(l.id, i));
-      boardOrderRef.current = { key: viewKey, rank };
+      boardOrderRef.current = { key: viewKey, rank, next: sorted.length };
       return sorted;
     }
-    const rank = ref.rank;
-    const big = rank.size + list.length;
-    return [...list].sort((a, b) => {
-      const ra = rank.has(a.id) ? rank.get(a.id) : big;
-      const rb = rank.has(b.id) ? rank.get(b.id) : big;
-      return ra === rb ? comparator(a, b) : ra - rb;
-    });
+    // Give any lead we have not ranked yet (late loads, new arrivals) a permanent
+    // rank at the end, in its current order. Once a lead has a rank it never
+    // changes within this view, so a sent text can't move a card.
+    const newcomers = list.filter((l) => !ref.rank.has(l.id));
+    if (newcomers.length) {
+      newcomers.sort(comparator).forEach((l) => ref.rank.set(l.id, ref.next++));
+    }
+    return [...list].sort((a, b) => ref.rank.get(a.id) - ref.rank.get(b.id));
   };
 
   // Clicking a notification opens that lead's note (mention) or text (sms) in-page.
