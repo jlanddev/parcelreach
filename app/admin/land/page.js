@@ -11,6 +11,7 @@ import ConversationModal from '@/components/ConversationModal';
 import NotesModal from '@/components/NotesModal';
 import CallModal from '@/components/CallModal';
 import NotificationBell from '@/components/NotificationBell';
+import FollowUpsBell from '@/components/FollowUpsBell';
 import DealStrip from '@/components/DealStrip';
 import MondayPushButton from '@/components/MondayPushButton';
 import { timeAgo, channelLabel } from '@/lib/format';
@@ -33,7 +34,7 @@ export default function LandLeadsAdminPage() {
   const [allLeads, setAllLeads] = useState([]);
   const [selectedOrg, setSelectedOrg] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('daily-rundown');
+  const [activeTab, setActiveTab] = useState('ppc-inflow');
   const [exportFilters, setExportFilters] = useState({
     minAcres: '', maxAcres: '',
     // POSITIVE include lists. Empty = include all.
@@ -3750,6 +3751,16 @@ export default function LandLeadsAdminPage() {
                 </span>
               </div>
             )}
+            {currentUserId && (() => {
+              const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+              const dueTasks = scheduledTasks.filter((t) =>
+                t.status === 'pending' &&
+                t.due_at && new Date(t.due_at) <= todayEnd &&
+                (t.assigned_to === currentUserId || (isAdmin && !t.assigned_to))
+              );
+              const leadsById = Object.fromEntries(allLeads.map((l) => [l.id, l]));
+              return <FollowUpsBell tasks={dueTasks} leadsById={leadsById} onOpenLead={(l) => navigateToLeadCard(l)} />;
+            })()}
             {currentUserId && <NotificationBell userId={currentUserId} onOpen={handleOpenNotification} />}
             <button
               onClick={async () => {
@@ -3773,8 +3784,8 @@ export default function LandLeadsAdminPage() {
             // with arrow chevrons between them to visualize lead flow.
             const PIPELINE_TABS = ['ppc-inflow', 'appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'];
             const allTabs = isAdmin
-              ? ['daily-rundown', 'shared-calendar', 'activity-log', ...PIPELINE_TABS, 'follow-up', 'lost', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners']
-              : ['daily-rundown', 'shared-calendar', ...PIPELINE_TABS, 'follow-up', 'lost', 'subdivision-inflow', 'all-leads'];
+              ? ['shared-calendar', 'activity-log', ...PIPELINE_TABS, 'follow-up', 'lost', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners']
+              : ['shared-calendar', ...PIPELINE_TABS, 'follow-up', 'lost', 'subdivision-inflow', 'all-leads'];
             return allTabs.map((tab, i) => {
               const prevTab = allTabs[i - 1];
               const showChevron = PIPELINE_TABS.includes(tab) && PIPELINE_TABS.includes(prevTab);
