@@ -48,3 +48,25 @@ FROM (
   ORDER BY lead_id, created_at DESC
 ) a
 WHERE l.id = a.lead_id AND l.last_contact_at IS NULL;
+
+-- Backfill last call from the activity timeline.
+UPDATE leads l SET last_call_at = a.created_at, last_call_outcome = a.outcome
+FROM (
+  SELECT DISTINCT ON (lead_id) lead_id, created_at, outcome
+  FROM activities WHERE activity_type = 'CALL' ORDER BY lead_id, created_at DESC
+) a WHERE l.id = a.lead_id AND l.last_call_at IS NULL;
+
+-- One-time cleanup: leads that were auto-flipped to In Contact / Contacting by an
+-- outbound text but never actually connected (no inbound reply, no completed call)
+-- go back to New. Appointments and later stages are left alone.
+UPDATE leads l
+SET status = 'new', pipeline_status = 'NEW'
+WHERE upper(coalesce(l.pipeline_status, l.status, '')) IN ('CONTACTED', 'CONTACTING')
+  AND NOT EXISTS (
+    SELECT 1 FROM activities a
+    WHERE a.lead_id = l.id
+      AND (
+        (a.activity_type = 'TEXT' AND upper(a.direction) = 'INBOUND')
+        OR (a.activity_type = 'CALL' AND lower(coalesce(a.outcome, '')) IN ('connected', 'spoke'))
+      )
+  );

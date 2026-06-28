@@ -428,8 +428,11 @@ export default function LandLeadsAdminPage() {
     }
     if (offerSetOnly && !l.offer_confirmed) return false;
     if (untouchedDays > 0) {
-      const t = l.last_contact_at || l.last_activity_at;
-      if (t && new Date(t).getTime() > Date.now() - untouchedDays * 86400000) return false;
+      // Measure from the last touch, or from when the lead arrived if never
+      // touched, so a brand-new lead isn't counted as "untouched 7d+".
+      const t = l.last_contact_at || l.last_activity_at || l.created_at;
+      if (!t) return false;
+      if (new Date(t).getTime() > Date.now() - untouchedDays * 86400000) return false;
     }
     return true;
   };
