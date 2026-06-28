@@ -12,6 +12,7 @@ import NotesModal from '@/components/NotesModal';
 import CallModal from '@/components/CallModal';
 import NotificationBell from '@/components/NotificationBell';
 import DealStrip from '@/components/DealStrip';
+import MondayPushButton from '@/components/MondayPushButton';
 import { timeAgo, channelLabel } from '@/lib/format';
 import { OFFER_DIRECTIONS, GENERAL_DIRECTIONS, FOLLOWUP_BUCKETS, FOLLOWUP_KEYS, LOST_REASONS, formatOffer, mergeScript, firstTouch, touchForStep } from '@/lib/followups';
 
@@ -420,6 +421,7 @@ export default function LandLeadsAdminPage() {
   const [uncontactedOnly, setUncontactedOnly] = useState(false);     // still NEW, never reached
   const [offerSetOnly, setOfferSetOnly] = useState(false);           // has a locked offer
   const [untouchedDays, setUntouchedDays] = useState(0);             // no contact in N+ days (0 = off)
+  const [partnerSearch, setPartnerSearch] = useState('');           // Partners tab lead search
   const passesEngagement = (l) => {
     if (needsResponseOnly && (l.last_contact_dir || '').toLowerCase() !== 'inbound') return false;
     if (uncontactedOnly) {
@@ -3732,7 +3734,7 @@ export default function LandLeadsAdminPage() {
             // with arrow chevrons between them to visualize lead flow.
             const PIPELINE_TABS = ['ppc-inflow', 'appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'];
             const allTabs = isAdmin
-              ? ['daily-rundown', 'shared-calendar', 'activity-log', ...PIPELINE_TABS, 'follow-up', 'lost', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics']
+              ? ['daily-rundown', 'shared-calendar', 'activity-log', ...PIPELINE_TABS, 'follow-up', 'lost', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners']
               : ['daily-rundown', 'shared-calendar', ...PIPELINE_TABS, 'follow-up', 'lost', 'subdivision-inflow', 'all-leads'];
             return allTabs.map((tab, i) => {
               const prevTab = allTabs[i - 1];
@@ -3777,7 +3779,7 @@ export default function LandLeadsAdminPage() {
                   <path d="M11 7h2v10h-2zm4 4h2v6h-2zM7 9h2v8H7zm12-7H5c-1.1 0-2 .9-2 2v18l4-4h13c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
                 </svg>
               )}
-              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'appointment-set' ? 'Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Agreement Sent' : tab === 'signed-contract' ? 'Signed Contract' : tab === 'closed-deal' ? 'Closed Deal' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab.replace('-', ' ')}
+              {tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'appointment-set' ? 'Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Agreement Sent' : tab === 'signed-contract' ? 'Signed Contract' : tab === 'closed-deal' ? 'Closed Deal' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab.replace('-', ' ')}
               {tab === 'unassigned' && ` (${unassignedLeads.length})`}
               {tab === 'ppc-inflow' && ` (${allLeads.filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })()).length})`}
               {tab === 'appointment-set' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN').length})`}
@@ -5988,6 +5990,111 @@ export default function LandLeadsAdminPage() {
             </div>
           </div>
         )}
+
+        {/* PARTNERS TAB (admin only) — push leads to partner Monday boards + tracking */}
+        {activeTab === 'partners' && isAdmin && (() => {
+          const q = partnerSearch.trim().toLowerCase();
+          const matches = q
+            ? allLeads.filter((l) =>
+                (l.full_name || l.name || '').toLowerCase().includes(q) ||
+                (l.phone || '').toLowerCase().includes(q) ||
+                (l.property_county || l.county || '').toLowerCase().includes(q) ||
+                (l.property_state || l.state || '').toLowerCase().includes(q) ||
+                (l.form_data?.streetAddress || l.street_address || '').toLowerCase().includes(q)
+              ).slice(0, 25)
+            : [];
+          const sentLeads = allLeads
+            .filter((l) => Array.isArray(l.partner_pushes) && l.partner_pushes.length)
+            .sort((a, b) => {
+              const at = a.partner_pushes[a.partner_pushes.length - 1]?.pushed_at || '';
+              const bt = b.partner_pushes[b.partner_pushes.length - 1]?.pushed_at || '';
+              return new Date(bt) - new Date(at);
+            });
+          return (
+            <div className="space-y-6">
+              <div className="bg-gradient-to-br from-indigo-500/10 to-indigo-600/5 border border-indigo-500/40 rounded-xl p-6">
+                <h2 className="text-2xl font-bold text-indigo-300">Partners</h2>
+                <p className="text-slate-400 text-sm mt-1">Push a lead to a partner board in Monday (LS or SSL) with the property details and the parcel map. Everything sent is tracked below.</p>
+              </div>
+
+              {/* Find a lead and send it */}
+              <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-4">
+                <div className="text-sm font-semibold text-white mb-2">Send a lead to a partner</div>
+                <div className="relative mb-3">
+                  <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                  <input
+                    value={partnerSearch}
+                    onChange={(e) => setPartnerSearch(e.target.value)}
+                    placeholder="Search a lead by name, phone, county, address…"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-3 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50"
+                  />
+                </div>
+                {q && matches.length === 0 && <div className="text-sm text-slate-500 py-2">No leads match.</div>}
+                <div className="space-y-2">
+                  {matches.map((lead) => (
+                    <div key={lead.id} className="flex items-center justify-between gap-3 bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="text-sm text-white font-medium truncate">{lead.full_name || lead.name || 'Lead'}</div>
+                        <div className="text-xs text-slate-400 truncate">
+                          {(lead.property_county || lead.county || '')}{(lead.property_county || lead.county) && (lead.property_state || lead.state) ? ', ' : ''}{(lead.property_state || lead.state || '')}
+                          {(lead.acres || lead.acreage) ? ` · ${lead.acres || lead.acreage} ac` : ''}
+                          {lead.map_uploaded ? ' · map ✓' : ' · no map'}
+                        </div>
+                      </div>
+                      <div className="w-52 flex-shrink-0">
+                        <MondayPushButton lead={lead} onToast={(m, t) => showToast(m, t)} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Send tracking */}
+              <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
+                <div className="p-4 border-b border-slate-700/50 flex items-center justify-between">
+                  <div className="text-sm font-semibold text-white">Send tracking</div>
+                  <div className="text-xs text-slate-500">{sentLeads.length} lead{sentLeads.length === 1 ? '' : 's'} sent</div>
+                </div>
+                {sentLeads.length === 0 ? (
+                  <div className="px-4 py-10 text-center text-slate-500 text-sm">Nothing sent yet. Find a lead above and send it to a partner.</div>
+                ) : (
+                  <table className="w-full">
+                    <thead className="bg-slate-700/40">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-400 uppercase">Lead</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-400 uppercase">Sent to</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-400 uppercase">Last sent</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-700/40">
+                      {sentLeads.map((l) => {
+                        const last = l.partner_pushes[l.partner_pushes.length - 1];
+                        return (
+                          <tr key={l.id} className="hover:bg-slate-700/20">
+                            <td className="px-4 py-2.5">
+                              <button onClick={() => navigateToLeadCard(l)} className="text-sm text-white hover:text-indigo-300 hover:underline text-left">{l.full_name || l.name || 'Lead'}</button>
+                              <div className="text-xs text-slate-500">{(l.property_county || l.county || '')}{(l.property_county || l.county) && (l.property_state || l.state) ? ', ' : ''}{(l.property_state || l.state || '')}</div>
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <div className="flex flex-wrap gap-1">
+                                {l.partner_pushes.map((p) => (
+                                  <span key={p.board_id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-200 text-[11px] font-medium border border-indigo-500/40">
+                                    {p.board_name}
+                                  </span>
+                                ))}
+                              </div>
+                            </td>
+                            <td className="px-4 py-2.5 text-xs text-slate-400">{last?.pushed_at ? new Date(last.pushed_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* EXPORT CSV TAB */}
         {activeTab === 'export' && (

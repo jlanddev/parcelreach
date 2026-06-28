@@ -35,6 +35,9 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_contact_preview text;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_call_at timestamptz;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_call_outcome text;
 
+-- Tracks which partner Monday boards a lead has been pushed to.
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS partner_pushes jsonb DEFAULT '[]'::jsonb;
+
 -- Backfill from the activity timeline (most recent text/call per lead).
 UPDATE leads l SET
   last_contact_at = a.created_at,
