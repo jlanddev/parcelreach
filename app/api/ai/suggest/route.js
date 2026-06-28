@@ -6,7 +6,20 @@ import { getMessagesForPhone } from '@/lib/projectBlue';
 // date/time pulled from the conversation, and a draft reply. Suggestions only;
 // the rep confirms in the UI. Phase 1 = texts (calls come later).
 
-const VALID_LEANS = ['verbal_yes', 'negotiating', 'reviewing', 'cooling', 'hot', 'working', 'stalled', 'long_shot'];
+const VALID_LEANS = ['hot', 'warm', 'cold', 'ready'];
+
+const STAGE_LABEL = (s) => {
+  s = (s || '').toUpperCase();
+  if (!s || s === 'NEW') return 'New (not reached yet)';
+  if (['CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s)) return 'In contact';
+  if (s === 'APPT_SET_FOR_JORDAN') return 'Appointment set';
+  if (['OFFER_SENT', 'OFFER_MADE', 'NEGOTIATING'].includes(s)) return 'Offer made';
+  if (s === 'AGREEMENT_SENT') return 'Agreement sent';
+  if (s === 'UNDER_CONTRACT') return 'Under contract';
+  if (s === 'FOLLOW_UP') return 'Follow-up (parked)';
+  if (s === 'LOST') return 'Lost';
+  return s;
+};
 
 function nowCentral() {
   return new Intl.DateTimeFormat('en-US', {
@@ -63,28 +76,35 @@ export async function POST(request) {
       .join('; ') || 'nothing booked';
 
     const county = lead.property_county || lead.county || '';
+    const acres = lead.acreage || lead.acres || '';
+    const stage = STAGE_LABEL(lead.pipeline_status || lead.status);
+    const offerMade = lead.offer_amount ? `yes, $${Number(lead.offer_amount).toLocaleString()}` : 'NO — no offer has been made yet';
     const transcript = thread.map((m) => `${m.who}: ${m.text}`).join('\n');
-    const system = `You are a careful lead-triage assistant for a land-buying CRM. You read the SMS thread between us (the buyer) and a land seller and suggest the next step. Be conservative: only suggest what the conversation clearly supports. It is better to leave a field null than to guess. Respond with ONLY a JSON object, no prose, no code fences.
+    const system = `You are a careful lead-triage assistant for a land-buying company. You read the SMS thread between us (the buyer) and a land seller and answer three things: (1) how hot the lead is, (2) the single next action, (3) when to do it. Base everything ONLY on the thread and the lead state given. Never invent facts. It is better to return null than to guess. Respond with ONLY a JSON object, no prose, no code fences.
 
-Lean definitions (pick the single best fit ONLY if the thread clearly supports it, else null):
-- verbal_yes: seller verbally agreed to sell / accepted terms
-- negotiating: actively going back and forth on price or terms
-- reviewing: engaged, considering, will get back to us
-- cooling: was engaged, now going quiet or hesitant
-- hot: brand-new strong interest, motivated, no offer yet
-- working: normal active conversation, no strong signal yet
-- stalled: stuck, no movement
-- long_shot: low odds (unrealistic price, barely engaged)
+(1) TEMPERATURE — pick exactly one:
+- hot: motivated and engaged, deal is moving, responding well
+- warm: interested but slow, or needs nurturing; lukewarm
+- cold: unresponsive, hesitant, or unrealistic on price
+- ready: has verbally agreed / is ready to move to an offer or contract
 
-Scheduling rules:
+(2) NEXT ACTION — put a short imperative in follow_up.label, e.g. "Call back", "Send offer", "Text follow-up", "Nurture", "Set appointment".
+CRITICAL: Only suggest "Send offer" or anything about an offer if an offer has ALREADY been made is "yes". If no offer has been made, do NOT mention an offer in the action or the draft reply.
+
+(3) SCHEDULE in follow_up.when:
 - If a specific time was agreed in the thread, use that exact time.
-- Otherwise, only propose a follow-up if one is clearly warranted; pick a sensible slot on a WEEKDAY between 9:00 AM and 5:00 PM America/Chicago.
-- Do NOT reuse a time that is already booked (see the list). Spread suggestions out; avoid clustering everything at the same hour.
-- If no follow-up is warranted, return null.`;
-    const user = `Current date/time (America/Chicago): ${nowCentral()}.
-Already booked (avoid these exact times, weekdays/business hours only): ${bookedList}.
+- Otherwise pick a sensible slot on a WEEKDAY 9:00 AM–5:00 PM America/Chicago. Do NOT reuse an already-booked time; spread them out.
+- If no follow-up is warranted, return null for follow_up.
 
-Lead: ${lead.name || lead.full_name || 'Unknown'}${county ? `, land in ${county} County` : ''}.
+The draft_reply must fit the current stage and must never reference an offer that hasn't been made.`;
+    const user = `Current date/time (America/Chicago): ${nowCentral()}.
+Already booked (avoid these times): ${bookedList}.
+
+LEAD STATE:
+- Name: ${lead.name || lead.full_name || 'Unknown'}
+- Land: ${county ? `${county} County` : 'unknown county'}${acres ? `, ${acres} acres` : ''}
+- Current stage: ${stage}
+- Offer made: ${offerMade}
 
 SMS thread (oldest first):
 ${transcript}
@@ -92,9 +112,9 @@ ${transcript}
 Return ONLY this JSON:
 {
   "lean": one of ${JSON.stringify(VALID_LEANS)} or null,
-  "follow_up": { "when": ISO-8601 datetime with timezone offset, "label": short action } or null,
-  "draft_reply": a short, friendly next text to send, or "",
-  "summary": one short sentence on where this lead stands
+  "follow_up": { "when": ISO-8601 datetime with timezone offset, "label": short next action } or null,
+  "draft_reply": a short, friendly next text that fits the stage, or "",
+  "summary": one short sentence on the lead's character and where they stand
 }`;
 
     const res = await fetch('https://api.anthropic.com/v1/messages', {

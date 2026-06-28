@@ -6069,7 +6069,7 @@ export default function LandLeadsAdminPage() {
             return (STAGE_SETS[partnerStage] || []).includes(s);
           };
           const dirOk = (l) => !partnerDirection || l.deal_direction === partnerDirection;
-          const allDirections = [...OFFER_DIRECTIONS, ...GENERAL_DIRECTIONS];
+          const allDirections = OFFER_DIRECTIONS;
           const sentLeads = allLeads
             .filter((l) => Array.isArray(l.partner_pushes) && l.partner_pushes.length)
             .sort((a, b) => {
