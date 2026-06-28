@@ -595,7 +595,6 @@ export default function LandLeadsAdminPage() {
     // text on the card, so a 6-day-old "New" lead stays NEW until someone moves it forward.
     const manualStatus = (lead.pipeline_status || lead.status || '').toUpperCase();
     if (manualStatus === 'OFFER_MADE') return 'OFFER_SENT';
-    if (manualStatus === 'CONTACTING') return 'CONTACTED'; // Contacting is retired, show as In Contact
     return manualStatus || 'NEW';
   };
 
@@ -603,8 +602,8 @@ export default function LandLeadsAdminPage() {
   const STATUS_CONFIG = {
     NEW: { label: 'New', color: 'bg-green-500/20 text-green-400 border-green-500/50' },
     NEEDS_ATTENTION: { label: 'Needs Attention', color: 'bg-red-500/20 text-red-400 border-red-500/50' },
-    CONTACTING: { label: 'Contacting', color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50' },
-    CONTACTED: { label: 'In Contact', color: 'bg-blue-500/20 text-blue-400 border-blue-500/50' },
+    CONTACTING: { label: 'In Contact', color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50' },
+    CONTACTED: { label: 'Contacted', color: 'bg-blue-500/20 text-blue-400 border-blue-500/50' },
     OFFER_SENT: { label: 'Offer Sent', color: 'bg-purple-500/20 text-purple-400 border-purple-500/50' },
     NEGOTIATING: { label: 'Negotiating', color: 'bg-orange-500/20 text-orange-400 border-orange-500/50' },
     UNDER_CONTRACT: { label: 'Under Contract', color: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50' },
@@ -837,7 +836,8 @@ export default function LandLeadsAdminPage() {
   // Pipeline status options (manual overrides)
   const PIPELINE_STATUSES = [
     { value: 'NEW', label: 'New' },
-    { value: 'CONTACTED', label: 'In Contact' },
+    { value: 'CONTACTING', label: 'In Contact' },
+    { value: 'CONTACTED', label: 'Contacted' },
     { value: 'ANTHONY_CONTACTED', label: 'Anthony Contacted' },
     { value: 'ANTHONY_FOLLOW_UP', label: 'Anthony Follow-up' },
     { value: 'APPT_SET_FOR_JORDAN', label: 'Appt Set for Jordan' },
