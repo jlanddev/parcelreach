@@ -595,6 +595,7 @@ export default function LandLeadsAdminPage() {
     // text on the card, so a 6-day-old "New" lead stays NEW until someone moves it forward.
     const manualStatus = (lead.pipeline_status || lead.status || '').toUpperCase();
     if (manualStatus === 'OFFER_MADE') return 'OFFER_SENT';
+    if (manualStatus === 'CONTACTING') return 'CONTACTED'; // Contacting is retired, show as In Contact
     return manualStatus || 'NEW';
   };
 
@@ -836,7 +837,6 @@ export default function LandLeadsAdminPage() {
   // Pipeline status options (manual overrides)
   const PIPELINE_STATUSES = [
     { value: 'NEW', label: 'New' },
-    { value: 'CONTACTING', label: 'Contacting' },
     { value: 'CONTACTED', label: 'In Contact' },
     { value: 'ANTHONY_CONTACTED', label: 'Anthony Contacted' },
     { value: 'ANTHONY_FOLLOW_UP', label: 'Anthony Follow-up' },
@@ -1787,7 +1787,7 @@ export default function LandLeadsAdminPage() {
       lead_id: task.lead_id, user_id: user?.id,
       content: '[VM] Left Voicemail', mentioned_users: []
     });
-    await updateLeadStatus(task.lead_id, 'CONTACTING');
+    // A voicemail is not a real connection — leave the lead's status as is.
 
     // Count VMs today for this lead
     const todayStart = new Date(); todayStart.setHours(0,0,0,0);
@@ -1873,7 +1873,7 @@ export default function LandLeadsAdminPage() {
       lead_id: task.lead_id, user_id: user?.id,
       content: '[TEXT] Sent text message', mentioned_users: []
     });
-    await updateLeadStatus(task.lead_id, 'CONTACTING');
+    // Sending a text is not contact — status only advances on a reply/connected call.
 
     // Complete this task
     await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id }).eq('id', task.id);
@@ -3088,15 +3088,13 @@ export default function LandLeadsAdminPage() {
                             </span>
                           </div>
                         );
-                      } else if (needsAction) {
+                      } else if (needsAction && smartStatus !== 'NEW') {
                         return (
-                          <div className={`${smartStatus === 'NEW' ? 'bg-green-500/30 border-green-500/50' : 'bg-red-500/30 border-red-500/50'} border-b px-4 py-3 flex items-center gap-2`}>
-                            <svg className={`w-5 h-5 ${smartStatus === 'NEW' ? 'text-green-400' : 'text-red-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <div className="bg-red-500/30 border-red-500/50 border-b px-4 py-3 flex items-center gap-2">
+                            <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
                             </svg>
-                            <span className={`font-semibold ${smartStatus === 'NEW' ? 'text-green-300' : 'text-red-300'}`}>
-                              {smartStatus === 'NEW' ? 'NEW LEAD - Contact Now!' : 'NEEDS ATTENTION - Follow Up!'}
-                            </span>
+                            <span className="font-semibold text-red-300">NEEDS ATTENTION - Follow Up!</span>
                           </div>
                         );
                       }
