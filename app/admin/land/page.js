@@ -3224,12 +3224,21 @@ export default function LandLeadsAdminPage() {
                                 {last.message_content}
                               </div>
                             )}
-                            {lead.last_call_at && (
-                              <div className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-medium text-green-300/90 bg-green-600/10 border border-green-600/30 rounded px-1.5 py-0.5">
-                                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" /></svg>
-                                Called {new Date(lead.last_call_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
-                              </div>
-                            )}
+                            {lead.last_call_at && (() => {
+                              const o = (lead.last_call_outcome || '').toLowerCase();
+                              const spoke = o === 'spoke' || o === 'connected';
+                              const dur = lead.last_call_duration;
+                              const label = spoke ? 'Call' : (o === 'voicemail' || o === 'left_vm') ? 'Voicemail' : 'No answer';
+                              const durStr = spoke && dur ? ` · ${Math.floor(dur / 60)}m ${dur % 60}s` : '';
+                              const when = new Date(lead.last_call_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+                              const cls = spoke ? 'text-green-300/90 bg-green-600/10 border-green-600/30' : 'text-red-300 bg-red-600/15 border-red-600/40';
+                              return (
+                                <div className={`mt-1.5 inline-flex items-center gap-1 text-[10px] font-medium border rounded px-1.5 py-0.5 ${cls}`}>
+                                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" /></svg>
+                                  {label}{durStr} · {when}
+                                </div>
+                              );
+                            })()}
                           </div>
                         );
                       })()}

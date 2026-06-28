@@ -34,6 +34,7 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_contact_preview text;
 -- later text (last_contact_* gets overwritten by whichever is most recent).
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_call_at timestamptz;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_call_outcome text;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_call_duration int;
 
 -- Tracks which partner Monday boards a lead has been pushed to.
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS partner_pushes jsonb DEFAULT '[]'::jsonb;
