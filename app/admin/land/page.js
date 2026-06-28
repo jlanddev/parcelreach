@@ -595,6 +595,8 @@ export default function LandLeadsAdminPage() {
     // text on the card, so a 6-day-old "New" lead stays NEW until someone moves it forward.
     const manualStatus = (lead.pipeline_status || lead.status || '').toUpperCase();
     if (manualStatus === 'OFFER_MADE') return 'OFFER_SENT';
+    // 'Contacted' is retired; everything reached is just 'In Contact' (CONTACTING).
+    if (manualStatus === 'CONTACTED') return 'CONTACTING';
     return manualStatus || 'NEW';
   };
 
@@ -837,7 +839,6 @@ export default function LandLeadsAdminPage() {
   const PIPELINE_STATUSES = [
     { value: 'NEW', label: 'New' },
     { value: 'CONTACTING', label: 'In Contact' },
-    { value: 'CONTACTED', label: 'Contacted' },
     { value: 'ANTHONY_CONTACTED', label: 'Anthony Contacted' },
     { value: 'ANTHONY_FOLLOW_UP', label: 'Anthony Follow-up' },
     { value: 'APPT_SET_FOR_JORDAN', label: 'Appt Set for Jordan' },
