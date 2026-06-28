@@ -322,6 +322,30 @@ export default function LandLeadsAdminPage() {
   }, [conversationLead, notesModalLead, callLead, detailsModalOpen]);
   const boardLeads = frozenBoardLeads || allLeads;
 
+  // Keep a tab's card order stable so live updates (e.g. sending a text bumping
+  // last_activity_at) don't make a card leap to the top and steal your place.
+  // Order is recomputed only when the view key changes (tab, sort, filters);
+  // within a view, live data updates a card's contents but not its position.
+  // New leads that appear are appended at the end.
+  const boardOrderRef = useRef({ key: '', rank: new Map() });
+  const stableOrder = (list, comparator, viewKey) => {
+    const ref = boardOrderRef.current;
+    if (ref.key !== viewKey) {
+      const sorted = [...list].sort(comparator);
+      const rank = new Map();
+      sorted.forEach((l, i) => rank.set(l.id, i));
+      boardOrderRef.current = { key: viewKey, rank };
+      return sorted;
+    }
+    const rank = ref.rank;
+    const big = rank.size + list.length;
+    return [...list].sort((a, b) => {
+      const ra = rank.has(a.id) ? rank.get(a.id) : big;
+      const rb = rank.has(b.id) ? rank.get(b.id) : big;
+      return ra === rb ? comparator(a, b) : ra - rb;
+    });
+  };
+
   // Clicking a notification opens that lead's note (mention) or text (sms) in-page.
   const handleOpenNotification = async (n) => {
     let leadId = null;
@@ -4613,26 +4637,28 @@ export default function LandLeadsAdminPage() {
 
             {/* PPC Leads Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-              {boardLeads
-                .filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })())
-                .filter(l => {
-                  if (!ppcSearch.trim()) return true;
-                  const q = ppcSearch.toLowerCase();
-                  return (l.full_name || l.name || '').toLowerCase().includes(q) ||
-                    (l.phone || '').toLowerCase().includes(q) ||
-                    (l.email || '').toLowerCase().includes(q) ||
-                    (l.property_county || l.county || '').toLowerCase().includes(q) ||
-                    (l.property_state || l.state || '').toLowerCase().includes(q) ||
-                    (l.form_data?.streetAddress || '').toLowerCase().includes(q);
-                })
-                .filter(l => !pipelineMapped || l.map_uploaded)
-                .sort((a, b) => {
+              {stableOrder(
+                boardLeads
+                  .filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })())
+                  .filter(l => {
+                    if (!ppcSearch.trim()) return true;
+                    const q = ppcSearch.toLowerCase();
+                    return (l.full_name || l.name || '').toLowerCase().includes(q) ||
+                      (l.phone || '').toLowerCase().includes(q) ||
+                      (l.email || '').toLowerCase().includes(q) ||
+                      (l.property_county || l.county || '').toLowerCase().includes(q) ||
+                      (l.property_state || l.state || '').toLowerCase().includes(q) ||
+                      (l.form_data?.streetAddress || '').toLowerCase().includes(q);
+                  })
+                  .filter(l => !pipelineMapped || l.map_uploaded),
+                (a, b) => {
                   const useCreated = pipelineSort.startsWith('created');
                   const av = new Date(useCreated ? a.created_at : (a.last_activity_at || a.created_at));
                   const bv = new Date(useCreated ? b.created_at : (b.last_activity_at || b.created_at));
                   return pipelineSort.endsWith('asc') ? av - bv : bv - av;
-                })
-                .map((lead) => renderLeadCard(lead))}
+                },
+                `ppc:${pipelineSort}:${pipelineMapped}:${ppcSearch.trim()}`
+              ).map((lead) => renderLeadCard(lead))}
             </div>
 
             {allLeads.filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })()).length === 0 && (
@@ -4708,18 +4734,22 @@ export default function LandLeadsAdminPage() {
           };
           const q = pipelineSearch.trim().toLowerCase();
           const bucketAll = boardLeads.filter(l => cfg.statuses.includes((l.pipeline_status || l.status || '').toUpperCase()));
-          const leadsInBucket = bucketAll
-            .filter(l => !pipelineMapped || l.map_uploaded)
-            .filter(l => !q ||
-              (l.full_name || l.name || '').toLowerCase().includes(q) ||
-              (l.phone || '').toLowerCase().includes(q) ||
-              (l.email || '').toLowerCase().includes(q) ||
-              (l.property_county || l.county || '').toLowerCase().includes(q) ||
-              (l.property_state || l.state || '').toLowerCase().includes(q) ||
-              (l.form_data?.streetAddress || '').toLowerCase().includes(q))
-            .sort(activeTab === 'follow-up'
-              ? (a, b) => new Date(a.next_follow_up_at || a.created_at) - new Date(b.next_follow_up_at || b.created_at)
-              : (sorters[pipelineSort] || sorters.activity_desc));
+          const bucketComparator = activeTab === 'follow-up'
+            ? (a, b) => new Date(a.next_follow_up_at || a.created_at) - new Date(b.next_follow_up_at || b.created_at)
+            : (sorters[pipelineSort] || sorters.activity_desc);
+          const leadsInBucket = stableOrder(
+            bucketAll
+              .filter(l => !pipelineMapped || l.map_uploaded)
+              .filter(l => !q ||
+                (l.full_name || l.name || '').toLowerCase().includes(q) ||
+                (l.phone || '').toLowerCase().includes(q) ||
+                (l.email || '').toLowerCase().includes(q) ||
+                (l.property_county || l.county || '').toLowerCase().includes(q) ||
+                (l.property_state || l.state || '').toLowerCase().includes(q) ||
+                (l.form_data?.streetAddress || '').toLowerCase().includes(q)),
+            bucketComparator,
+            `bucket:${activeTab}:${pipelineSort}:${pipelineMapped}:${q}`
+          );
 
           return (
             <div className="space-y-6">
