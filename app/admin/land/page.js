@@ -3759,7 +3759,14 @@ export default function LandLeadsAdminPage() {
                 (t.assigned_to === currentUserId || (isAdmin && !t.assigned_to))
               );
               const leadsById = Object.fromEntries(allLeads.map((l) => [l.id, l]));
-              return <FollowUpsBell tasks={dueTasks} leadsById={leadsById} onOpenLead={(l) => navigateToLeadCard(l)} />;
+              const completeTask = async (task) => {
+                setScheduledTasks((prev) => prev.filter((t) => t.id !== task.id));
+                try {
+                  const { data: { user } } = await supabase.auth.getUser();
+                  await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id || null }).eq('id', task.id);
+                } catch {}
+              };
+              return <FollowUpsBell tasks={dueTasks} leadsById={leadsById} onOpenLead={(l) => navigateToLeadCard(l)} onComplete={completeTask} />;
             })()}
             {currentUserId && <NotificationBell userId={currentUserId} onOpen={handleOpenNotification} />}
             <button

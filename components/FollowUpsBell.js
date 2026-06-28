@@ -18,7 +18,7 @@ const when = (iso) =>
  * of tasks due today or overdue (follow-ups, callbacks, appointments). Click to
  * see each one, who it's with, and jump to that lead's card.
  */
-export default function FollowUpsBell({ tasks = [], leadsById = {}, onOpenLead }) {
+export default function FollowUpsBell({ tasks = [], leadsById = {}, onOpenLead, onComplete }) {
   const [open, setOpen] = useState(false);
   const now = new Date();
   const sorted = [...tasks].sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
@@ -62,19 +62,31 @@ export default function FollowUpsBell({ tasks = [], leadsById = {}, onOpenLead }
                   const isAppt = label === 'Appointment';
                   const overdue = new Date(t.due_at) < now;
                   return (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => { setOpen(false); if (lead && onOpenLead) onOpenLead(lead); }}
-                      className="block w-full text-left px-4 py-3 hover:bg-slate-700 border-b border-slate-700 transition-colors"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className={`text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded ${isAppt ? 'bg-amber-500/20 text-amber-300' : 'bg-blue-500/20 text-blue-300'}`}>{label}</span>
-                        {overdue && <span className="text-[10px] font-bold text-red-400">OVERDUE</span>}
-                      </div>
-                      <p className="text-sm text-white font-medium mt-1 truncate">{name}</p>
-                      <p className="text-xs text-slate-400 mt-0.5">{when(t.due_at)}</p>
-                    </button>
+                    <div key={t.id} className="flex items-start gap-2 px-4 py-3 hover:bg-slate-700 border-b border-slate-700 transition-colors">
+                      <button
+                        type="button"
+                        onClick={() => { setOpen(false); if (lead && onOpenLead) onOpenLead(lead); }}
+                        className="flex-1 min-w-0 text-left"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded ${isAppt ? 'bg-amber-500/20 text-amber-300' : 'bg-blue-500/20 text-blue-300'}`}>{label}</span>
+                          {overdue && <span className="text-[10px] font-bold text-red-400">OVERDUE</span>}
+                        </div>
+                        <p className="text-sm text-white font-medium mt-1 truncate">{name}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">{when(t.due_at)}</p>
+                      </button>
+                      {onComplete && (
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); onComplete(t); }}
+                          title="Mark done"
+                          className="flex-shrink-0 mt-0.5 px-2 py-1 rounded-md bg-green-600/20 hover:bg-green-600/40 text-green-300 text-xs font-medium inline-flex items-center gap-1"
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+                          Done
+                        </button>
+                      )}
+                    </div>
                   );
                 })
               )}
