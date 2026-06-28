@@ -50,10 +50,40 @@ export async function POST(request) {
     thread = thread.filter((m) => m.text).slice(-25);
     if (!thread.length) return NextResponse.json({ error: 'No conversation to read yet.' }, { status: 400 });
 
+    // Calendar awareness: what's already booked, so it spreads times out.
+    const { data: booked } = await supabase
+      .from('scheduled_tasks')
+      .select('due_at, title')
+      .eq('status', 'pending')
+      .gte('due_at', new Date().toISOString())
+      .order('due_at', { ascending: true })
+      .limit(60);
+    const bookedList = (booked || [])
+      .map((t) => new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(t.due_at)))
+      .join('; ') || 'nothing booked';
+
     const county = lead.property_county || lead.county || '';
     const transcript = thread.map((m) => `${m.who}: ${m.text}`).join('\n');
-    const system = `You are a lead-triage assistant for a land-buying CRM. Read the SMS thread between us (the buyer) and a land seller, then suggest the next steps. Respond with ONLY a JSON object, no prose, no code fences.`;
-    const user = `Current date/time: ${nowCentral()}.
+    const system = `You are a careful lead-triage assistant for a land-buying CRM. You read the SMS thread between us (the buyer) and a land seller and suggest the next step. Be conservative: only suggest what the conversation clearly supports. It is better to leave a field null than to guess. Respond with ONLY a JSON object, no prose, no code fences.
+
+Lean definitions (pick the single best fit ONLY if the thread clearly supports it, else null):
+- verbal_yes: seller verbally agreed to sell / accepted terms
+- negotiating: actively going back and forth on price or terms
+- reviewing: engaged, considering, will get back to us
+- cooling: was engaged, now going quiet or hesitant
+- hot: brand-new strong interest, motivated, no offer yet
+- working: normal active conversation, no strong signal yet
+- stalled: stuck, no movement
+- long_shot: low odds (unrealistic price, barely engaged)
+
+Scheduling rules:
+- If a specific time was agreed in the thread, use that exact time.
+- Otherwise, only propose a follow-up if one is clearly warranted; pick a sensible slot on a WEEKDAY between 9:00 AM and 5:00 PM America/Chicago.
+- Do NOT reuse a time that is already booked (see the list). Spread suggestions out; avoid clustering everything at the same hour.
+- If no follow-up is warranted, return null.`;
+    const user = `Current date/time (America/Chicago): ${nowCentral()}.
+Already booked (avoid these exact times, weekdays/business hours only): ${bookedList}.
+
 Lead: ${lead.name || lead.full_name || 'Unknown'}${county ? `, land in ${county} County` : ''}.
 
 SMS thread (oldest first):
@@ -61,9 +91,9 @@ ${transcript}
 
 Return ONLY this JSON:
 {
-  "lean": one of ${JSON.stringify(VALID_LEANS)} or null,  // deal temperature/substatus that best fits
-  "follow_up": { "when": ISO-8601 datetime with timezone offset or null, "label": short action like "Call back" },  // if a time was agreed or implied (e.g. "tomorrow ~12"), resolve it to a real datetime
-  "draft_reply": a short, friendly next text to send (or ""),
+  "lean": one of ${JSON.stringify(VALID_LEANS)} or null,
+  "follow_up": { "when": ISO-8601 datetime with timezone offset, "label": short action } or null,
+  "draft_reply": a short, friendly next text to send, or "",
   "summary": one short sentence on where this lead stands
 }`;
 
