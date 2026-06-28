@@ -3071,13 +3071,31 @@ export default function LandLeadsAdminPage() {
                       {(() => {
                         const meta = contactMeta[phoneKey(lead.phone || lead.owner_phone)];
                         const unread = meta?.unread || 0;
+                        // Use whichever is newer: the recent-feed entry or the
+                        // last contact stamped on the lead (which is always there).
+                        const leadLast = lead.last_contact_at ? {
+                          created_at: lead.last_contact_at,
+                          direction: (lead.last_contact_dir || '').toUpperCase(),
+                          message_content: lead.last_contact_preview,
+                          activity_type: (lead.last_contact_channel || 'TEXT').toUpperCase(),
+                        } : null;
+                        const last = [meta?.last, leadLast].filter(Boolean)
+                          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0] || null;
+                        const awaitingReply = last && last.direction === 'OUTBOUND';
                         return (
                           <div className="mb-4 pb-3 border-b border-slate-700/40">
                             <div className="flex items-center justify-between gap-2">
                               <div className="min-w-0">
-                                <div className="text-[10px] uppercase tracking-wide text-slate-500">Last Contacted</div>
+                                <div className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center gap-1.5">
+                                  Last Contacted
+                                  {awaitingReply && (
+                                    <span className="px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[9px] font-bold normal-case">
+                                      Awaiting reply · {timeAgo(last.created_at)}
+                                    </span>
+                                  )}
+                                </div>
                                 <div className="text-sm font-bold text-slate-100 truncate">
-                                  {meta?.last ? `${channelLabel(meta.last)} · ${timeAgo(meta.last.created_at)}` : 'No contact yet'}
+                                  {last ? `${channelLabel(last)} · ${timeAgo(last.created_at)}` : 'No contact yet'}
                                 </div>
                               </div>
                               <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -3108,10 +3126,10 @@ export default function LandLeadsAdminPage() {
                                 </button>
                               </div>
                             </div>
-                            {meta?.last?.message_content && (
+                            {last?.message_content && (
                               <div className={`text-xs mt-1 truncate ${unread ? 'text-slate-100 font-medium' : 'text-slate-400'}`}>
-                                {meta.last.direction === 'INBOUND' ? '↩ ' : '→ '}
-                                {meta.last.message_content}
+                                {last.direction === 'INBOUND' ? '↩ ' : '→ '}
+                                {last.message_content}
                               </div>
                             )}
                           </div>

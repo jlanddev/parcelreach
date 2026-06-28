@@ -47,7 +47,16 @@ export default function CallModal({ lead, currentUserId, onClose, onLogged }) {
         duration_seconds: dur,
         created_at: new Date().toISOString(),
       });
-      await supabase.from('leads').update({ last_activity_at: new Date().toISOString() }).eq('id', lead.id);
+      const nowIso = new Date().toISOString();
+      const lp = {
+        last_activity_at: nowIso,
+        last_contact_at: nowIso,
+        last_contact_dir: 'outbound',
+        last_contact_channel: 'call',
+        last_contact_preview: dur > 0 ? `Call · ${Math.floor(dur / 60)}m ${dur % 60}s` : 'Call · no answer',
+      };
+      const { error: lpErr } = await supabase.from('leads').update(lp).eq('id', lead.id);
+      if (lpErr) await supabase.from('leads').update({ last_activity_at: nowIso }).eq('id', lead.id);
     } catch (e) {
       console.error('[call log]', e);
     }

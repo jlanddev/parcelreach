@@ -41,7 +41,16 @@ export async function POST(request) {
         };
         const { error } = await supabase.from('activities').insert({ ...row, read_at: new Date().toISOString() });
         if (error) await supabase.from('activities').insert(row);
-        await supabase.from('leads').update({ last_activity_at: new Date().toISOString() }).eq('id', leadId);
+        const nowIso = new Date().toISOString();
+        const lp = {
+          last_activity_at: nowIso,
+          last_contact_at: nowIso,
+          last_contact_dir: 'outbound',
+          last_contact_channel: 'text',
+          last_contact_preview: String(message).slice(0, 200),
+        };
+        const { error: lpErr } = await supabase.from('leads').update(lp).eq('id', leadId);
+        if (lpErr) await supabase.from('leads').update({ last_activity_at: nowIso }).eq('id', leadId);
         // Texting an unowned lead claims it for the sender (don't steal owned ones).
         if (userId) {
           await supabase.from('leads').update({ current_owner_id: userId }).eq('id', leadId).is('current_owner_id', null);

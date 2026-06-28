@@ -92,7 +92,18 @@ export async function POST(request) {
     const { error } = await supabase.from('activities').insert(full);
     if (error) await supabase.from('activities').insert(base);
 
-    await supabase.from('leads').update({ last_activity_at: new Date().toISOString() }).eq('id', lead.id);
+    // Stamp last-contact on the lead so the card is always accurate (degrades to
+    // just last_activity_at if the last_contact_* columns aren't migrated yet).
+    const nowIso = new Date().toISOString();
+    const leadPatch = {
+      last_activity_at: nowIso,
+      last_contact_at: base.created_at || nowIso,
+      last_contact_dir: inbound ? 'inbound' : 'outbound',
+      last_contact_channel: 'text',
+      last_contact_preview: String(message).slice(0, 200),
+    };
+    const { error: lpErr } = await supabase.from('leads').update(leadPatch).eq('id', lead.id);
+    if (lpErr) await supabase.from('leads').update({ last_activity_at: nowIso }).eq('id', lead.id);
 
     if (inbound) {
       const text = String(message).trim().toUpperCase();
