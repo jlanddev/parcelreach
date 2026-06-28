@@ -795,7 +795,6 @@ export default function LandLeadsAdminPage() {
       }).select().maybeSingle();
       if (error) throw error;
       if (task) setScheduledTasks((prev) => [...prev, task]);
-      patchLead(leadId, { next_callback_at: due.toISOString() });
       showToast(`Follow-up set for ${due.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`, 'success');
     } catch (e) {
       showToast('Could not schedule: ' + (e?.message || e), 'error');
