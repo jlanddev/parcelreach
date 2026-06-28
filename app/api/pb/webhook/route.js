@@ -119,6 +119,16 @@ export async function POST(request) {
         await supabase.from('leads').update({ status: 'contacting', pipeline_status: 'CONTACTING' }).eq('id', lead.id);
       }
 
+      // Momentum rule: a reply means we're back in the conversation, so clear the
+      // pending "no reply" follow-up/callback for this lead.
+      await supabase
+        .from('scheduled_tasks')
+        .update({ status: 'completed', completed_at: new Date().toISOString() })
+        .eq('lead_id', lead.id)
+        .eq('status', 'pending')
+        .in('task_type', ['follow_up', 'callback'])
+        .then(() => {}, () => {});
+
       // Notify on an inbound text: the lead's owner (or the acquisition manager
       // if unowned) PLUS all admins, so the admin sees every inbound for oversight.
       try {
