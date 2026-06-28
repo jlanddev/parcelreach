@@ -15,6 +15,14 @@ export async function POST(request) {
     const { data: lead, error } = await supabase.from('leads').select('*').eq('id', leadId).maybeSingle();
     if (error || !lead) return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
 
+    // Pull the lead's notes so the update bubble is a real note summary.
+    const { data: notes } = await supabase
+      .from('lead_notes')
+      .select('content, created_at')
+      .eq('lead_id', leadId)
+      .order('created_at', { ascending: true });
+    lead.notes = notes || [];
+
     const result = await pushLeadToBoard(boardId, lead);
 
     // Record this push on the lead so the card shows every partner it's gone to.

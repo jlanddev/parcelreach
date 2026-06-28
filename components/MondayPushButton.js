@@ -2,18 +2,19 @@
 
 import { useState } from 'react';
 
-// Cache the partner board list across all cards (fetched once on first open).
+// Cache the partner board list across all cards. Only cache a NON-EMPTY result,
+// so a failed/empty fetch retries on the next open instead of sticking.
 let boardsCache = null;
-let boardsPromise = null;
 function loadBoards() {
-  if (boardsCache) return Promise.resolve(boardsCache);
-  if (!boardsPromise) {
-    boardsPromise = fetch('/api/monday/boards')
-      .then((r) => r.json())
-      .then((d) => { boardsCache = d.boards || []; return boardsCache; })
-      .catch(() => []);
-  }
-  return boardsPromise;
+  if (boardsCache && boardsCache.length) return Promise.resolve(boardsCache);
+  return fetch('/api/monday/boards')
+    .then((r) => r.json())
+    .then((d) => {
+      const b = d.boards || [];
+      if (b.length) boardsCache = b;
+      return b;
+    })
+    .catch(() => []);
 }
 
 /**
@@ -33,7 +34,7 @@ export default function MondayPushButton({ lead, onToast }) {
     e.stopPropagation();
     const next = !open;
     setOpen(next);
-    if (next && !boardsCache) {
+    if (next && boards.length === 0) {
       setLoading(true);
       const b = await loadBoards();
       setBoards(b);
