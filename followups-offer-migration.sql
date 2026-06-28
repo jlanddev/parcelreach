@@ -30,6 +30,11 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_contact_dir text;      -- inboun
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_contact_channel text;  -- text | call
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_contact_preview text;
 
+-- Dedicated last-call stamp so a call always shows on the card even after a
+-- later text (last_contact_* gets overwritten by whichever is most recent).
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_call_at timestamptz;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_call_outcome text;
+
 -- Backfill from the activity timeline (most recent text/call per lead).
 UPDATE leads l SET
   last_contact_at = a.created_at,

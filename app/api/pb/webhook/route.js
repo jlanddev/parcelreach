@@ -112,9 +112,11 @@ export async function POST(request) {
       } else if (START_WORDS.includes(text)) {
         await supabase.from('leads').update({ sms_opt_out: false }).eq('id', lead.id).then(() => {}, () => {});
       }
-      // First inbound reply nudges a NEW lead to CONTACTED.
-      if (lead.pipeline_status === 'NEW' || lead.status === 'new') {
-        await supabase.from('leads').update({ status: 'contacted' }).eq('id', lead.id);
+      // First inbound reply is a real connection, so a NEW lead becomes
+      // In Contact (set both status fields so it shows everywhere).
+      const cur = (lead.pipeline_status || lead.status || '').toUpperCase();
+      if (!cur || cur === 'NEW') {
+        await supabase.from('leads').update({ status: 'contacted', pipeline_status: 'CONTACTED' }).eq('id', lead.id);
       }
 
       // Notify on an inbound text: the lead's owner (or the acquisition manager

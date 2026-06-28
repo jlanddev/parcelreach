@@ -415,6 +415,48 @@ export default function LandLeadsAdminPage() {
   const [pipelineSearch, setPipelineSearch] = useState('');
   const [pipelineMapped, setPipelineMapped] = useState(false);
   const [pipelineSort, setPipelineSort] = useState('activity_desc');
+  // Engagement filters shared across PPC Inflow and the pipeline buckets.
+  const [needsResponseOnly, setNeedsResponseOnly] = useState(false); // last message was theirs
+  const [uncontactedOnly, setUncontactedOnly] = useState(false);     // still NEW, never reached
+  const [offerSetOnly, setOfferSetOnly] = useState(false);           // has a locked offer
+  const [untouchedDays, setUntouchedDays] = useState(0);             // no contact in N+ days (0 = off)
+  const passesEngagement = (l) => {
+    if (needsResponseOnly && (l.last_contact_dir || '').toLowerCase() !== 'inbound') return false;
+    if (uncontactedOnly) {
+      const s = (l.pipeline_status || l.status || '').toUpperCase();
+      if (s && s !== 'NEW') return false;
+    }
+    if (offerSetOnly && !l.offer_confirmed) return false;
+    if (untouchedDays > 0) {
+      const t = l.last_contact_at || l.last_activity_at;
+      if (t && new Date(t).getTime() > Date.now() - untouchedDays * 86400000) return false;
+    }
+    return true;
+  };
+  // Filter chips reused in both the PPC Inflow and bucket filter rows.
+  const renderEngagementFilters = () => {
+    const chip = (on) => `px-3 py-2 rounded-lg text-sm font-medium border ${on ? 'bg-blue-600/30 border-blue-600/50 text-blue-200' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`;
+    return (
+      <>
+        <button onClick={() => setNeedsResponseOnly((v) => !v)} className={chip(needsResponseOnly)} title="Their text is the last message — you owe a reply">
+          {needsResponseOnly ? '✓ ' : ''}Needs response
+        </button>
+        <button onClick={() => setUncontactedOnly((v) => !v)} className={chip(uncontactedOnly)} title="Still New — never reached">
+          {uncontactedOnly ? '✓ ' : ''}Haven't contacted
+        </button>
+        <button onClick={() => setOfferSetOnly((v) => !v)} className={chip(offerSetOnly)} title="Has a locked offer">
+          {offerSetOnly ? '✓ ' : ''}Offer set
+        </button>
+        <select value={untouchedDays} onChange={(e) => setUntouchedDays(Number(e.target.value))} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500">
+          <option value={0}>Any last touch</option>
+          <option value={1}>Untouched 1d+</option>
+          <option value={2}>Untouched 2d+</option>
+          <option value={3}>Untouched 3d+</option>
+          <option value={7}>Untouched 7d+</option>
+        </select>
+      </>
+    );
+  };
   const [convoCompleteTask, setConvoCompleteTask] = useState(null);
   const [convoNotes, setConvoNotes] = useState('');
   const [convoModalOpen, setConvoModalOpen] = useState(false);
@@ -558,7 +600,7 @@ export default function LandLeadsAdminPage() {
     NEW: { label: 'New', color: 'bg-green-500/20 text-green-400 border-green-500/50' },
     NEEDS_ATTENTION: { label: 'Needs Attention', color: 'bg-red-500/20 text-red-400 border-red-500/50' },
     CONTACTING: { label: 'Contacting', color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50' },
-    CONTACTED: { label: 'Contacted', color: 'bg-blue-500/20 text-blue-400 border-blue-500/50' },
+    CONTACTED: { label: 'In Contact', color: 'bg-blue-500/20 text-blue-400 border-blue-500/50' },
     OFFER_SENT: { label: 'Offer Sent', color: 'bg-purple-500/20 text-purple-400 border-purple-500/50' },
     NEGOTIATING: { label: 'Negotiating', color: 'bg-orange-500/20 text-orange-400 border-orange-500/50' },
     UNDER_CONTRACT: { label: 'Under Contract', color: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50' },
@@ -792,7 +834,7 @@ export default function LandLeadsAdminPage() {
   const PIPELINE_STATUSES = [
     { value: 'NEW', label: 'New' },
     { value: 'CONTACTING', label: 'Contacting' },
-    { value: 'CONTACTED', label: 'Contacted' },
+    { value: 'CONTACTED', label: 'In Contact' },
     { value: 'ANTHONY_CONTACTED', label: 'Anthony Contacted' },
     { value: 'ANTHONY_FOLLOW_UP', label: 'Anthony Follow-up' },
     { value: 'APPT_SET_FOR_JORDAN', label: 'Appt Set for Jordan' },
@@ -3081,16 +3123,23 @@ export default function LandLeadsAdminPage() {
                         } : null;
                         const last = [meta?.last, leadLast].filter(Boolean)
                           .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0] || null;
-                        const awaitingReply = last && last.direction === 'OUTBOUND';
+                        const needsResponse = last && last.direction === 'INBOUND';
+                        const awaitingSeller = last && last.direction === 'OUTBOUND';
+                        const whenDateTime = last ? new Date(last.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
                         return (
                           <div className="mb-4 pb-3 border-b border-slate-700/40">
                             <div className="flex items-center justify-between gap-2">
                               <div className="min-w-0">
-                                <div className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center gap-1.5">
+                                <div className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center gap-1.5 flex-wrap">
                                   Last Contacted
-                                  {awaitingReply && (
+                                  {needsResponse && (
+                                    <span className="px-1.5 py-0.5 rounded-full bg-red-500/25 text-red-300 text-[9px] font-bold normal-case">
+                                      Needs Response · {whenDateTime}
+                                    </span>
+                                  )}
+                                  {awaitingSeller && (
                                     <span className="px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[9px] font-bold normal-case">
-                                      Awaiting reply · {timeAgo(last.created_at)}
+                                      Awaiting Seller Reply
                                     </span>
                                   )}
                                 </div>
@@ -3130,6 +3179,12 @@ export default function LandLeadsAdminPage() {
                               <div className={`text-xs mt-1 truncate ${unread ? 'text-slate-100 font-medium' : 'text-slate-400'}`}>
                                 {last.direction === 'INBOUND' ? '↩ ' : '→ '}
                                 {last.message_content}
+                              </div>
+                            )}
+                            {lead.last_call_at && (
+                              <div className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-medium text-green-300/90 bg-green-600/10 border border-green-600/30 rounded px-1.5 py-0.5">
+                                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" /></svg>
+                                Called {new Date(lead.last_call_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
                               </div>
                             )}
                           </div>
@@ -4649,9 +4704,10 @@ export default function LandLeadsAdminPage() {
               >
                 <option value="activity_desc">Last activity: newest first</option>
                 <option value="activity_asc">Last activity: oldest first</option>
-                <option value="created_desc">Newest leads</option>
-                <option value="created_asc">Oldest leads</option>
+                <option value="created_desc">Newest Inbound</option>
+                <option value="created_asc">Oldest Inbound</option>
               </select>
+              {renderEngagementFilters()}
             </div>
 
             {/* PPC Leads Grid */}
@@ -4669,14 +4725,15 @@ export default function LandLeadsAdminPage() {
                       (l.property_state || l.state || '').toLowerCase().includes(q) ||
                       (l.form_data?.streetAddress || '').toLowerCase().includes(q);
                   })
-                  .filter(l => !pipelineMapped || l.map_uploaded),
+                  .filter(l => !pipelineMapped || l.map_uploaded)
+                  .filter(passesEngagement),
                 (a, b) => {
                   const useCreated = pipelineSort.startsWith('created');
                   const av = new Date(useCreated ? a.created_at : (a.last_activity_at || a.created_at));
                   const bv = new Date(useCreated ? b.created_at : (b.last_activity_at || b.created_at));
                   return pipelineSort.endsWith('asc') ? av - bv : bv - av;
                 },
-                `ppc:${pipelineSort}:${pipelineMapped}:${ppcSearch.trim()}`
+                `ppc:${pipelineSort}:${pipelineMapped}:${ppcSearch.trim()}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`
               ).map((lead) => renderLeadCard(lead))}
             </div>
 
@@ -4765,9 +4822,10 @@ export default function LandLeadsAdminPage() {
                 (l.email || '').toLowerCase().includes(q) ||
                 (l.property_county || l.county || '').toLowerCase().includes(q) ||
                 (l.property_state || l.state || '').toLowerCase().includes(q) ||
-                (l.form_data?.streetAddress || '').toLowerCase().includes(q)),
+                (l.form_data?.streetAddress || '').toLowerCase().includes(q))
+              .filter(passesEngagement),
             bucketComparator,
-            `bucket:${activeTab}:${pipelineSort}:${pipelineMapped}:${q}`
+            `bucket:${activeTab}:${pipelineSort}:${pipelineMapped}:${q}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`
           );
 
           return (
@@ -4812,9 +4870,10 @@ export default function LandLeadsAdminPage() {
                 >
                   <option value="activity_desc">Last activity: newest first</option>
                   <option value="activity_asc">Last activity: oldest first</option>
-                  <option value="created_desc">Newest leads</option>
-                  <option value="created_asc">Oldest leads</option>
+                  <option value="created_desc">Newest Inbound</option>
+                  <option value="created_asc">Oldest Inbound</option>
                 </select>
+                {renderEngagementFilters()}
               </div>
 
               {leadsInBucket.length === 0 ? (

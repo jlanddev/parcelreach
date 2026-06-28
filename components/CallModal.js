@@ -48,13 +48,22 @@ export default function CallModal({ lead, currentUserId, onClose, onLogged }) {
         created_at: new Date().toISOString(),
       });
       const nowIso = new Date().toISOString();
+      const connected = dur > 0;
       const lp = {
         last_activity_at: nowIso,
         last_contact_at: nowIso,
         last_contact_dir: 'outbound',
         last_contact_channel: 'call',
-        last_contact_preview: dur > 0 ? `Call · ${Math.floor(dur / 60)}m ${dur % 60}s` : 'Call · no answer',
+        last_contact_preview: connected ? `Call · ${Math.floor(dur / 60)}m ${dur % 60}s` : 'Call · no answer',
+        last_call_at: nowIso,
+        last_call_outcome: connected ? 'connected' : (outcome || 'no_answer'),
       };
+      // A connected call is a real contact: advance a NEW lead to In Contact.
+      const cur = (lead.pipeline_status || lead.status || '').toUpperCase();
+      if (connected && (!cur || cur === 'NEW')) {
+        lp.status = 'contacted';
+        lp.pipeline_status = 'CONTACTED';
+      }
       const { error: lpErr } = await supabase.from('leads').update(lp).eq('id', lead.id);
       if (lpErr) await supabase.from('leads').update({ last_activity_at: nowIso }).eq('id', lead.id);
     } catch (e) {
