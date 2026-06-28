@@ -422,6 +422,8 @@ export default function LandLeadsAdminPage() {
   const [offerSetOnly, setOfferSetOnly] = useState(false);           // has a locked offer
   const [untouchedDays, setUntouchedDays] = useState(0);             // no contact in N+ days (0 = off)
   const [partnerSearch, setPartnerSearch] = useState('');           // Partners tab lead search
+  const [partnerStage, setPartnerStage] = useState('active');       // Partners tab stage filter
+  const [partnerDirection, setPartnerDirection] = useState('');     // Partners tab lean/substatus filter
   const passesEngagement = (l) => {
     if (needsResponseOnly && (l.last_contact_dir || '').toLowerCase() !== 'inbound') return false;
     if (uncontactedOnly) {
@@ -6001,6 +6003,26 @@ export default function LandLeadsAdminPage() {
         {/* PARTNERS TAB (admin only) — push leads to partner Monday boards + tracking */}
         {activeTab === 'partners' && isAdmin && (() => {
           const q = partnerSearch.trim().toLowerCase();
+          const STAGE_SETS = {
+            new: ['', 'NEW'],
+            in_contact: ['CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'],
+            appt: ['APPT_SET_FOR_JORDAN'],
+            offer: ['OFFER_SENT', 'OFFER_MADE', 'NEGOTIATING'],
+            agreement: ['AGREEMENT_SENT'],
+            contract: ['UNDER_CONTRACT'],
+            closed: ['CLOSED'],
+            follow_up: ['FOLLOW_UP'],
+            lost: ['LOST'],
+            dead: ['DEAD'],
+          };
+          const stageOk = (l) => {
+            const s = (l.pipeline_status || l.status || '').toUpperCase();
+            if (partnerStage === 'all') return true;
+            if (partnerStage === 'active') return !['DEAD', 'LOST'].includes(s);
+            return (STAGE_SETS[partnerStage] || []).includes(s);
+          };
+          const dirOk = (l) => !partnerDirection || l.deal_direction === partnerDirection;
+          const allDirections = [...OFFER_DIRECTIONS, ...GENERAL_DIRECTIONS];
           const sentLeads = allLeads
             .filter((l) => Array.isArray(l.partner_pushes) && l.partner_pushes.length)
             .sort((a, b) => {
@@ -6011,6 +6033,8 @@ export default function LandLeadsAdminPage() {
           const cards = stableOrder(
             allLeads
               .filter((l) => l.status !== 'archived')
+              .filter(stageOk)
+              .filter(dirOk)
               .filter((l) => !pipelineMapped || l.map_uploaded)
               .filter((l) => !q ||
                 (l.full_name || l.name || '').toLowerCase().includes(q) ||
@@ -6021,7 +6045,7 @@ export default function LandLeadsAdminPage() {
                 (l.form_data?.streetAddress || '').toLowerCase().includes(q))
               .filter(passesEngagement),
             (a, b) => new Date(b.last_activity_at || b.created_at) - new Date(a.last_activity_at || a.created_at),
-            `partners:${pipelineMapped}:${q}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`
+            `partners:${partnerStage}:${partnerDirection}:${pipelineMapped}:${q}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`
           );
           return (
             <div className="space-y-6">
@@ -6041,6 +6065,24 @@ export default function LandLeadsAdminPage() {
                     className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50"
                   />
                 </div>
+                <select value={partnerStage} onChange={(e) => setPartnerStage(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50">
+                  <option value="active">All active</option>
+                  <option value="all">Everything (incl. dead/lost)</option>
+                  <option value="new">New</option>
+                  <option value="in_contact">In Contact</option>
+                  <option value="appt">Appointment Set</option>
+                  <option value="offer">Offer Made</option>
+                  <option value="agreement">Agreement Sent</option>
+                  <option value="contract">Signed Contract</option>
+                  <option value="closed">Closed</option>
+                  <option value="follow_up">Follow-Up</option>
+                  <option value="lost">Lost</option>
+                  <option value="dead">Dead</option>
+                </select>
+                <select value={partnerDirection} onChange={(e) => setPartnerDirection(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50">
+                  <option value="">Any lean</option>
+                  {allDirections.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+                </select>
                 <button onClick={() => setPipelineMapped((v) => !v)} className={`px-3 py-2 rounded-lg text-sm font-medium border ${pipelineMapped ? 'bg-green-600/30 border-green-600/50 text-green-300' : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800'}`}>{pipelineMapped ? '✓ ' : ''}Mapped only</button>
                 {renderEngagementFilters()}
               </div>
