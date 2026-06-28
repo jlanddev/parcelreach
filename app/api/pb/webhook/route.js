@@ -116,7 +116,7 @@ export async function POST(request) {
       // In Contact (set both status fields so it shows everywhere).
       const cur = (lead.pipeline_status || lead.status || '').toUpperCase();
       if (!cur || cur === 'NEW') {
-        await supabase.from('leads').update({ status: 'contacted', pipeline_status: 'CONTACTED' }).eq('id', lead.id);
+        await supabase.from('leads').update({ status: 'contacting', pipeline_status: 'CONTACTING' }).eq('id', lead.id);
       }
 
       // Notify on an inbound text: the lead's owner (or the acquisition manager

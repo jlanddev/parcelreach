@@ -805,8 +805,8 @@ export default function LandLeadsAdminPage() {
       };
 
       if (outcome === 'SPOKE' && (!lead?.status || lead.status === 'new')) {
-        updates.status = 'contacted';
-        updates.pipeline_status = 'CONTACTED';
+        updates.status = 'contacting';
+        updates.pipeline_status = 'CONTACTING';
       }
 
       await supabase.from('leads').update(updates).eq('id', leadId);

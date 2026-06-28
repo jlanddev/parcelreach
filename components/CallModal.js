@@ -61,8 +61,8 @@ export default function CallModal({ lead, currentUserId, onClose, onLogged }) {
       // A connected call is a real contact: advance a NEW lead to In Contact.
       const cur = (lead.pipeline_status || lead.status || '').toUpperCase();
       if (connected && (!cur || cur === 'NEW')) {
-        lp.status = 'contacted';
-        lp.pipeline_status = 'CONTACTED';
+        lp.status = 'contacting';
+        lp.pipeline_status = 'CONTACTING';
       }
       const { error: lpErr } = await supabase.from('leads').update(lp).eq('id', lead.id);
       if (lpErr) await supabase.from('leads').update({ last_activity_at: nowIso }).eq('id', lead.id);
