@@ -3115,6 +3115,13 @@ export default function LandLeadsAdminPage() {
                         <TeammateBadge lead={lead} />
                       </div>
 
+                      {/* Send to partner (Partners tab only) */}
+                      {activeTab === 'partners' && (
+                        <div className="mb-4">
+                          <MondayPushButton lead={lead} onToast={(m, t) => showToast(m, t)} />
+                        </div>
+                      )}
+
                       {/* LAST CONTACTED + MESSAGES (Project Blue) */}
                       {(() => {
                         const meta = contactMeta[phoneKey(lead.phone || lead.owner_phone)];
@@ -5994,15 +6001,6 @@ export default function LandLeadsAdminPage() {
         {/* PARTNERS TAB (admin only) — push leads to partner Monday boards + tracking */}
         {activeTab === 'partners' && isAdmin && (() => {
           const q = partnerSearch.trim().toLowerCase();
-          const matches = q
-            ? allLeads.filter((l) =>
-                (l.full_name || l.name || '').toLowerCase().includes(q) ||
-                (l.phone || '').toLowerCase().includes(q) ||
-                (l.property_county || l.county || '').toLowerCase().includes(q) ||
-                (l.property_state || l.state || '').toLowerCase().includes(q) ||
-                (l.form_data?.streetAddress || l.street_address || '').toLowerCase().includes(q)
-              ).slice(0, 25)
-            : [];
           const sentLeads = allLeads
             .filter((l) => Array.isArray(l.partner_pushes) && l.partner_pushes.length)
             .sort((a, b) => {
@@ -6010,44 +6008,51 @@ export default function LandLeadsAdminPage() {
               const bt = b.partner_pushes[b.partner_pushes.length - 1]?.pushed_at || '';
               return new Date(bt) - new Date(at);
             });
+          const cards = stableOrder(
+            allLeads
+              .filter((l) => l.status !== 'archived')
+              .filter((l) => !pipelineMapped || l.map_uploaded)
+              .filter((l) => !q ||
+                (l.full_name || l.name || '').toLowerCase().includes(q) ||
+                (l.phone || '').toLowerCase().includes(q) ||
+                (l.email || '').toLowerCase().includes(q) ||
+                (l.property_county || l.county || '').toLowerCase().includes(q) ||
+                (l.property_state || l.state || '').toLowerCase().includes(q) ||
+                (l.form_data?.streetAddress || '').toLowerCase().includes(q))
+              .filter(passesEngagement),
+            (a, b) => new Date(b.last_activity_at || b.created_at) - new Date(a.last_activity_at || a.created_at),
+            `partners:${pipelineMapped}:${q}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`
+          );
           return (
             <div className="space-y-6">
               <div className="bg-gradient-to-br from-indigo-500/10 to-indigo-600/5 border border-indigo-500/40 rounded-xl p-6">
                 <h2 className="text-2xl font-bold text-indigo-300">Partners</h2>
-                <p className="text-slate-400 text-sm mt-1">Push a lead to a partner board in Monday (LS or SSL) with the property details and the parcel map. Everything sent is tracked below.</p>
+                <p className="text-slate-400 text-sm mt-1">Find a lead, hit Send to Partner on its card to push it to LS or SSL in Monday with the property details and parcel map. Everything sent is tracked below.</p>
               </div>
 
-              {/* Find a lead and send it */}
-              <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-4">
-                <div className="text-sm font-semibold text-white mb-2">Send a lead to a partner</div>
-                <div className="relative mb-3">
+              {/* Filters */}
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="relative flex-1 min-w-[220px]">
                   <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
                   <input
                     value={partnerSearch}
                     onChange={(e) => setPartnerSearch(e.target.value)}
-                    placeholder="Search a lead by name, phone, county, address…"
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-3 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50"
+                    placeholder="Search by name, phone, county, address…"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50"
                   />
                 </div>
-                {q && matches.length === 0 && <div className="text-sm text-slate-500 py-2">No leads match.</div>}
-                <div className="space-y-2">
-                  {matches.map((lead) => (
-                    <div key={lead.id} className="flex items-center justify-between gap-3 bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-2">
-                      <div className="min-w-0">
-                        <div className="text-sm text-white font-medium truncate">{lead.full_name || lead.name || 'Lead'}</div>
-                        <div className="text-xs text-slate-400 truncate">
-                          {(lead.property_county || lead.county || '')}{(lead.property_county || lead.county) && (lead.property_state || lead.state) ? ', ' : ''}{(lead.property_state || lead.state || '')}
-                          {(lead.acres || lead.acreage) ? ` · ${lead.acres || lead.acreage} ac` : ''}
-                          {lead.map_uploaded ? ' · map ✓' : ' · no map'}
-                        </div>
-                      </div>
-                      <div className="w-52 flex-shrink-0">
-                        <MondayPushButton lead={lead} onToast={(m, t) => showToast(m, t)} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <button onClick={() => setPipelineMapped((v) => !v)} className={`px-3 py-2 rounded-lg text-sm font-medium border ${pipelineMapped ? 'bg-green-600/30 border-green-600/50 text-green-300' : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800'}`}>{pipelineMapped ? '✓ ' : ''}Mapped only</button>
+                {renderEngagementFilters()}
               </div>
+
+              {/* Card grid with Send to Partner on each */}
+              {cards.length === 0 ? (
+                <div className="text-center py-16 text-slate-500"><p className="text-lg">No leads match.</p></div>
+              ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {cards.map((lead) => renderLeadCard(lead))}
+                </div>
+              )}
 
               {/* Send tracking */}
               <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
