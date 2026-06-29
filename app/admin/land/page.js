@@ -813,6 +813,15 @@ export default function LandLeadsAdminPage() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       const lead = (allLeadsRef.current || []).find((l) => l.id === leadId);
+      // One active follow-up per lead. Supersede any existing pending follow-up
+      // or callback so the bell doesn't stack three rows for the same person.
+      await supabase.from('scheduled_tasks')
+        .update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id || null })
+        .eq('lead_id', leadId).eq('status', 'pending').in('task_type', ['follow_up', 'callback'])
+        .then(() => {}, () => {});
+      setScheduledTasks((prev) => prev.map((t) =>
+        (t.lead_id === leadId && t.status === 'pending' && ['follow_up', 'callback'].includes(t.task_type))
+          ? { ...t, status: 'completed' } : t));
       const { data: task, error } = await supabase.from('scheduled_tasks').insert({
         lead_id: leadId,
         created_by: user?.id || null,
@@ -3799,17 +3808,48 @@ export default function LandLeadsAdminPage() {
             )}
             {currentUserId && (() => {
               const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
-              const dueTasks = scheduledTasks.filter((t) =>
+              const dueRaw = scheduledTasks.filter((t) =>
                 t.status === 'pending' &&
                 t.due_at && new Date(t.due_at) <= todayEnd &&
                 (t.assigned_to === currentUserId || (isAdmin && !t.assigned_to))
               );
+              // Collapse stacked follow-ups/callbacks to one row per lead (the
+              // earliest due), so a lead with three follow-ups shows once instead
+              // of three times. Appointments and lead-less tasks always show.
+              const FU_TYPES = ['follow_up', 'callback'];
+              const seenFollowUp = new Set();
+              const dueTasks = [];
+              for (const t of dueRaw.sort((a, b) => new Date(a.due_at) - new Date(b.due_at))) {
+                if (t.lead_id && FU_TYPES.includes(t.task_type)) {
+                  if (seenFollowUp.has(t.lead_id)) continue;
+                  seenFollowUp.add(t.lead_id);
+                }
+                dueTasks.push(t);
+              }
               const leadsById = Object.fromEntries(allLeads.map((l) => [l.id, l]));
+              // The follow-up types that stack and should be cleared together.
+              // Appointments/meetings are left alone so a future appt survives.
+              const STACKABLE = ['follow_up', 'callback'];
               const completeTask = async (task) => {
-                setScheduledTasks((prev) => prev.filter((t) => t.id !== task.id));
+                const clearStack = task.lead_id && STACKABLE.includes(task.task_type);
+                // Clear the whole due/overdue stack for this lead so superseded
+                // duplicates don't pop back after a refresh. A non-stackable task
+                // (appointment) or one without a lead just clears itself.
+                setScheduledTasks((prev) => prev.filter((t) => {
+                  if (!clearStack) return t.id !== task.id;
+                  if (t.lead_id !== task.lead_id || t.status !== 'pending' || !STACKABLE.includes(t.task_type)) return true;
+                  return new Date(t.due_at) > todayEnd; // keep future ones
+                }));
                 try {
                   const { data: { user } } = await supabase.auth.getUser();
-                  await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id || null }).eq('id', task.id);
+                  const patch = { status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id || null };
+                  if (clearStack) {
+                    await supabase.from('scheduled_tasks').update(patch)
+                      .eq('lead_id', task.lead_id).eq('status', 'pending')
+                      .in('task_type', STACKABLE).lte('due_at', todayEnd.toISOString());
+                  } else {
+                    await supabase.from('scheduled_tasks').update(patch).eq('id', task.id);
+                  }
                 } catch {}
               };
               return <FollowUpsBell tasks={dueTasks} leadsById={leadsById} onOpenLead={(l) => navigateToLeadCard(l)} onComplete={completeTask} />;
