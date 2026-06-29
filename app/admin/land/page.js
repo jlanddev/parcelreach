@@ -43,6 +43,9 @@ export default function LandLeadsAdminPage() {
     dateRange: 'all',
     // Date basis: 'created' (when lead came in) | 'activity' (when status last changed / touch logged)
     dateBasis: 'activity',
+    // Lead age (by created_at): only include leads that came in at least N days ago.
+    // Empty = no age floor. Lets you pull "50+ days ago", "40+", etc.
+    minAgeDays: '',
   });
   const [currentUserId, setCurrentUserId] = useState(null);
   const [currentUserRole, setCurrentUserRole] = useState(null);
@@ -893,12 +896,18 @@ export default function LandLeadsAdminPage() {
   const applyExportFilters = () => {
     const days = { '5d': 5, '30d': 30, '90d': 90 }[exportFilters.dateRange];
     const cutoff = days ? Date.now() - days * 24 * 60 * 60 * 1000 : null;
+    const minAge = exportFilters.minAgeDays ? parseInt(exportFilters.minAgeDays, 10) : null;
+    const ageCeiling = (minAge != null && !Number.isNaN(minAge))
+      ? Date.now() - minAge * 24 * 60 * 60 * 1000
+      : null;
     return allLeads.filter(lead => {
       const acres = parseFloat(lead.acres) || 0;
       const status = (lead.pipeline_status || lead.status || 'NEW').toUpperCase();
       if (exportFilters.minAcres && acres < parseFloat(exportFilters.minAcres)) return false;
       if (exportFilters.maxAcres && acres > parseFloat(exportFilters.maxAcres)) return false;
       if (exportFilters.includeStatuses.length > 0 && !exportFilters.includeStatuses.includes(status)) return false;
+      // Age floor: lead must have come in at least minAgeDays ago (by created_at).
+      if (ageCeiling != null && new Date(lead.created_at).getTime() > ageCeiling) return false;
       if (cutoff) {
         const basis = exportFilters.dateBasis === 'activity'
           ? (lead.last_activity_at || lead.created_at)
@@ -914,6 +923,7 @@ export default function LandLeadsAdminPage() {
 
     if (filtered.length === 0) { alert('No leads match your filters.'); return; }
 
+    const now = new Date();
     const headers = [
       'Name', 'Phone', 'Email',
       'Address', 'County', 'State', 'APN/Parcel ID',
@@ -6284,6 +6294,45 @@ export default function LandLeadsAdminPage() {
                     </button>
                   </div>
                 </div>
+              </div>
+
+              {/* Lead age (older than N days, by created date) */}
+              <div className="mb-6">
+                <label className="block text-sm text-slate-400 mb-2">Lead Age (came in at least this long ago)</label>
+                <div className="flex flex-wrap items-center gap-2">
+                  {[
+                    { value: '', label: 'Any age' },
+                    { value: '30', label: '30+ days' },
+                    { value: '40', label: '40+ days' },
+                    { value: '50', label: '50+ days' },
+                    { value: '60', label: '60+ days' },
+                    { value: '90', label: '90+ days' },
+                  ].map(opt => (
+                    <button
+                      key={opt.value || 'any'}
+                      onClick={() => setExportFilters(f => ({ ...f, minAgeDays: opt.value }))}
+                      className={`px-3 py-1.5 rounded text-xs font-medium transition ${
+                        String(exportFilters.minAgeDays) === opt.value
+                          ? 'bg-blue-500/20 text-blue-300 border border-blue-500/50'
+                          : 'bg-slate-700/50 text-slate-300 border border-slate-600 hover:bg-slate-700'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                  <div className="flex items-center gap-1 ml-1">
+                    <input
+                      type="number"
+                      min="0"
+                      value={exportFilters.minAgeDays}
+                      onChange={(e) => setExportFilters(f => ({ ...f, minAgeDays: e.target.value }))}
+                      placeholder="custom"
+                      className="w-20 bg-slate-900/50 text-white border border-slate-600 rounded-lg px-2 py-1.5 text-xs"
+                    />
+                    <span className="text-xs text-slate-500">days+</span>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500 mt-1.5">Uses the date the lead came in. Combine with statuses above to pull, say, every NEW lead older than 50 days.</p>
               </div>
 
               {/* Acres */}
