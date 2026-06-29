@@ -15,7 +15,7 @@ import FollowUpsBell from '@/components/FollowUpsBell';
 import DealStrip from '@/components/DealStrip';
 import MondayPushButton from '@/components/MondayPushButton';
 import { timeAgo, channelLabel } from '@/lib/format';
-import { OFFER_DIRECTIONS, GENERAL_DIRECTIONS, FOLLOWUP_BUCKETS, FOLLOWUP_KEYS, LOST_REASONS, formatOffer, mergeScript, firstTouch, touchForStep } from '@/lib/followups';
+import { DIRECTIONS, OFFER_DIRECTIONS, GENERAL_DIRECTIONS, FOLLOWUP_BUCKETS, FOLLOWUP_KEYS, LOST_REASONS, formatOffer, mergeScript, firstTouch, touchForStep } from '@/lib/followups';
 
 // A conversation note is anything that isn't an auto-logged activity marker.
 const isConversationNote = (content) =>
@@ -623,6 +623,34 @@ export default function LandLeadsAdminPage() {
     FOLLOW_UP: { label: 'Follow-Up', color: 'bg-rose-500/20 text-rose-400 border-rose-500/50' },
     LOST: { label: 'Lost', color: 'bg-zinc-500/20 text-zinc-400 border-zinc-500/50' },
     ARCHIVED: { label: 'Archived', color: 'bg-zinc-500/20 text-zinc-400 border-zinc-500/50' }
+  };
+
+  // Shared search matcher for every bucket's search bar. Matches the usual
+  // contact/property fields PLUS the lead's status (e.g. "new", "in contact",
+  // "offer") and its lean/temperature (e.g. "hot", "warm", "cold", "ready"), so
+  // you can type a status or lean into any search bar to filter by it.
+  const leadMatchesSearch = (lead, q) => {
+    if (!q) return true;
+    q = q.toLowerCase().trim();
+    const smart = getSmartStatus(lead);
+    const statusLabel = (STATUS_CONFIG[smart]?.label || smart || '').toLowerCase();
+    const rawStatus = (lead.pipeline_status || lead.status || '').toLowerCase();
+    const dir = (lead.deal_direction || '').toLowerCase();
+    const dirLabel = (DIRECTIONS.find(d => d.value === dir)?.label || '').toLowerCase();
+    const fd = lead.form_data || {};
+    return (
+      (lead.full_name || lead.name || '').toLowerCase().includes(q) ||
+      (lead.phone || '').toLowerCase().includes(q) ||
+      (lead.email || '').toLowerCase().includes(q) ||
+      (lead.property_county || lead.county || '').toLowerCase().includes(q) ||
+      (lead.property_state || lead.state || '').toLowerCase().includes(q) ||
+      (fd.streetAddress || lead.street_address || lead.address || '').toLowerCase().includes(q) ||
+      (fd.agentName || '').toLowerCase().includes(q) ||
+      statusLabel.includes(q) ||
+      rawStatus.includes(q) ||
+      dir.includes(q) ||
+      dirLabel.includes(q)
+    );
   };
 
   // How long ago helper
@@ -4763,7 +4791,7 @@ export default function LandLeadsAdminPage() {
                   type="text"
                   value={ppcSearch}
                   onChange={(e) => setPpcSearch(e.target.value)}
-                  placeholder="Search leads by name, phone, county, state, email..."
+                  placeholder="Search by name, phone, county, status (new, in contact) or lean (hot, warm)..."
                   className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-10 pr-10 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
                 />
                 {ppcSearch && (
@@ -4796,16 +4824,7 @@ export default function LandLeadsAdminPage() {
               {stableOrder(
                 boardLeads
                   .filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })())
-                  .filter(l => {
-                    if (!ppcSearch.trim()) return true;
-                    const q = ppcSearch.toLowerCase();
-                    return (l.full_name || l.name || '').toLowerCase().includes(q) ||
-                      (l.phone || '').toLowerCase().includes(q) ||
-                      (l.email || '').toLowerCase().includes(q) ||
-                      (l.property_county || l.county || '').toLowerCase().includes(q) ||
-                      (l.property_state || l.state || '').toLowerCase().includes(q) ||
-                      (l.form_data?.streetAddress || '').toLowerCase().includes(q);
-                  })
+                  .filter(l => leadMatchesSearch(l, ppcSearch))
                   .filter(l => !pipelineMapped || l.map_uploaded)
                   .filter(passesEngagement),
                 (a, b) => {
@@ -4897,13 +4916,7 @@ export default function LandLeadsAdminPage() {
           const leadsInBucket = stableOrder(
             bucketAll
               .filter(l => !pipelineMapped || l.map_uploaded)
-              .filter(l => !q ||
-                (l.full_name || l.name || '').toLowerCase().includes(q) ||
-                (l.phone || '').toLowerCase().includes(q) ||
-                (l.email || '').toLowerCase().includes(q) ||
-                (l.property_county || l.county || '').toLowerCase().includes(q) ||
-                (l.property_state || l.state || '').toLowerCase().includes(q) ||
-                (l.form_data?.streetAddress || '').toLowerCase().includes(q))
+              .filter(l => leadMatchesSearch(l, q))
               .filter(passesEngagement),
             bucketComparator,
             `bucket:${activeTab}:${pipelineSort}:${pipelineMapped}:${q}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`
@@ -4931,7 +4944,7 @@ export default function LandLeadsAdminPage() {
                   <input
                     value={pipelineSearch}
                     onChange={(e) => setPipelineSearch(e.target.value)}
-                    placeholder="Search name, phone, county, address…"
+                    placeholder="Search name, phone, county, status or lean (hot, warm)…"
                     className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-8 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500/50"
                   />
                   {pipelineSearch && (
@@ -5004,7 +5017,7 @@ export default function LandLeadsAdminPage() {
                   type="text"
                   value={subdivSearch}
                   onChange={(e) => setSubdivSearch(e.target.value)}
-                  placeholder="Search by seller name, county, state, agent name..."
+                  placeholder="Search by seller name, county, agent, status or lean (hot, warm)..."
                   className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-10 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
                 />
                 {subdivSearch && (
@@ -5133,14 +5146,7 @@ export default function LandLeadsAdminPage() {
             <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
               {allLeads
                 .filter(l => l.source === 'subdivision' && l.status !== 'archived')
-                .filter(l => {
-                  if (!subdivSearch.trim()) return true;
-                  const q = subdivSearch.toLowerCase();
-                  return (l.full_name || l.name || '').toLowerCase().includes(q) ||
-                    (l.property_county || l.county || '').toLowerCase().includes(q) ||
-                    (l.property_state || l.state || '').toLowerCase().includes(q) ||
-                    (l.form_data?.agentName || '').toLowerCase().includes(q);
-                })
+                .filter(l => leadMatchesSearch(l, subdivSearch))
                 .map((lead) => (
                   <div
                     key={lead.id}
@@ -6102,13 +6108,7 @@ export default function LandLeadsAdminPage() {
               .filter(stageOk)
               .filter(dirOk)
               .filter((l) => !pipelineMapped || l.map_uploaded)
-              .filter((l) => !q ||
-                (l.full_name || l.name || '').toLowerCase().includes(q) ||
-                (l.phone || '').toLowerCase().includes(q) ||
-                (l.email || '').toLowerCase().includes(q) ||
-                (l.property_county || l.county || '').toLowerCase().includes(q) ||
-                (l.property_state || l.state || '').toLowerCase().includes(q) ||
-                (l.form_data?.streetAddress || '').toLowerCase().includes(q))
+              .filter((l) => leadMatchesSearch(l, q))
               .filter(passesEngagement),
             (a, b) => new Date(b.last_activity_at || b.created_at) - new Date(a.last_activity_at || a.created_at),
             `partners:${partnerStage}:${partnerDirection}:${pipelineMapped}:${q}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`
