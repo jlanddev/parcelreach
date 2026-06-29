@@ -130,7 +130,9 @@ CRITICAL: Only suggest "Send offer" or anything about an offer if an offer has A
 - Always give "time_24h" like "15:00". If a time was agreed in the thread, use it; otherwise pick a weekday slot 9:00-17:00.
 - If no follow-up is warranted, return null for follow_up.
 
-The draft_reply must fit the current stage and must never reference an offer that hasn't been made.`;
+The draft_reply must fit the current stage and must never reference an offer that hasn't been made.
+
+STYLE: Never use em dashes or en dashes anywhere in your output. Use commas, periods, or parentheses instead.`;
     const user = `Current date/time (America/Chicago): ${nowCentral()}.
 Already booked (avoid these times): ${bookedList}.
 
@@ -166,12 +168,13 @@ Return ONLY this JSON:
 
     const lean = VALID_LEANS.includes(parsed.lean) ? parsed.lean : null;
     const whenISO = resolveWhen(parsed.follow_up); // date computed in code, not by the model
+    const noDash = (s) => String(s || '').replace(/\s*[—–]\s*/g, ', ').replace(/[—–]/g, '-');
     return NextResponse.json({
       ok: true,
       lean,
-      follow_up: whenISO ? { when: whenISO, label: String(parsed.follow_up.label || 'Follow up') } : null,
-      draft_reply: typeof parsed.draft_reply === 'string' ? parsed.draft_reply : '',
-      summary: String(parsed.summary || ''),
+      follow_up: whenISO ? { when: whenISO, label: noDash(parsed.follow_up.label || 'Follow up') } : null,
+      draft_reply: noDash(typeof parsed.draft_reply === 'string' ? parsed.draft_reply : ''),
+      summary: noDash(parsed.summary || ''),
     });
   } catch (err) {
     console.error('[ai suggest]', err);
