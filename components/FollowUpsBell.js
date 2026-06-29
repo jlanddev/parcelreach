@@ -14,7 +14,7 @@ const when = (iso) =>
   new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
 /**
- * Follow-ups bell — sits next to the notification bell. Lights up with a count
+ * Follow-ups bell, sits next to the notification bell. Lights up with a count
  * of tasks due today or overdue (follow-ups, callbacks, appointments). Click to
  * see each one, who it's with, and jump to that lead's card.
  */

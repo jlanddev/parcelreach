@@ -47,6 +47,13 @@ export async function POST(request) {
       return NextResponse.json({ ok: true, matched: false });
     }
 
+    // Duplicate form submissions create multiple lead rows with the same phone.
+    // Apply contact + status updates to ALL of them so whichever card you view
+    // is consistent (otherwise one duplicate updates and the others look stale).
+    const lastTen = last10(contactPhone);
+    const { data: dups } = await supabase.from('leads').select('id').ilike('phone', `%${lastTen}%`);
+    const dupIds = dups && dups.length ? dups.map((d) => d.id) : [lead.id];
+
     // Outbound we send via /api/pb/send-sms is already logged at send time. Try
     // to claim that row with the guid (dedupe); only insert if it was sent from
     // the Project Blue app directly (no matching local row).
@@ -69,7 +76,7 @@ export async function POST(request) {
           return NextResponse.json({ ok: true, claimed: true });
         }
       } catch {
-        /* column may not exist pre-migration — fall through to insert */
+        /* column may not exist pre-migration, fall through to insert */
       }
     }
 
@@ -102,8 +109,8 @@ export async function POST(request) {
       last_contact_channel: 'text',
       last_contact_preview: String(message).slice(0, 200),
     };
-    const { error: lpErr } = await supabase.from('leads').update(leadPatch).eq('id', lead.id);
-    if (lpErr) await supabase.from('leads').update({ last_activity_at: nowIso }).eq('id', lead.id);
+    const { error: lpErr } = await supabase.from('leads').update(leadPatch).in('id', dupIds);
+    if (lpErr) await supabase.from('leads').update({ last_activity_at: nowIso }).in('id', dupIds);
 
     if (inbound) {
       const text = String(message).trim().toUpperCase();
@@ -116,15 +123,15 @@ export async function POST(request) {
       // In Contact (set both status fields so it shows everywhere).
       const cur = (lead.pipeline_status || lead.status || '').toUpperCase();
       if (!cur || cur === 'NEW') {
-        await supabase.from('leads').update({ status: 'contacting', pipeline_status: 'CONTACTING' }).eq('id', lead.id);
+        await supabase.from('leads').update({ status: 'contacting', pipeline_status: 'CONTACTING' }).in('id', dupIds);
       }
 
       // Momentum rule: a reply means we're back in the conversation, so clear the
-      // pending "no reply" follow-up/callback for this lead.
+      // pending "no reply" follow-up/callback across all duplicate records.
       await supabase
         .from('scheduled_tasks')
         .update({ status: 'completed', completed_at: new Date().toISOString() })
-        .eq('lead_id', lead.id)
+        .in('lead_id', dupIds)
         .eq('status', 'pending')
         .in('task_type', ['follow_up', 'callback'])
         .then(() => {}, () => {});

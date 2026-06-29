@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getRecentMessages } from '@/lib/projectBlue';
 
-// Recent messages across all contacts — powers the lead cards' Last Contacted
+// Recent messages across all contacts, powers the lead cards' Last Contacted
 // header, on-card snippet, and unread badge in one request.
 export async function GET(request) {
   const limit = Number(new URL(request.url).searchParams.get('limit')) || 100;

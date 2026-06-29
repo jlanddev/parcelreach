@@ -111,23 +111,23 @@ export async function POST(request) {
     const county = lead.property_county || lead.county || '';
     const acres = lead.acreage || lead.acres || '';
     const stage = STAGE_LABEL(lead.pipeline_status || lead.status);
-    const offerMade = lead.offer_amount ? `yes, $${Number(lead.offer_amount).toLocaleString()}` : 'NO — no offer has been made yet';
+    const offerMade = lead.offer_amount ? `yes, $${Number(lead.offer_amount).toLocaleString()}` : 'NO, no offer has been made yet';
     const transcript = thread.map((m) => `${m.who}: ${m.text}`).join('\n');
     const system = `You are a careful lead-triage assistant for a land-buying company. You read the SMS thread between us (the buyer) and a land seller and answer three things: (1) how hot the lead is, (2) the single next action, (3) when to do it. Base everything ONLY on the thread and the lead state given. Never invent facts. It is better to return null than to guess. Respond with ONLY a JSON object, no prose, no code fences.
 
-(1) TEMPERATURE — pick exactly one:
+(1) TEMPERATURE, pick exactly one:
 - hot: motivated and engaged, deal is moving, responding well
 - warm: interested but slow, or needs nurturing; lukewarm
 - cold: unresponsive, hesitant, or unrealistic on price
 - ready: has verbally agreed / is ready to move to an offer or contract
 
-(2) NEXT ACTION — put a short imperative in follow_up.label, e.g. "Call back", "Send offer", "Text follow-up", "Nurture", "Set appointment".
+(2) NEXT ACTION, put a short imperative in follow_up.label, e.g. "Call back", "Send offer", "Text follow-up", "Nurture", "Set appointment".
 CRITICAL: Only suggest "Send offer" or anything about an offer if an offer has ALREADY been made is "yes". If no offer has been made, do NOT mention an offer in the action or the draft reply.
 
-(3) SCHEDULE — describe WHEN relatively; do NOT compute calendar dates yourself.
+(3) SCHEDULE, describe WHEN relatively; do NOT compute calendar dates yourself.
 - Use "days_from_now": 0 = today, 1 = tomorrow, 2 = day after, etc. Use this for relative references like "tomorrow" or "in a couple days".
 - OR use "weekday": a day name ("monday".."friday") if the seller named a specific weekday.
-- Always give "time_24h" like "15:00". If a time was agreed in the thread, use it; otherwise pick a weekday slot 9:00–17:00.
+- Always give "time_24h" like "15:00". If a time was agreed in the thread, use it; otherwise pick a weekday slot 9:00-17:00.
 - If no follow-up is warranted, return null for follow_up.
 
 The draft_reply must fit the current stage and must never reference an offer that hasn't been made.`;

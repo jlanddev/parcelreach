@@ -18,7 +18,7 @@ function loadBoards() {
 }
 
 /**
- * "Send to Partner" — pushes this lead into a partner's Monday board (item in
+ * "Send to Partner", pushes this lead into a partner's Monday board (item in
  * the New Leads group + an update bubble with property notes and the parcel map).
  */
 export default function MondayPushButton({ lead, onToast }) {

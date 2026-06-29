@@ -21,13 +21,13 @@ export async function POST(request) {
           return NextResponse.json({ error: 'This lead has opted out of texts (replied STOP).' }, { status: 403 });
         }
       } catch {
-        /* sms_opt_out column may not exist pre-migration — allow send */
+        /* sms_opt_out column may not exist pre-migration, allow send */
       }
     }
 
     const result = await sendMessage({ to, message, lineId });
 
-    // Best-effort timeline log — don't fail the send if logging hiccups.
+    // Best-effort timeline log, don't fail the send if logging hiccups.
     if (leadId) {
       try {
         const row = {

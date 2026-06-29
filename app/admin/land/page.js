@@ -21,7 +21,7 @@ import { OFFER_DIRECTIONS, GENERAL_DIRECTIONS, FOLLOWUP_BUCKETS, FOLLOWUP_KEYS, 
 const isConversationNote = (content) =>
   !/^\s*\[(VM|TEXT|CALL|EMAIL|DAILY RUNDOWN|STATUS_CHANGE|STATUS)\b/i.test(content || '');
 
-// Last 10 digits of a phone — the stable key for matching messages to leads.
+// Last 10 digits of a phone, the stable key for matching messages to leads.
 const phoneKey = (p) => (p || '').replace(/\D/g, '').slice(-10);
 
 // activities.created_at is a naive `timestamp` storing the UTC instant. Force
@@ -60,7 +60,7 @@ export default function LandLeadsAdminPage() {
     </span>
   );
 
-  // HAMMERING pill — shown when hammer_mode is on. Click to toggle off.
+  // HAMMERING pill, shown when hammer_mode is on. Click to toggle off.
   const HammerBadge = ({ lead }) => {
     if (!lead?.hammer_mode) return null;
     return (
@@ -74,7 +74,7 @@ export default function LandLeadsAdminPage() {
     );
   };
 
-  // FRESH pill — shown when the lead was created in the last 24 hours.
+  // FRESH pill, shown when the lead was created in the last 24 hours.
   const FreshBadge = ({ lead }) => {
     if (!lead?.created_at) return null;
     const ageMs = Date.now() - new Date(lead.created_at).getTime();
@@ -86,13 +86,13 @@ export default function LandLeadsAdminPage() {
     );
   };
 
-  // Current teammate pill — click to toggle between Jordan and Anthony.
+  // Current teammate pill, click to toggle between Jordan and Anthony.
   const TeammateBadge = ({ lead }) => {
     if (!lead || (!adminUserId && !acquisitionManagerId)) return null;
-    // Hide on terminal-status leads — no one is "working" a closed/dead/archived/nurture lead.
+    // Hide on terminal-status leads, no one is "working" a closed/dead/archived/nurture lead.
     const leadStatus = (lead.pipeline_status || lead.status || '').toUpperCase();
     if (['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE', 'WE_PASSED'].includes(leadStatus)) return null;
-    // Default unowned leads to Anthony — no more 'Unassigned' label in the wild.
+    // Default unowned leads to Anthony, no more 'Unassigned' label in the wild.
     const ownerId = lead.current_owner_id || acquisitionManagerId;
     const isAnthony = ownerId === acquisitionManagerId;
     const isJordan = ownerId === adminUserId;
@@ -175,7 +175,7 @@ export default function LandLeadsAdminPage() {
         try {
           lastViewed = JSON.parse(localStorage.getItem('pb_last_viewed') || '{}');
         } catch {}
-        // Key by phone (last 10 digits), NOT lead id — so every lead record
+        // Key by phone (last 10 digits), NOT lead id, so every lead record
         // sharing a number (duplicates included) gets the summary.
         const meta = {};
         for (const m of data.messages) {
@@ -245,7 +245,7 @@ export default function LandLeadsAdminPage() {
     const loadNotes = async () => {
       // Fetch recent notes GLOBALLY (not .in() over hundreds of lead ids, which
       // overflows the request URL and fails). Group by lead_id client-side.
-      // PostgREST ilike wildcard is *, not % — exclude auto-activity logs.
+      // PostgREST ilike wildcard is *, not %, exclude auto-activity logs.
       const { data } = await supabase
         .from('lead_notes')
         .select('id, lead_id, content, created_at, user_id')
@@ -446,10 +446,10 @@ export default function LandLeadsAdminPage() {
     const chip = (on) => `px-3 py-2 rounded-lg text-sm font-medium border ${on ? 'bg-blue-600/30 border-blue-600/50 text-blue-200' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`;
     return (
       <>
-        <button onClick={() => setNeedsResponseOnly((v) => !v)} className={chip(needsResponseOnly)} title="Their text is the last message — you owe a reply">
+        <button onClick={() => setNeedsResponseOnly((v) => !v)} className={chip(needsResponseOnly)} title="Their text is the last message, you owe a reply">
           {needsResponseOnly ? '✓ ' : ''}Needs response
         </button>
-        <button onClick={() => setUncontactedOnly((v) => !v)} className={chip(uncontactedOnly)} title="Still New — never reached">
+        <button onClick={() => setUncontactedOnly((v) => !v)} className={chip(uncontactedOnly)} title="Still New, never reached">
           {uncontactedOnly ? '✓ ' : ''}Haven't contacted
         </button>
         <button onClick={() => setOfferSetOnly((v) => !v)} className={chip(offerSetOnly)} title="Has a locked offer">
@@ -595,7 +595,7 @@ export default function LandLeadsAdminPage() {
 
   // Smart lead status - auto-calculates based on time and activity
   const getSmartStatus = (lead) => {
-    // Status is driven by the manual pipeline_status / status only — no auto-aging.
+    // Status is driven by the manual pipeline_status / status only, no auto-aging.
     // Age is communicated separately via the FRESH pill (<24h) and "Lead received Xd ago"
     // text on the card, so a 6-day-old "New" lead stays NEW until someone moves it forward.
     const manualStatus = (lead.pipeline_status || lead.status || '').toUpperCase();
@@ -689,7 +689,7 @@ export default function LandLeadsAdminPage() {
       if (++tries < 8) {
         setTimeout(find, 200);
       } else {
-        // Could not locate the card anywhere it renders — open the lead so the
+        // Could not locate the card anywhere it renders, open the lead so the
         // click always lands somewhere useful.
         setHighlightLeadId(null);
         openLeadDetails(lead);
@@ -885,7 +885,7 @@ export default function LandLeadsAdminPage() {
     { value: 'ARCHIVED', label: 'Archived' }
   ];
 
-  // Statuses that end the loop — no auto-cadence, no watchdog, no Hammer.
+  // Statuses that end the loop, no auto-cadence, no watchdog, no Hammer.
   const TERMINAL_STATUSES = ['CLOSED', 'DEAD', 'WE_PASSED', 'NURTURE', 'ARCHIVED'];
 
   // Export leads to CSV
@@ -1123,7 +1123,7 @@ export default function LandLeadsAdminPage() {
       `)
       .order('created_at', { ascending: false });
 
-    // Fetch all leads. (We dropped the 7-lead cap on Acquisition Manager —
+    // Fetch all leads. (We dropped the 7-lead cap on Acquisition Manager -
     // tasks now drive the rundown, and the lead pool needs to match.)
     const { data: leadsData } = await supabase
       .from('leads')
@@ -1224,7 +1224,7 @@ export default function LandLeadsAdminPage() {
     console.log('Status updated successfully to:', newStatus);
     showToast(`Status: ${newStatus}`, 'success', leadName);
 
-    // Status change always clears hammer mode — hammering is meant to push toward the
+    // Status change always clears hammer mode, hammering is meant to push toward the
     // next status, so once that lands the mode resets.
     if (newStatus !== oldStatus && lead?.hammer_mode) {
       await supabase.from('leads').update({ hammer_mode: false }).eq('id', leadId);
@@ -1232,7 +1232,7 @@ export default function LandLeadsAdminPage() {
     }
 
     // Auto-cancel pending tasks for terminal statuses so they stop cluttering the rundown
-    // UNDER_CONTRACT is intentionally NOT terminal — deals in motion still need follow-up
+    // UNDER_CONTRACT is intentionally NOT terminal, deals in motion still need follow-up
     // tasks (title work, contract review, etc.) to appear in the rundown.
     const terminalStatuses = ['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE', 'WE_PASSED'];
     if (terminalStatuses.includes(newStatus)) {
@@ -1330,7 +1330,7 @@ export default function LandLeadsAdminPage() {
           assigned_to: lead.current_owner_id || acquisitionManagerId || currentUserId,
           task_type: 'callback',
           title: `HAMMER: ${lead.full_name || lead.name || 'Lead'}`,
-          description: 'Hammer mode — daily callbacks until status changes',
+          description: 'Hammer mode, daily callbacks until status changes',
           due_at: new Date().toISOString(),
           status: 'pending',
           priority: 'high'
@@ -1797,7 +1797,7 @@ export default function LandLeadsAdminPage() {
     if (isNaN(newDate.getTime())) { setEditingTaskTime(null); return; }
     // Check for conflicts (exclude self)
     const conflict = scheduledTasks.some(t => t.id !== taskId && Math.abs(new Date(t.due_at).getTime() - newDate.getTime()) < 15 * 60 * 1000);
-    if (conflict) { showToast('Time conflict — another task is within 15 min of that slot', 'error'); return; }
+    if (conflict) { showToast('Time conflict, another task is within 15 min of that slot', 'error'); return; }
     const newDueAt = newDate.toISOString();
     await supabase.from('scheduled_tasks').update({ due_at: newDueAt, updated_at: new Date().toISOString() }).eq('id', taskId);
     setScheduledTasks(prev => prev.map(t => t.id === taskId ? { ...t, due_at: newDueAt, updated_at: new Date().toISOString() } : t));
@@ -1820,7 +1820,7 @@ export default function LandLeadsAdminPage() {
       lead_id: task.lead_id, user_id: user?.id,
       content: '[VM] Left Voicemail', mentioned_users: []
     });
-    // A voicemail is not a real connection — leave the lead's status as is.
+    // A voicemail is not a real connection, leave the lead's status as is.
 
     // Count VMs today for this lead
     const todayStart = new Date(); todayStart.setHours(0,0,0,0);
@@ -1836,13 +1836,13 @@ export default function LandLeadsAdminPage() {
     const retryType = normalizeTaskType(task.task_type);
     const retryLabel = TASK_TYPE_LABELS[retryType] || 'Callback';
 
-    // Hammer mode override — daily cadence wins over normal VM cadence.
+    // Hammer mode override, daily cadence wins over normal VM cadence.
     if (lead?.hammer_mode) {
       const tmrw = new Date(tomorrowStart); tmrw.setHours(9, 0, 0, 0);
       const slot = getAvailableTime(tmrw);
       const { data: newTask } = await supabase.from('scheduled_tasks').insert({
         lead_id: task.lead_id, created_by: user?.id, assigned_to: lead.current_owner_id || user?.id, task_type: retryType,
-        title: `🔨 HAMMER: ${leadName}`, description: 'Hammer mode — daily callbacks until status changes',
+        title: `🔨 HAMMER: ${leadName}`, description: 'Hammer mode, daily callbacks until status changes',
         due_at: slot.toISOString(), status: 'pending', priority: 'high'
       }).select().single();
       if (newTask) setScheduledTasks(prev => [...prev, newTask]);
@@ -1856,7 +1856,7 @@ export default function LandLeadsAdminPage() {
       const slot = getAvailableTime(tmrw);
       const { data: newTask } = await supabase.from('scheduled_tasks').insert({
         lead_id: task.lead_id, created_by: user?.id, assigned_to: user?.id, task_type: retryType,
-        title: `${retryLabel}: ${leadName}`, description: '2+ voicemails left — try again',
+        title: `${retryLabel}: ${leadName}`, description: '2+ voicemails left, try again',
         due_at: slot.toISOString(), status: 'pending', priority: 'normal'
       }).select().single();
       if (newTask) setScheduledTasks(prev => [...prev, newTask]);
@@ -1871,7 +1871,7 @@ export default function LandLeadsAdminPage() {
         const slot = getAvailableTime(retryTime);
         const { data: newTask } = await supabase.from('scheduled_tasks').insert({
           lead_id: task.lead_id, created_by: user?.id, assigned_to: user?.id, task_type: retryType,
-          title: `${retryLabel}: ${leadName}`, description: 'Voicemail left — retry',
+          title: `${retryLabel}: ${leadName}`, description: 'Voicemail left, retry',
           due_at: slot.toISOString(), status: 'pending', priority: 'normal'
         }).select().single();
         if (newTask) setScheduledTasks(prev => [...prev, newTask]);
@@ -1882,7 +1882,7 @@ export default function LandLeadsAdminPage() {
         const slot = getAvailableTime(tmrw);
         const { data: newTask } = await supabase.from('scheduled_tasks').insert({
           lead_id: task.lead_id, created_by: user?.id, assigned_to: user?.id, task_type: retryType,
-          title: `${retryLabel}: ${leadName}`, description: 'Voicemail left — retry',
+          title: `${retryLabel}: ${leadName}`, description: 'Voicemail left, retry',
           due_at: slot.toISOString(), status: 'pending', priority: 'normal'
         }).select().single();
         if (newTask) setScheduledTasks(prev => [...prev, newTask]);
@@ -1906,20 +1906,20 @@ export default function LandLeadsAdminPage() {
       lead_id: task.lead_id, user_id: user?.id,
       content: '[TEXT] Sent text message', mentioned_users: []
     });
-    // Sending a text is not contact — status only advances on a reply/connected call.
+    // Sending a text is not contact, status only advances on a reply/connected call.
 
     // Complete this task
     await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id }).eq('id', task.id);
     setScheduledTasks(prev => prev.filter(t => t.id !== task.id));
 
-    // Schedule follow-up tomorrow — preserve original task type
+    // Schedule follow-up tomorrow, preserve original task type
     const followType = normalizeTaskType(task.task_type);
     const followLabel = TASK_TYPE_LABELS[followType] || 'Follow Up Call';
     const tmrw = new Date(); tmrw.setHours(0,0,0,0); tmrw.setDate(tmrw.getDate() + 1); tmrw.setHours(10, 0, 0, 0);
     const slot = getAvailableTime(tmrw);
     const { data: newTask } = await supabase.from('scheduled_tasks').insert({
       lead_id: task.lead_id, created_by: user?.id, assigned_to: user?.id, task_type: followType,
-      title: `${followLabel}: ${leadName}`, description: 'Text sent — follow up',
+      title: `${followLabel}: ${leadName}`, description: 'Text sent, follow up',
       due_at: slot.toISOString(), status: 'pending', priority: 'normal'
     }).select().single();
     if (newTask) setScheduledTasks(prev => [...prev, newTask]);
@@ -2884,7 +2884,7 @@ export default function LandLeadsAdminPage() {
   const assignedLeads = allLeads.filter(l => leadAssignments[l.id] && leadAssignments[l.id].length > 0);
 
   // ============================================================
-  // Session Analytics — data fetching & realtime
+  // Session Analytics, data fetching & realtime
   // ============================================================
 
   const STEP_LABELS = {
@@ -3883,7 +3883,7 @@ export default function LandLeadsAdminPage() {
                 return d >= tomorrowStart && d < dayAfter;
               });
               // "Touches today" = any lead Anthony took action on today (VM, msg, spoke,
-              // status change, appt booking, etc.) — measured by last_activity_at on his
+              // status change, appt booking, etc.), measured by last_activity_at on his
               // owned leads. Counts attempts, not just successful contacts.
               const contactedToday = allLeads.filter(l => {
                 // Count unassigned leads as Anthony's (default owner for new form leads).
@@ -3996,7 +3996,7 @@ export default function LandLeadsAdminPage() {
                   // in terminal status so closed/dead leads stop cluttering.
                   const terminalLeadIds = new Set(allLeads.filter(l => {
                     const s = (l.pipeline_status || l.status || '').toUpperCase();
-                    // UNDER_CONTRACT stays visible — deals in motion still need rundown tasks
+                    // UNDER_CONTRACT stays visible, deals in motion still need rundown tasks
                     return ['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE'].includes(s);
                   }).map(l => l.id));
                   const leadById = new Map(allLeads.map(l => [l.id, l]));
@@ -4038,7 +4038,7 @@ export default function LandLeadsAdminPage() {
                       if (cb !== ca) return cb - ca;
                       return new Date(a.due_at) - new Date(b.due_at);
                     });
-                  // Deduplicate by lead_id — keep the first task per lead (which is already the
+                  // Deduplicate by lead_id, keep the first task per lead (which is already the
                   // priority pick from the sort above: newest lead first, soonest due_at tiebreak).
                   const seenLeads = new Set();
                   const todayTasks = todayTasksAll.filter(t => {
@@ -4080,7 +4080,7 @@ export default function LandLeadsAdminPage() {
                     // the rundown pill mirrors immediately.
                     const liveLeadStatus = (lead?.pipeline_status || lead?.status || '').toUpperCase();
                     const isNewLead = !liveLeadStatus || liveLeadStatus === 'NEW';
-                    // Lead is FRESH if it came in within the last 24h — suppress the OVERDUE label
+                    // Lead is FRESH if it came in within the last 24h, suppress the OVERDUE label
                     // in that window since speed-to-lead beats the auto-scheduled due_at.
                     const isFresh = lead?.created_at && (Date.now() - new Date(lead.created_at).getTime()) < 24 * 60 * 60 * 1000;
                     // Friendlier than a red "OVERDUE": say what the lead actually needs.
@@ -4816,7 +4816,7 @@ export default function LandLeadsAdminPage() {
           </div>
         )}
 
-        {/* PIPELINE BUCKETS — Appointment Set / Offer Made / Agreement Sent / Signed Contract / Closed Deal */}
+        {/* PIPELINE BUCKETS, Appointment Set / Offer Made / Agreement Sent / Signed Contract / Closed Deal */}
         {['appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal', 'follow-up', 'lost'].includes(activeTab) && (() => {
           const bucketConfig = {
             'follow-up': {
@@ -4833,31 +4833,31 @@ export default function LandLeadsAdminPage() {
             },
             'appointment-set': {
               title: 'Appointment Set',
-              subtitle: "Sellers we've connected with — appointments on the calendar",
+              subtitle: "Sellers we've connected with, appointments on the calendar",
               statuses: ['APPT_SET_FOR_JORDAN'],
               accent: 'green',
             },
             'offer-made': {
               title: 'Offer Made',
-              subtitle: 'Mutual interest — offer or proposal on the table',
+              subtitle: 'Mutual interest, offer or proposal on the table',
               statuses: ['OFFER_SENT', 'NEGOTIATING'],
               accent: 'purple',
             },
             'agreement-sent': {
               title: 'Agreement Sent',
-              subtitle: 'Agreement out the door — waiting for the seller to sign',
+              subtitle: 'Agreement out the door, waiting for the seller to sign',
               statuses: ['AGREEMENT_SENT'],
               accent: 'amber',
             },
             'signed-contract': {
               title: 'Signed Contract',
-              subtitle: 'Under contract — title work, contingencies, closing prep',
+              subtitle: 'Under contract, title work, contingencies, closing prep',
               statuses: ['UNDER_CONTRACT'],
               accent: 'blue',
             },
             'closed-deal': {
               title: 'Closed Deal',
-              subtitle: 'Done deals — for the record',
+              subtitle: 'Done deals, for the record',
               statuses: ['CLOSED'],
               accent: 'emerald',
             },
@@ -6056,7 +6056,7 @@ export default function LandLeadsAdminPage() {
           </div>
         )}
 
-        {/* PARTNERS TAB (admin only) — push leads to partner Monday boards + tracking */}
+        {/* PARTNERS TAB (admin only), push leads to partner Monday boards + tracking */}
         {activeTab === 'partners' && isAdmin && (() => {
           const q = partnerSearch.trim().toLowerCase();
           const STAGE_SETS = {
@@ -6205,7 +6205,7 @@ export default function LandLeadsAdminPage() {
             <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700/50">
               <h2 className="text-xl font-bold text-white mb-6">Export Leads to CSV</h2>
 
-              {/* Include statuses — empty = all */}
+              {/* Include statuses, empty = all */}
               <div className="mb-6">
                 <label className="block text-sm text-slate-400 mb-2">Include Statuses {exportFilters.includeStatuses.length === 0 && <span className="text-slate-500">(none selected = all)</span>}</label>
                 <div className="flex flex-wrap gap-2">
@@ -6383,7 +6383,7 @@ export default function LandLeadsAdminPage() {
                           <div>
                             <div className="flex items-center gap-2">
                               <span className="font-medium">Step {s.max_step_reached}</span>
-                              <span className="text-slate-400 text-sm">— {STEP_LABELS[s.max_step_reached] || 'Unknown'}</span>
+                              <span className="text-slate-400 text-sm">- {STEP_LABELS[s.max_step_reached] || 'Unknown'}</span>
                             </div>
                             <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
                               <span>{s.device_type || 'unknown'}</span>
@@ -6477,7 +6477,7 @@ export default function LandLeadsAdminPage() {
                             {allTrackingSessions.map((s) => (
                               <tr key={s.session_id} className="border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors">
                                 <td className="p-3 font-mono text-xs">{s.session_id?.slice(0, 16)}...</td>
-                                <td className="p-3 capitalize">{s.device_type || '—'}</td>
+                                <td className="p-3 capitalize">{s.device_type || '-'}</td>
                                 <td className="p-3">
                                   <span className="font-medium">{s.max_step_reached}</span>
                                   <span className="text-slate-500 ml-1 text-xs">{STEP_LABELS[s.max_step_reached]}</span>
@@ -6564,7 +6564,7 @@ export default function LandLeadsAdminPage() {
                       className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white"
                     >
                       {Array.from({ length: 16 }, (_, i) => i + 1).map((s) => (
-                        <option key={s} value={s}>Step {s} — {STEP_LABELS[s]}</option>
+                        <option key={s} value={s}>Step {s}, {STEP_LABELS[s]}</option>
                       ))}
                     </select>
                     <span className="text-xs text-slate-500 ml-2">{heatmapClicks.length} clicks</span>
@@ -8040,7 +8040,7 @@ export default function LandLeadsAdminPage() {
               })()}
             </p>
 
-            {/* Task Type — Acquisition Manager gets a narrower set: book appt for Jordan or schedule own follow-up */}
+            {/* Task Type, Acquisition Manager gets a narrower set: book appt for Jordan or schedule own follow-up */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-slate-300 mb-2">Type</label>
               <div className="flex flex-wrap gap-2">
@@ -8048,11 +8048,11 @@ export default function LandLeadsAdminPage() {
                   { value: 'meeting', label: 'Appt for Jordan', color: 'bg-green-600', desc: 'Books an appointment on Jordan\'s calendar' },
                   { value: 'follow_up_call', label: 'My Follow-up Call', color: 'bg-blue-600', desc: 'Schedule a callback for yourself' }
                 ] : [
-                  { value: 'discovery_call', label: 'Discovery Call', color: 'bg-cyan-600', desc: 'First contact — never spoken' },
+                  { value: 'discovery_call', label: 'Discovery Call', color: 'bg-cyan-600', desc: 'First contact, never spoken' },
                   { value: 'follow_up_call', label: 'Follow Up Call', color: 'bg-blue-600', desc: 'Spoke before, no offer yet' },
                   { value: 'send_offer', label: 'Send Offer', color: 'bg-purple-600', desc: 'Ready to make/send offer' },
                   { value: 'offer_follow_up', label: 'Offer Follow Up', color: 'bg-orange-600', desc: 'Offer sent, following up' },
-                  { value: 'title_work', label: 'Title Work Call', color: 'bg-emerald-600', desc: 'Under contract — title/access' },
+                  { value: 'title_work', label: 'Title Work Call', color: 'bg-emerald-600', desc: 'Under contract, title/access' },
                   { value: 'callback', label: 'Callback', color: 'bg-slate-600', desc: 'General callback' }
                 ]).map(opt => (
                   <button
@@ -8070,11 +8070,11 @@ export default function LandLeadsAdminPage() {
                 ))}
               </div>
               <p className="text-xs text-slate-500 mt-2">
-                {scheduleType === 'discovery_call' && 'First contact — never spoken to this person'}
+                {scheduleType === 'discovery_call' && 'First contact, never spoken to this person'}
                 {scheduleType === 'follow_up_call' && 'Already spoke, no offer made yet'}
                 {scheduleType === 'send_offer' && 'Ready to make or send an offer'}
                 {scheduleType === 'offer_follow_up' && 'Offer is out, need to follow up'}
-                {scheduleType === 'title_work' && 'Under contract — discuss title, access, etc.'}
+                {scheduleType === 'title_work' && 'Under contract, discuss title, access, etc.'}
                 {scheduleType === 'callback' && 'General callback'}
               </p>
             </div>

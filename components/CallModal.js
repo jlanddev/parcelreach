@@ -21,7 +21,7 @@ export default function CallModal({ lead, currentUserId, onClose, onLogged }) {
   const name = lead?.full_name || lead?.name || lead?.owner_name || 'Lead';
 
   const [status, setStatus] = useState('connecting'); // connecting | ringing | in-call | ended | error
-  const [phase, setPhase] = useState('live'); // live | wrapup | done — wrapup asks the outcome
+  const [phase, setPhase] = useState('live'); // live | wrapup | done, wrapup asks the outcome
   const [error, setError] = useState(null);
   const [muted, setMuted] = useState(false);
   const [seconds, setSeconds] = useState(0);

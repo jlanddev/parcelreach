@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getCallLogsForPhone } from '@/lib/projectBlue';
 
-// Recent Project Blue call logs involving a phone number (polled — PB has no
+// Recent Project Blue call logs involving a phone number (polled, PB has no
 // call webhook and no per-number filter, so we page recent logs and match).
 export async function GET(request) {
   const phone = new URL(request.url).searchParams.get('phone');
