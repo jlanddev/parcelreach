@@ -428,6 +428,7 @@ export default function LandLeadsAdminPage() {
   const [partnerSearch, setPartnerSearch] = useState('');           // Partners tab lead search
   const [partnerStage, setPartnerStage] = useState('active');       // Partners tab stage filter
   const [partnerDirection, setPartnerDirection] = useState('');     // Partners tab lean/substatus filter
+  const [partnerSentFilter, setPartnerSentFilter] = useState('');   // Partners tab: filter by who it's been sent to
   const passesEngagement = (l) => {
     if (needsResponseOnly && (l.last_contact_dir || '').toLowerCase() !== 'inbound') return false;
     if (uncontactedOnly) {
@@ -1199,8 +1200,28 @@ export default function LandLeadsAdminPage() {
       assignmentsByLead[assignment.lead_id].push(assignment);
     });
 
+    // Overlay the durable partner-push history from its dedicated table so the
+    // "sent to" chips can never be lost to a lead-row overwrite. Falls back to
+    // whatever is on the lead's jsonb if the table isn't migrated yet.
+    let leadsWithPushes = leadsData || [];
+    try {
+      const { data: pushRows, error: pushErr } = await supabase
+        .from('partner_pushes')
+        .select('lead_id, board_id, board_name, item_id, pushed_at')
+        .order('pushed_at', { ascending: true });
+      if (!pushErr && pushRows) {
+        const byLead = {};
+        for (const r of pushRows) {
+          (byLead[r.lead_id] = byLead[r.lead_id] || []).push(r);
+        }
+        leadsWithPushes = leadsWithPushes.map((l) =>
+          byLead[l.id] ? { ...l, partner_pushes: byLead[l.id] } : l
+        );
+      }
+    } catch { /* table not migrated yet, keep jsonb values */ }
+
     setOrganizations(orgsData || []);
-    setAllLeads(leadsData || []);
+    setAllLeads(leadsWithPushes);
     setLeadAssignments(assignmentsByLead);
     setScheduledTasks(tasksData || []);
     setLoading(false);
@@ -6137,6 +6158,17 @@ export default function LandLeadsAdminPage() {
           };
           const dirOk = (l) => !partnerDirection || l.deal_direction === partnerDirection;
           const allDirections = OFFER_DIRECTIONS;
+          // Distinct partners we've ever sent to (drives the "sent to" filter).
+          const partnerOptions = Array.from(new Set(
+            allLeads.flatMap((l) => (Array.isArray(l.partner_pushes) ? l.partner_pushes.map((p) => p.board_name).filter(Boolean) : []))
+          )).sort();
+          const sentOk = (l) => {
+            if (!partnerSentFilter) return true;
+            const pushes = Array.isArray(l.partner_pushes) ? l.partner_pushes : [];
+            if (partnerSentFilter === '__none__') return pushes.length === 0;
+            if (partnerSentFilter === '__any__') return pushes.length > 0;
+            return pushes.some((p) => p.board_name === partnerSentFilter);
+          };
           const sentLeads = allLeads
             .filter((l) => Array.isArray(l.partner_pushes) && l.partner_pushes.length)
             .sort((a, b) => {
@@ -6150,10 +6182,11 @@ export default function LandLeadsAdminPage() {
               .filter(stageOk)
               .filter(dirOk)
               .filter((l) => !pipelineMapped || l.map_uploaded)
+              .filter(sentOk)
               .filter((l) => leadMatchesSearch(l, q))
               .filter(passesEngagement),
             (a, b) => new Date(b.last_activity_at || b.created_at) - new Date(a.last_activity_at || a.created_at),
-            `partners:${partnerStage}:${partnerDirection}:${pipelineMapped}:${q}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`
+            `partners:${partnerStage}:${partnerDirection}:${partnerSentFilter}:${pipelineMapped}:${q}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`
           );
           return (
             <div className="space-y-6">
@@ -6190,6 +6223,12 @@ export default function LandLeadsAdminPage() {
                 <select value={partnerDirection} onChange={(e) => setPartnerDirection(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50">
                   <option value="">Any lean</option>
                   {allDirections.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+                </select>
+                <select value={partnerSentFilter} onChange={(e) => setPartnerSentFilter(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50" title="Filter by who this lead has been sent to">
+                  <option value="">Any sent status</option>
+                  <option value="__any__">Sent to anyone</option>
+                  <option value="__none__">Not sent yet</option>
+                  {partnerOptions.map((name) => <option key={name} value={name}>Sent to {name}</option>)}
                 </select>
                 <button onClick={() => setPipelineMapped((v) => !v)} className={`px-3 py-2 rounded-lg text-sm font-medium border ${pipelineMapped ? 'bg-green-600/30 border-green-600/50 text-green-300' : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800'}`}>{pipelineMapped ? '✓ ' : ''}Mapped only</button>
                 {renderEngagementFilters()}

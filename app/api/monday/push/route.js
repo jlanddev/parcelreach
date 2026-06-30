@@ -25,24 +25,47 @@ export async function POST(request) {
 
     const result = await pushLeadToBoard(boardId, lead);
 
-    // Record this push on the lead so the card shows every partner it's gone to.
-    // One entry per board (re-sending the same partner refreshes it).
-    const prior = Array.isArray(lead.partner_pushes) ? lead.partner_pushes : [];
+    // Record this push. The durable, append-only partner_pushes TABLE is the
+    // source of truth (one row per lead+board, upserted on re-push) so the
+    // history can never be clobbered by a lead-row update or lost-update race.
+    const pushedAt = new Date().toISOString();
     const entry = {
       board_id: String(boardId),
       board_name: result.board,
       item_id: String(result.itemId),
-      pushed_at: new Date().toISOString(),
+      pushed_at: pushedAt,
       tagged: result.tagged || null,
       map_uploaded: !!result.mapUploaded,
       tag_in_bubble: !!result.tagInBubble,
       notified: result.notified || 0,
       warnings: result.warnings || [],
     };
+    let tableOk = false;
+    try {
+      const { error: upErr } = await supabase
+        .from('partner_pushes')
+        .upsert({
+          lead_id: leadId,
+          board_id: String(boardId),
+          board_name: result.board,
+          item_id: String(result.itemId),
+          tagged: result.tagged || null,
+          map_uploaded: !!result.mapUploaded,
+          tag_in_bubble: !!result.tagInBubble,
+          notified: result.notified || 0,
+          warnings: result.warnings || [],
+          pushed_at: pushedAt,
+        }, { onConflict: 'lead_id,board_id' });
+      tableOk = !upErr;
+    } catch { /* table may not be migrated yet; jsonb mirror below still works */ }
+
+    // Mirror to the lead.partner_pushes jsonb too (belt and suspenders, and so
+    // pre-migration installs still track). Read fresh prior to merge.
+    const prior = Array.isArray(lead.partner_pushes) ? lead.partner_pushes : [];
     const partner_pushes = [...prior.filter((p) => String(p.board_id) !== String(boardId)), entry];
     await supabase.from('leads').update({ partner_pushes }).eq('id', leadId).then(() => {}, () => {});
 
-    return NextResponse.json({ ok: true, ...result, partner_pushes });
+    return NextResponse.json({ ok: true, ...result, partner_pushes, durable: tableOk });
   } catch (err) {
     console.error('[monday push]', err);
     return NextResponse.json({ error: err.message || 'Push failed' }, { status: 500 });
