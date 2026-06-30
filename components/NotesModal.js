@@ -12,15 +12,45 @@ import { timeAgo } from '@/lib/format';
  * roster: [{ id, name }] of taggable teammates (admin + acquisition manager).
  * usersById: { [userId]: name } for author labels.
  */
-export default function NotesModal({ lead, currentUserId, currentUserName, roster = [], usersById = {}, onClose, onPosted, onOpenLead }) {
+const LEAN_LABEL = { hot: 'Hot', warm: 'Warm', cold: 'Cold', ready: 'Ready' };
+
+export default function NotesModal({ lead, currentUserId, currentUserName, roster = [], usersById = {}, onClose, onPosted, onOpenLead, onSetDirection, onScheduleFollowUp }) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState('');
   const [posting, setPosting] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [reads, setReads] = useState([]); // [{user_id, read_at}] read receipts
+  const [aiLoading, setAiLoading] = useState(false);
+  const [ai, setAi] = useState(null); // { lean, follow_up, summary } or { error }
+  const [aiApplied, setAiApplied] = useState({});
   const taRef = useRef(null);
   const scrollRef = useRef(null);
+
+  // Notes brain: reads the WHOLE file (texts + calls + notes) via the same
+  // endpoint the message brain uses, so both see everything.
+  const runSmartSuggest = async () => {
+    setAiLoading(true);
+    setAi(null);
+    setAiApplied({});
+    try {
+      const res = await fetch('/api/ai/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadId: lead.id }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'No suggestion');
+      setAi(data);
+    } catch (e) {
+      setAi({ error: e.message });
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const whenLabel = (iso) =>
+    new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
   const name = lead?.full_name || lead?.name || lead?.owner_name || 'Lead';
 
@@ -212,6 +242,51 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
             </div>
           );
         })()}
+
+        {/* Smart Suggest (notes brain): reads texts + calls + notes together */}
+        <div className="border-t border-slate-700/70 px-2 pt-2 bg-slate-800/40">
+          {ai && !ai.error && (
+            <div className="mb-2 rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-2.5">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[11px] font-bold text-cyan-300 uppercase tracking-wide">Smart Suggest</span>
+                <button type="button" onClick={() => setAi(null)} className="text-slate-500 hover:text-slate-300 text-xs">Clear</button>
+              </div>
+              {ai.summary && <p className="text-xs text-slate-200 mb-2">{ai.summary}</p>}
+              <div className="flex flex-col gap-1.5">
+                {ai.lean && onSetDirection && (
+                  <button
+                    type="button"
+                    onClick={() => { onSetDirection(lead.id, ai.lean); setAiApplied((a) => ({ ...a, lean: true })); }}
+                    className="text-left text-xs text-slate-300 hover:text-white"
+                  >
+                    {aiApplied.lean ? '✓ Set lean: ' : 'Set lean: '}<span className="text-cyan-300 font-medium">{LEAN_LABEL[ai.lean] || ai.lean}</span>
+                  </button>
+                )}
+                {ai.follow_up && onScheduleFollowUp && (
+                  <button
+                    type="button"
+                    onClick={() => { onScheduleFollowUp(lead.id, ai.follow_up.when, ai.follow_up.label); setAiApplied((a) => ({ ...a, fu: true })); }}
+                    className="text-left text-xs text-slate-300 hover:text-white"
+                  >
+                    {aiApplied.fu ? '✓ ' : ''}{ai.follow_up.label}: <span className="text-cyan-300 font-medium">{whenLabel(ai.follow_up.when)}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+          {ai && ai.error && (
+            <div className="mb-2 text-xs text-rose-300">{ai.error}</div>
+          )}
+          <button
+            type="button"
+            onClick={runSmartSuggest}
+            disabled={aiLoading}
+            className="mb-1 inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-cyan-300 hover:text-cyan-200 disabled:opacity-50"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
+            {aiLoading ? 'Reading the file…' : 'Smart Suggest'}
+          </button>
+        </div>
 
         <div className="border-t border-slate-700/70 p-2 bg-slate-800/40 relative">
           {mentionOpen && roster.length > 0 && (

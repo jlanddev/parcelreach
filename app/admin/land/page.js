@@ -3755,6 +3755,8 @@ export default function LandLeadsAdminPage() {
           onClose={() => setNotesModalLead(null)}
           onPosted={() => setNotesRefresh((t) => t + 1)}
           onOpenLead={(l) => navigateToLeadCard(l)}
+          onSetDirection={(id, val) => setDealDirection(id, val)}
+          onScheduleFollowUp={scheduleSmartFollowUp}
         />
       )}
       {callLead && (
