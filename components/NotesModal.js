@@ -24,6 +24,7 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
   const [aiLoading, setAiLoading] = useState(false);
   const [ai, setAi] = useState(null); // { lean, follow_up, summary } or { error }
   const [aiApplied, setAiApplied] = useState({});
+  const [aiDismissed, setAiDismissed] = useState({});
   const taRef = useRef(null);
   const scrollRef = useRef(null);
 
@@ -33,6 +34,7 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
     setAiLoading(true);
     setAi(null);
     setAiApplied({});
+    setAiDismissed({});
     try {
       const res = await fetch('/api/ai/suggest', {
         method: 'POST',
@@ -246,32 +248,34 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
         {/* Smart Suggest (notes brain): reads texts + calls + notes together */}
         <div className="border-t border-slate-700/70 px-2 pt-2 bg-slate-800/40">
           {ai && !ai.error && (
-            <div className="mb-2 rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-2.5">
-              <div className="flex items-center justify-between mb-1">
+            <div className="mb-2 space-y-1.5">
+              <div className="flex items-center justify-between px-0.5">
                 <span className="text-[11px] font-bold text-cyan-300 uppercase tracking-wide">Smart Suggest</span>
-                <button type="button" onClick={() => setAi(null)} className="text-slate-500 hover:text-slate-300 text-xs">Clear</button>
+                <button type="button" onClick={() => { setAi(null); setAiDismissed({}); }} className="text-slate-500 hover:text-slate-300 text-xs">Clear all</button>
               </div>
-              {ai.summary && <p className="text-xs text-slate-200 mb-2">{ai.summary}</p>}
-              <div className="flex flex-col gap-1.5">
-                {ai.lean && onSetDirection && (
-                  <button
-                    type="button"
+              {ai.summary && <p className="text-xs text-slate-200 px-2 py-1.5 rounded-lg border border-slate-700/50 bg-slate-800/40">{ai.summary}</p>}
+              {ai.lean && onSetDirection && !aiDismissed.lean && (
+                <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 flex items-center gap-2">
+                  <button type="button" disabled={aiApplied.lean}
                     onClick={() => { onSetDirection(lead.id, ai.lean); setAiApplied((a) => ({ ...a, lean: true })); }}
-                    className="text-left text-xs text-slate-300 hover:text-white"
-                  >
-                    {aiApplied.lean ? '✓ Set lean: ' : 'Set lean: '}<span className="text-cyan-300 font-medium">{LEAN_LABEL[ai.lean] || ai.lean}</span>
+                    className="flex-1 text-left text-xs disabled:opacity-60">
+                    <span className="text-[10px] uppercase tracking-wide text-slate-500 block">Lean</span>
+                    {aiApplied.lean ? '✓ Set: ' : 'Set lean: '}<span className="text-cyan-300 font-medium">{LEAN_LABEL[ai.lean] || ai.lean}</span>
                   </button>
-                )}
-                {ai.follow_up && onScheduleFollowUp && (
-                  <button
-                    type="button"
+                  <button type="button" onClick={() => setAiDismissed((d) => ({ ...d, lean: true }))} title="Dismiss" className="flex-shrink-0 text-slate-500 hover:text-slate-300 text-sm leading-none px-1">×</button>
+                </div>
+              )}
+              {ai.follow_up && onScheduleFollowUp && !aiDismissed.fu && (
+                <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 flex items-center gap-2">
+                  <button type="button" disabled={aiApplied.fu}
                     onClick={() => { onScheduleFollowUp(lead.id, ai.follow_up.when, ai.follow_up.label); setAiApplied((a) => ({ ...a, fu: true })); }}
-                    className="text-left text-xs text-slate-300 hover:text-white"
-                  >
-                    {aiApplied.fu ? '✓ ' : ''}{ai.follow_up.label}: <span className="text-cyan-300 font-medium">{whenLabel(ai.follow_up.when)}</span>
+                    className="flex-1 text-left text-xs disabled:opacity-60">
+                    <span className="text-[10px] uppercase tracking-wide text-slate-500 block">Schedule task</span>
+                    {aiApplied.fu ? '✓ Scheduled: ' : ''}<span className="text-cyan-300 font-medium">{ai.follow_up.label} · {whenLabel(ai.follow_up.when)}</span>
                   </button>
-                )}
-              </div>
+                  <button type="button" onClick={() => setAiDismissed((d) => ({ ...d, fu: true }))} title="Dismiss" className="flex-shrink-0 text-slate-500 hover:text-slate-300 text-sm leading-none px-1">×</button>
+                </div>
+              )}
             </div>
           )}
           {ai && ai.error && (

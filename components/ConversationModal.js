@@ -7,6 +7,18 @@ import { OFFER_DIRECTIONS, GENERAL_DIRECTIONS } from '@/lib/followups';
 
 const LEAN_LABEL = Object.fromEntries([...OFFER_DIRECTIONS, ...GENERAL_DIRECTIONS].map((d) => [d.value, d.label]));
 
+// Short date for a message: "Today", "Yesterday", or "Mon Jun 29".
+function dateLabel(input) {
+  const d = new Date(input);
+  if (isNaN(d.getTime())) return '';
+  const now = new Date();
+  const dayStart = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const diff = Math.round((dayStart(now) - dayStart(d)) / 86400000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Yesterday';
+  return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
 /**
  * iMessage-style conversation for one lead. Inbound left/gray, outbound
  * right/blue, chronological. Composer sends via Project Blue with optimistic
@@ -44,12 +56,14 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
   const [aiLoading, setAiLoading] = useState(false);
   const [ai, setAi] = useState(null); // { lean, follow_up, draft_reply, summary } or { error }
   const [aiApplied, setAiApplied] = useState({});
+  const [aiDismissed, setAiDismissed] = useState({}); // per-box dismiss (lean/fu/draft)
   const scrollRef = useRef(null);
 
   const runSmartSuggest = async () => {
     setAiLoading(true);
     setAi(null);
     setAiApplied({});
+    setAiDismissed({});
     try {
       const res = await fetch('/api/ai/suggest', {
         method: 'POST',
@@ -246,7 +260,7 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
                 {m.content}
               </div>
               <div className="text-[10px] text-slate-500 mt-0.5 px-1 flex items-center gap-1.5">
-                <span>{clockTime(m.ts)}</span>
+                <span>{dateLabel(m.ts)} · {clockTime(m.ts)}</span>
                 {m.outbound && m.status === 'sending' && <span>· Sending…</span>}
                 {m.outbound && m.failed && (
                   <button onClick={m.onRetry} className="text-red-400 hover:underline">
@@ -283,40 +297,55 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
               </div>
             </div>
           )}
-          {/* Smart Suggest result */}
+          {/* Smart Suggest result: three independent boxes. Dismissing or
+              applying one never touches the others, and the read summary stays. */}
           {(aiLoading || ai) && (
-            <div className="mb-2 rounded-xl border border-cyan-500/40 bg-cyan-500/5 p-2.5">
-              <div className="flex items-center justify-between mb-1">
+            <div className="mb-2 space-y-1.5">
+              <div className="flex items-center justify-between px-0.5">
                 <span className="text-[11px] font-bold text-cyan-300 uppercase tracking-wide">Smart Suggest</span>
-                <button type="button" onClick={() => setAi(null)} className="text-slate-500 hover:text-slate-300 text-xs">Clear</button>
+                {ai && <button type="button" onClick={() => { setAi(null); setAiDismissed({}); }} className="text-slate-500 hover:text-slate-300 text-xs">Clear all</button>}
               </div>
-              {aiLoading && <div className="text-xs text-slate-400 py-1">Reading the thread…</div>}
-              {ai?.error && <div className="text-xs text-red-400 py-1">{ai.error}</div>}
+              {aiLoading && <div className="text-xs text-slate-400 py-1 px-2 rounded-lg border border-cyan-500/30 bg-cyan-500/5">Reading the file…</div>}
+              {ai?.error && <div className="text-xs text-red-400 py-1.5 px-2 rounded-lg border border-red-500/30 bg-red-500/5">{ai.error}</div>}
               {ai && !ai.error && (
-                <div className="space-y-1.5">
-                  {ai.summary && <div className="text-xs text-slate-300">{ai.summary}</div>}
-                  {ai.lean && onSetDirection && (
-                    <button type="button" disabled={aiApplied.lean}
-                      onClick={() => { onSetDirection(lead.id, ai.lean); setAiApplied((a) => ({ ...a, lean: true })); }}
-                      className="block w-full text-left text-xs px-2 py-1.5 rounded bg-slate-800/70 hover:bg-slate-700 border border-slate-700/60 disabled:opacity-50">
-                      {aiApplied.lean ? '✓ Set lean: ' : 'Set lean: '}<span className="text-cyan-300 font-medium">{LEAN_LABEL[ai.lean] || ai.lean}</span>
-                    </button>
+                <>
+                  {ai.summary && (
+                    <div className="text-xs text-slate-300 px-2 py-1.5 rounded-lg border border-slate-700/50 bg-slate-800/40">{ai.summary}</div>
                   )}
-                  {ai.follow_up && onScheduleFollowUp && (
-                    <button type="button" disabled={aiApplied.fu}
-                      onClick={() => { onScheduleFollowUp(lead.id, ai.follow_up.when, ai.follow_up.label); setAiApplied((a) => ({ ...a, fu: true })); }}
-                      className="block w-full text-left text-xs px-2 py-1.5 rounded bg-slate-800/70 hover:bg-slate-700 border border-slate-700/60 disabled:opacity-50">
-                      {aiApplied.fu ? '✓ Scheduled: ' : 'Schedule: '}<span className="text-cyan-300 font-medium">{ai.follow_up.label} · {new Date(ai.follow_up.when).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
-                    </button>
+                  {ai.lean && onSetDirection && !aiDismissed.lean && (
+                    <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 flex items-center gap-2">
+                      <button type="button" disabled={aiApplied.lean}
+                        onClick={() => { onSetDirection(lead.id, ai.lean); setAiApplied((a) => ({ ...a, lean: true })); }}
+                        className="flex-1 text-left text-xs disabled:opacity-60">
+                        <span className="text-[10px] uppercase tracking-wide text-slate-500 block">Lean</span>
+                        {aiApplied.lean ? '✓ Set: ' : 'Set lean: '}<span className="text-cyan-300 font-medium">{LEAN_LABEL[ai.lean] || ai.lean}</span>
+                      </button>
+                      <button type="button" onClick={() => setAiDismissed((d) => ({ ...d, lean: true }))} title="Dismiss" className="flex-shrink-0 text-slate-500 hover:text-slate-300 text-sm leading-none px-1">×</button>
+                    </div>
                   )}
-                  {ai.draft_reply && (
-                    <button type="button"
-                      onClick={() => { setDraft(ai.draft_reply); }}
-                      className="block w-full text-left text-xs px-2 py-1.5 rounded bg-slate-800/70 hover:bg-slate-700 border border-slate-700/60">
-                      Use draft reply: <span className="text-slate-200">{ai.draft_reply.slice(0, 60)}{ai.draft_reply.length > 60 ? '…' : ''}</span>
-                    </button>
+                  {ai.follow_up && onScheduleFollowUp && !aiDismissed.fu && (
+                    <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 flex items-center gap-2">
+                      <button type="button" disabled={aiApplied.fu}
+                        onClick={() => { onScheduleFollowUp(lead.id, ai.follow_up.when, ai.follow_up.label); setAiApplied((a) => ({ ...a, fu: true })); }}
+                        className="flex-1 text-left text-xs disabled:opacity-60">
+                        <span className="text-[10px] uppercase tracking-wide text-slate-500 block">Schedule task</span>
+                        {aiApplied.fu ? '✓ Scheduled: ' : ''}<span className="text-cyan-300 font-medium">{ai.follow_up.label} · {new Date(ai.follow_up.when).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+                      </button>
+                      <button type="button" onClick={() => setAiDismissed((d) => ({ ...d, fu: true }))} title="Dismiss" className="flex-shrink-0 text-slate-500 hover:text-slate-300 text-sm leading-none px-1">×</button>
+                    </div>
                   )}
-                </div>
+                  {ai.draft_reply && !aiDismissed.draft && (
+                    <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 flex items-center gap-2">
+                      <button type="button"
+                        onClick={() => { setDraft(ai.draft_reply); }}
+                        className="flex-1 text-left text-xs">
+                        <span className="text-[10px] uppercase tracking-wide text-slate-500 block">Draft message</span>
+                        <span className="text-slate-200">{ai.draft_reply.slice(0, 80)}{ai.draft_reply.length > 80 ? '…' : ''}</span>
+                      </button>
+                      <button type="button" onClick={() => setAiDismissed((d) => ({ ...d, draft: true }))} title="Dismiss" className="flex-shrink-0 text-slate-500 hover:text-slate-300 text-sm leading-none px-1">×</button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
