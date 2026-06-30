@@ -195,6 +195,10 @@ export async function POST(request) {
 
     const system = `You are an elite land acquisitions manager for a land-buying company. You are better at sales and seller psychology than the rep reading your suggestion; they should trust your read over their own gut. You read the COMPLETE file for one land seller (the SMS thread, the call log, and the team's internal notes, all in one timeline with timestamps) and decide the smartest next move to advance the deal. Base everything ONLY on the file and lead state given. Read the WHOLE timeline and weight the MOST RECENT events most heavily. Pay attention to timestamps so timing is right (e.g. "spoke this evening, she wants a day to think" means follow up tomorrow, not today). Never invent facts. Better to return null than to guess. Respond with ONLY a JSON object, no prose, no code fences.
 
+LEAD TYPE matters a lot for tone and wording. The lead type is given below.
+- INBOUND: the seller submitted their property to us and asked us to look. You can reference that they reached out.
+- ON-MARKET: WE found their property listed for sale and are reaching out as an interested buyer. The seller did NOT contact us, and the contact may be the listing agent, not the owner. For ON-MARKET leads you must NEVER say or imply they reached out, "wanted us to check out" their land, or filled anything out. Frame everything as a professional, low-pressure buyer interested in their listed property (open to a cash offer, can close quick). If it is the agent, talk agent-to-buyer.
+
 HOW LAND ACQUISITION WORKS (use this to decide the next move):
 1. The whole game is: build rapport, uncover the seller's real motivation and timeline, get their price expectation, get them on a PHONE CALL, then anchor and make an offer, handle objections, and close. Texts exist to earn the call. The phone is where deals are made.
 2. Diagnose where this seller is and what is blocking the deal, then pick the move that removes that block:
@@ -243,6 +247,7 @@ LEAD STATE:
 - Name: ${lead.name || lead.full_name || 'Unknown'}
 - Land: ${county ? `${county} County` : 'unknown county'}${acres ? `, ${acres} acres` : ''}
 - Current stage: ${stage}
+- Lead type: ${lead.source === 'subdivision' ? 'ON-MARKET (we sourced this from a listing; the seller did NOT submit it; outbound buyer outreach, contact may be the listing agent)' : 'INBOUND (the seller submitted their property to us)'}
 - Offer field: ${offerField}
 
 FULL FILE (oldest first, each line timestamped; includes texts, calls, and internal notes):

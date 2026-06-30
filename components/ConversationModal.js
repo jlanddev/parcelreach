@@ -34,7 +34,15 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
   const repName = (currentUserName || '').trim().split(/\s+/)[0];
   const intro = repName ? `this is ${repName} with Haven Ground` : `this is the team at Haven Ground`;
   const leadStatus = (lead?.pipeline_status || lead?.status || '').toUpperCase();
-  const suggestions = {
+  // On-market (subdivision) leads were sourced by us from a listing; the owner
+  // did NOT submit their property, so the outreach is buyer-side cold contact
+  // (often via the agent), not "the land you wanted us to check out."
+  const isOnMarket = lead?.source === 'subdivision';
+  const suggestions = isOnMarket ? {
+    first: { label: 'First touch', text: `Hey ${firstName}, ${intro}. I came across the ${county} property you have listed and we're actively buying land in the area. Would you be open to a cash offer? We close quick and easy.` },
+    checkin: { label: 'Check-in', text: `Hey ${firstName}, following up on the ${county} property. Is it still available? We're a serious buyer and would love to put an offer together if you're open to it.` },
+    offer: { label: 'Offer follow-up', text: `Hey ${firstName}, wanted to follow up on the offer we put together on the ${county} property. Confident in our numbers and we can close without a hitch. Happy to talk it through.` },
+  } : {
     first: { label: 'First touch', text: `Hey ${firstName}, ${intro}. Reaching out about the land you wanted us to check out in ${county}. When's a good time to call and discuss?` },
     checkin: { label: 'Check-in', text: `Hey ${firstName}, checking in on the land you wanted us to check out in ${county}. Did you end up getting that sold, or are you still interested in us buying?` },
     offer: { label: 'Offer follow-up', text: `Hey ${firstName}, wanted to check in on the offer we made on the land in ${county}. Very confident in our underwriting and our ability to close this without a hitch.` },
