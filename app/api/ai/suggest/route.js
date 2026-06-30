@@ -194,6 +194,14 @@ export async function POST(request) {
 
 OFFERS: An offer counts as ALREADY MADE if the Offer field shows an amount OR the notes/calls/texts clearly state an offer or price was given to the seller. Only then may you reference an offer (e.g. "follow up on the offer"). If no offer has been made anywhere in the file, do NOT mention an offer in the action or the draft reply.
 
+DRAFT REPLY VOICE (very important): Write it the way a real person texts, not like an AI or a salesperson. Rules:
+- Short. One or two sentences, like a real text message.
+- Do NOT parrot or restate back what the seller just said. They know what they told you. Lines like "sounds like a really special piece of land with the creeks and old growth" are robotic; never echo their details back at them.
+- Do NOT re-ask a question that was already asked anywhere in the thread. If they dodged it (e.g. you asked their price and they changed the subject), either move the conversation forward or ask it once in a different, lighter way, never the same words again.
+- No hype, no stacked exclamation points, no filler pleasantries. Plain, warm, direct.
+- Contractions are good. Sound like a normal human who is busy but friendly.
+- Just write the next thing a sharp land buyer would actually send. If there is nothing useful to say, return "".
+
 The draft_reply must fit where things actually stand in the file and must never reference an offer that was never made.
 
 STYLE: Never use em dashes or en dashes anywhere in your output. Use commas, periods, or parentheses instead.`;
