@@ -56,7 +56,13 @@ export default function MondayPushButton({ lead, onToast }) {
       if (Array.isArray(data.partner_pushes)) setSent(data.partner_pushes);
       else setSent((cur) => [...cur.filter((p) => String(p.board_id) !== String(board.id)), { board_id: board.id, board_name: board.name }]);
       setOpen(false);
-      onToast && onToast(`Sent to ${board.name}${data.mapUploaded ? ' with map' : ''}`, 'success');
+      // Report exactly what landed so a missing tag/map is never silent.
+      const bits = [];
+      bits.push(data.tagInBubble ? 'tagged in bubble' : (data.notified ? 'partner notified' : 'no tag'));
+      bits.push(data.mapUploaded ? 'map attached' : 'no map');
+      const warned = Array.isArray(data.warnings) && data.warnings.length;
+      onToast && onToast(`Sent to ${board.name} (${bits.join(', ')})`, warned ? 'error' : 'success');
+      if (warned) console.warn('[monday push warnings]', data.warnings);
     } catch (err) {
       onToast && onToast(`Monday push failed: ${err.message}`, 'error');
     } finally {

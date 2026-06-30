@@ -33,6 +33,11 @@ export async function POST(request) {
       board_name: result.board,
       item_id: String(result.itemId),
       pushed_at: new Date().toISOString(),
+      tagged: result.tagged || null,
+      map_uploaded: !!result.mapUploaded,
+      tag_in_bubble: !!result.tagInBubble,
+      notified: result.notified || 0,
+      warnings: result.warnings || [],
     };
     const partner_pushes = [...prior.filter((p) => String(p.board_id) !== String(boardId)), entry];
     await supabase.from('leads').update({ partner_pushes }).eq('id', leadId).then(() => {}, () => {});
