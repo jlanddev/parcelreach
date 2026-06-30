@@ -46,16 +46,33 @@ function resolveWhen(fu) {
   const hh = tm ? Math.min(23, +tm[1]) : 10;
   const mm = tm && tm[2] ? Math.min(59, +tm[2]) : 0;
   const t = centralYMD();
-  const base = new Date(Date.UTC(t.y, t.m - 1, t.d));
-  let target = null;
-  if (Number.isInteger(fu.days_from_now)) {
-    const c = new Date(base); c.setUTCDate(c.getUTCDate() + Math.max(0, Math.min(120, fu.days_from_now)));
-    target = c;
-  } else if (fu.weekday && DOW[String(fu.weekday).toLowerCase()] != null) {
-    const want = DOW[String(fu.weekday).toLowerCase()];
-    for (let i = 1; i <= 7; i++) { const c = new Date(base); c.setUTCDate(c.getUTCDate() + i); if (c.getUTCDay() === want) { target = c; break; } }
+
+  let target = null; // a UTC Date pinned to the target Y/M/D (midnight UTC)
+  // Preferred: an absolute Central calendar date the model resolved itself
+  // (anchored to the message timestamps), e.g. "2026-06-30".
+  const dm = String(fu.date || '').match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (dm) {
+    const y = +dm[1], mo = +dm[2], d = +dm[3];
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) target = new Date(Date.UTC(y, mo - 1, d));
+  }
+  // Fallbacks: relative day / weekday, measured from today.
+  if (!target) {
+    const base = new Date(Date.UTC(t.y, t.m - 1, t.d));
+    if (Number.isInteger(fu.days_from_now)) {
+      const c = new Date(base); c.setUTCDate(c.getUTCDate() + Math.max(0, Math.min(120, fu.days_from_now)));
+      target = c;
+    } else if (fu.weekday && DOW[String(fu.weekday).toLowerCase()] != null) {
+      const want = DOW[String(fu.weekday).toLowerCase()];
+      for (let i = 1; i <= 7; i++) { const c = new Date(base); c.setUTCDate(c.getUTCDate() + i); if (c.getUTCDay() === want) { target = c; break; } }
+    }
   }
   if (!target) return null;
+
+  // Safety net: never schedule in a past calendar day. If the resolved date is
+  // before today (a stale "tomorrow" the model misread), pull it up to today.
+  const todayUTC = new Date(Date.UTC(t.y, t.m - 1, t.d));
+  if (target < todayUTC) target = todayUTC;
+
   return centralToUTC(target.getUTCFullYear(), target.getUTCMonth() + 1, target.getUTCDate(), hh, mm).toISOString();
 }
 
@@ -197,11 +214,11 @@ HOW LAND ACQUISITION WORKS (use this to decide the next move):
 
 (2) NEXT ACTION: choose the single move that best advances the deal given your diagnosis above, not just the obvious one. Favor getting them on a call once there is any real engagement; only keep texting when it is too early for a call or they are not ready. Put a short imperative in follow_up.label, e.g. "Call to get price", "Call back", "Follow up on offer", "Send offer", "Light text re-engage", "Nurture", "Set appointment".
 
-(3) SCHEDULE, describe WHEN relatively; do NOT compute calendar dates yourself.
-- Use "days_from_now": 0 = today, 1 = tomorrow, 2 = day after. Use this for relative references like "tomorrow" or "in a couple days".
-- OR use "weekday": a day name ("monday".."friday") if a specific weekday was named.
-- Always give "time_24h" like "15:00". If a time was agreed in the file, use it; otherwise pick a slot 9:00-17:00.
-- TIME OF DAY AWARENESS: the current Central time is given below. It is rude and ineffective to tell the rep to text or call a seller late at night. If it is already evening or later and the next move is not urgent, schedule it for the next morning. If a call is already agreed but no exact time is set, pick a sensible next-morning or this-week business-hours slot and lock it.
+(3) SCHEDULE. Return the absolute Central calendar date for the next action.
+- CRITICAL ANCHORING RULE: a relative day word inside a SELLER'S message ("tomorrow", "today", "this week", "next week") is relative to the DATE THAT MESSAGE WAS SENT, shown in its [timestamp], NOT relative to right now. Example: a message sent on Mon Jun 29 that says "let's talk tomorrow" means Tue Jun 30, even if you are reading this after midnight on Jun 30 or later. Work out the actual calendar day the seller meant, then output it.
+- Give "date" as the absolute target day in "YYYY-MM-DD" (Central). The current date is given below; use it plus the message timestamps to compute the real day. Double check: the date you output must be today or later, never in the past.
+- Also give "time_24h" like "15:00". If a time was agreed in the file, use it; if they said they are busy at a time, avoid it; otherwise pick a slot 9:00-17:00.
+- TIME OF DAY: it is rude to text or call a seller in the middle of the night. If it is currently late and the action is not pinned to a specific agreed day, schedule it for the next morning. But never push a call PAST a day the seller actually agreed to (if they said "tomorrow" and that day is today, schedule it today).
 - If no follow-up is warranted, return null for follow_up.
 
 OFFERS: An offer counts as ALREADY MADE if the Offer field shows an amount OR the notes/calls/texts clearly state an offer or price was given to the seller. Only then may you reference an offer (e.g. "follow up on the offer"). If no offer has been made anywhere in the file, do NOT mention an offer in the action or the draft reply.
@@ -234,7 +251,7 @@ ${record}
 Return ONLY this JSON:
 {
   "lean": one of ${JSON.stringify(VALID_LEANS)} or null,
-  "follow_up": { "days_from_now": integer OR "weekday": day name, "time_24h": "HH:MM", "label": short next action } or null,
+  "follow_up": { "date": "YYYY-MM-DD" (the absolute Central day, today or later), "time_24h": "HH:MM", "label": short next action } or null,
   "draft_reply": a short, friendly next text that fits where things stand, or "",
   "summary": one short sentence on the lead's character and where they stand right now
 }`;
