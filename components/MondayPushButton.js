@@ -21,7 +21,7 @@ function loadBoards() {
  * "Send to Partner", pushes this lead into a partner's Monday board (item in
  * the New Leads group + an update bubble with property notes and the parcel map).
  */
-export default function MondayPushButton({ lead, onToast }) {
+export default function MondayPushButton({ lead, onToast, onSaveSummary }) {
   const [open, setOpen] = useState(false);
   const [boards, setBoards] = useState(boardsCache || []);
   const [loading, setLoading] = useState(false);
@@ -29,6 +29,24 @@ export default function MondayPushButton({ lead, onToast }) {
   // Partners this lead has already been sent to (from the lead, plus any sent now).
   const [sent, setSent] = useState(Array.isArray(lead.partner_pushes) ? lead.partner_pushes : []);
   const sentIds = new Set(sent.map((p) => String(p.board_id)));
+
+  // Partner summary: the ONLY note text that pushes to the board. Write/paste,
+  // then lock. Locked = saved and read-only until you hit Edit.
+  const [summary, setSummary] = useState(lead.partner_summary || '');
+  const [locked, setLocked] = useState(!!(lead.partner_summary && lead.partner_summary.trim()));
+  const [savingSummary, setSavingSummary] = useState(false);
+
+  const lockSummary = async () => {
+    setSavingSummary(true);
+    try {
+      if (onSaveSummary) await onSaveSummary(lead.id, summary.trim());
+      setLocked(true);
+    } catch (e) {
+      onToast && onToast('Could not save summary: ' + (e?.message || e), 'error');
+    } finally {
+      setSavingSummary(false);
+    }
+  };
 
   const toggle = async (e) => {
     e.stopPropagation();
@@ -82,6 +100,43 @@ export default function MondayPushButton({ lead, onToast }) {
           ))}
         </div>
       )}
+
+      {/* Partner summary: the only note text that gets pushed to the board. */}
+      <div className="mb-1.5">
+        {locked ? (
+          <div className="rounded-lg border border-indigo-500/40 bg-indigo-500/10 px-2.5 py-2">
+            <div className="flex items-center justify-between mb-1">
+              <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-indigo-300">
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+                Partner summary (locked)
+              </span>
+              <button type="button" onClick={() => setLocked(false)} className="text-[11px] text-indigo-300 hover:text-indigo-200">Edit</button>
+            </div>
+            <p className="text-xs text-slate-200 whitespace-pre-wrap break-words">{summary}</p>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-slate-600 bg-slate-900/60 px-2.5 py-2">
+            <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-1">Partner summary</span>
+            <textarea
+              value={summary}
+              onChange={(e) => setSummary(e.target.value)}
+              rows={3}
+              placeholder="Write or paste the summary to send with this lead. This is the only note the partner sees."
+              className="w-full resize-none bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500/60"
+            />
+            <button
+              type="button"
+              onClick={lockSummary}
+              disabled={!summary.trim() || savingSummary}
+              className="mt-1.5 w-full px-3 py-1.5 rounded-md bg-indigo-600/30 hover:bg-indigo-600/50 disabled:opacity-40 text-indigo-200 text-xs font-medium inline-flex items-center justify-center gap-1.5"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+              {savingSummary ? 'Saving…' : 'Lock summary'}
+            </button>
+          </div>
+        )}
+      </div>
+
       <button
         type="button"
         onClick={toggle}

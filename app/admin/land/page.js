@@ -3239,7 +3239,7 @@ export default function LandLeadsAdminPage() {
                       {/* Send to partner (Partners tab only) */}
                       {activeTab === 'partners' && (
                         <div className="mb-4">
-                          <MondayPushButton lead={lead} onToast={(m, t) => showToast(m, t)} />
+                          <MondayPushButton lead={lead} onToast={(m, t) => showToast(m, t)} onSaveSummary={(id, text) => patchLead(id, { partner_summary: text })} />
                         </div>
                       )}
 
