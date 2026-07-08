@@ -21,7 +21,7 @@ function loadBoards() {
  * "Send to Partner", pushes this lead into a partner's Monday board (item in
  * the New Leads group + an update bubble with property notes and the parcel map).
  */
-export default function MondayPushButton({ lead, onToast, onSaveSummary }) {
+export default function MondayPushButton({ lead, onToast, onSaveSummary, onSaveCoordinates }) {
   const [open, setOpen] = useState(false);
   const [boards, setBoards] = useState(boardsCache || []);
   const [loading, setLoading] = useState(false);
@@ -45,6 +45,24 @@ export default function MondayPushButton({ lead, onToast, onSaveSummary }) {
       onToast && onToast('Could not save summary: ' + (e?.message || e), 'error');
     } finally {
       setSavingSummary(false);
+    }
+  };
+
+  // Optional coordinates (used occasionally, e.g. PLG). Same write/paste + lock
+  // pattern as the summary. Pushed under the tag/summary, above the map.
+  const [coords, setCoords] = useState(lead.partner_coordinates || '');
+  const [coordsLocked, setCoordsLocked] = useState(!!(lead.partner_coordinates && lead.partner_coordinates.trim()));
+  const [savingCoords, setSavingCoords] = useState(false);
+
+  const lockCoords = async () => {
+    setSavingCoords(true);
+    try {
+      if (onSaveCoordinates) await onSaveCoordinates(lead.id, coords.trim());
+      setCoordsLocked(true);
+    } catch (e) {
+      onToast && onToast('Could not save coordinates: ' + (e?.message || e), 'error');
+    } finally {
+      setSavingCoords(false);
     }
   };
 
@@ -133,6 +151,39 @@ export default function MondayPushButton({ lead, onToast, onSaveSummary }) {
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
               {savingSummary ? 'Saving…' : 'Lock summary'}
             </button>
+          </div>
+        )}
+      </div>
+
+      {/* Optional coordinates (occasional, e.g. PLG). Pushed above the map. */}
+      <div className="mb-1.5">
+        {coordsLocked ? (
+          <div className="rounded-lg border border-indigo-500/40 bg-indigo-500/10 px-2.5 py-1.5 flex items-center justify-between gap-2">
+            <span className="min-w-0 text-xs text-slate-200 truncate">
+              <span className="text-[10px] font-bold uppercase tracking-wide text-indigo-300 mr-1.5">Coordinates</span>
+              {coords}
+            </span>
+            <button type="button" onClick={() => setCoordsLocked(false)} className="flex-shrink-0 text-[11px] text-indigo-300 hover:text-indigo-200">Edit</button>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-slate-600 bg-slate-900/60 px-2.5 py-2">
+            <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-1">Coordinates (optional)</span>
+            <div className="flex items-center gap-1.5">
+              <input
+                value={coords}
+                onChange={(e) => setCoords(e.target.value)}
+                placeholder="e.g. 30.2672, -97.7431"
+                className="flex-1 min-w-0 bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500/60"
+              />
+              <button
+                type="button"
+                onClick={lockCoords}
+                disabled={!coords.trim() || savingCoords}
+                className="flex-shrink-0 px-2.5 py-1.5 rounded-md bg-indigo-600/30 hover:bg-indigo-600/50 disabled:opacity-40 text-indigo-200 text-xs font-medium"
+              >
+                {savingCoords ? 'Saving…' : 'Lock'}
+              </button>
+            </div>
           </div>
         )}
       </div>
