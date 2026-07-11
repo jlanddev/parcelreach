@@ -8,11 +8,12 @@ export async function GET(request) {
   try {
     const q = (new URL(request.url).searchParams.get('name') || '').trim().toLowerCase();
     const data = await mondayQuery(
-      'query { boards(limit:200, state: active) { id name subscribers { id name email } } }'
+      'query { boards(limit:200, state: active) { id name groups { id title } subscribers { id name email } } }'
     );
     let boards = (data.boards || []).map((b) => ({
       id: String(b.id),
       name: b.name,
+      groups: (b.groups || []).map((g) => ({ id: g.id, title: g.title })),
       members: (b.subscribers || []).map((s) => ({ id: String(s.id), name: s.name, email: s.email })),
     }));
     if (q) boards = boards.filter((b) => (b.name || '').toLowerCase().includes(q));
