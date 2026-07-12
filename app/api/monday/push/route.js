@@ -7,13 +7,23 @@ import { pushLeadToBoard } from '@/lib/monday';
 // and the parcel map image.
 export async function POST(request) {
   try {
-    const { leadId, boardId } = await request.json();
+    const { leadId, boardId, summary, coordinates } = await request.json();
     if (!leadId || !boardId) {
       return NextResponse.json({ error: 'Missing leadId or boardId' }, { status: 400 });
     }
     const supabase = supabaseAdmin();
     const { data: lead, error } = await supabase.from('leads').select('*').eq('id', leadId).maybeSingle();
     if (error || !lead) return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
+
+    // The summary/coordinates typed on the card take priority over whatever is
+    // stored, so a push always sends what the rep sees, even if they didn't Lock.
+    if (typeof summary === 'string') lead.partner_summary = summary;
+    if (typeof coordinates === 'string') lead.partner_coordinates = coordinates;
+    // Best-effort persist so the card stays in sync (ignored if columns missing).
+    const persist = {};
+    if (typeof summary === 'string') persist.partner_summary = summary;
+    if (typeof coordinates === 'string') persist.partner_coordinates = coordinates;
+    if (Object.keys(persist).length) await supabase.from('leads').update(persist).eq('id', leadId).then(() => {}, () => {});
 
     // Pull the lead's notes so the update bubble is a real note summary.
     const { data: notes } = await supabase

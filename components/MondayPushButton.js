@@ -82,10 +82,12 @@ export default function MondayPushButton({ lead, onToast, onSaveSummary, onSaveC
     e.stopPropagation();
     setPushingId(board.id);
     try {
+      // Send the current summary/coordinates with the push so whatever is in the
+      // boxes goes out, even if you didn't hit Lock (and regardless of DB timing).
       const res = await fetch('/api/monday/push', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leadId: lead.id, boardId: board.id }),
+        body: JSON.stringify({ leadId: lead.id, boardId: board.id, summary: summary.trim(), coordinates: coords.trim() }),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Push failed');
