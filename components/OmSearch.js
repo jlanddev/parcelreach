@@ -194,6 +194,26 @@ export default function OmSearch() {
     } catch (e) { setError({ msg: e.message }); } finally { setRunningDetailed(false); }
   };
 
+  // Push a listing into the CRM as a Subdivision Inflow lead (auto-saves the map).
+  const [pushed, setPushed] = useState({});      // property_id -> { leadId, mapped }
+  const [pushingId, setPushingId] = useState(null);
+  const pushToInflow = async (p) => {
+    setPushingId(String(p.property_id));
+    try {
+      const d = details[String(p.property_id)];
+      const res = await fetch('/api/landportal/push-lead', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          property: { property_id: p.property_id, owner_full_name: p.owner_full_name, street_address: p.street_address, apn: p.apn, fips: p.fips, lot_size_acres: p.lot_size_acres, county: (countyDict[p.fips] || '').split(',')[0], state: (countyDict[p.fips] || '').split(', ')[1] },
+          geometry: d?.geometry || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) { setError({ msg: data.error || 'Push failed.' }); return; }
+      setPushed((cur) => ({ ...cur, [String(p.property_id)]: { leadId: data.leadId, mapped: data.mapped, existing: data.existing } }));
+    } catch (e) { setError({ msg: e.message }); } finally { setPushingId(null); }
+  };
+
   const toggleSort = (k) => { if (sortKey === k) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc')); else { setSortKey(k); setSortDir('desc'); } };
   const quota = result?.meta?.requests_left;
   const isMarket = status === 'for_sale' || status === 'sold';
@@ -455,7 +475,20 @@ export default function OmSearch() {
                           <div className="font-medium truncate">{p.owner_full_name || 'Owner unknown'}</div>
                           <div className="text-sm text-slate-400 truncate">{p.street_address || 'No situs address'}</div>
                         </div>
-                        <a href={listingSearchUrl(p)} target="_blank" rel="noopener noreferrer" className="flex-shrink-0 text-indigo-300 hover:text-indigo-200 text-sm underline">View listing</a>
+                        <div className="flex-shrink-0 flex items-center gap-3">
+                          <a href={listingSearchUrl(p)} target="_blank" rel="noopener noreferrer" className="text-indigo-300 hover:text-indigo-200 text-sm underline">View listing</a>
+                          {pushed[String(p.property_id)] ? (
+                            <span className="inline-flex items-center gap-1 text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-full px-2.5 py-1">
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+                              {pushed[String(p.property_id)].existing ? 'Already in pipeline' : 'In Subdivision Inflow'}{pushed[String(p.property_id)].mapped ? ', mapped' : ''}
+                            </span>
+                          ) : (
+                            <button type="button" onClick={() => pushToInflow(p)} disabled={pushingId === String(p.property_id)}
+                              className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-teal-600/90 hover:bg-teal-600 disabled:opacity-50 text-white">
+                              {pushingId === String(p.property_id) ? 'Pushing...' : 'Push to Inflow'}
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-sm">
                         <span><span className="text-slate-500 text-xs">County </span>{countyDict[p.fips] || p.fips}</span>
