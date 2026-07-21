@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildFilterRequest, rejectedMlsKeys, canonicalParams, zipToFilter,
-  LAND_PROPERTY_TYPE, ONMARKET_PLAUSIBILITY_CEILING,
+  ONMARKET_PLAUSIBILITY_CEILING,
 } from '../lib/landportal-filters.mjs';
 
 const byKey = (filters, key) => filters.find((f) => f.key === key);
@@ -39,22 +39,29 @@ test('frontage_min is a min-only range (no max key)', () => {
   assert.ok(!('max' in f.value));
 });
 
-test('status for_sale emits mls_for_sale active + default 30d window + Land type', () => {
+test('status for_sale: active, NO default window, NO forced property type', () => {
   const { body, submittedMlsKeys, isMarketQuery } = buildFilterRequest({ fips: ['53039'], status: 'for_sale' });
   const m = byKey(body.filters, 'mls_for_sale');
-  assert.deepEqual(m, { key: 'mls_for_sale', operator: 'mls_condition', value: 'active', days: 30 });
-  const t = byKey(body.filters, 'mls_propertytype');
-  assert.deepEqual(t.value, [LAND_PROPERTY_TYPE]);
-  assert.ok(submittedMlsKeys.includes('mls_for_sale') && submittedMlsKeys.includes('mls_propertytype'));
+  assert.deepEqual(m, { key: 'mls_for_sale', operator: 'mls_condition', value: 'active' }); // no days key
+  assert.ok(!('days' in m), 'no days when window not provided (all active)');
+  assert.ok(!byKey(body.filters, 'mls_propertytype'), 'must NOT force Land type by default');
+  assert.ok(submittedMlsKeys.includes('mls_for_sale'));
+  assert.ok(!submittedMlsKeys.includes('mls_propertytype'));
   assert.equal(isMarketQuery, true);
 });
 
-test('listed_within_days overrides the for_sale window', () => {
+test('mls_property_types adds the filter only when explicitly provided', () => {
+  const { body, submittedMlsKeys } = buildFilterRequest({ fips: ['53039'], status: 'for_sale', mls_property_types: ['8'] });
+  assert.deepEqual(byKey(body.filters, 'mls_propertytype').value, ['8']);
+  assert.ok(submittedMlsKeys.includes('mls_propertytype'));
+});
+
+test('listed_within_days sends the for_sale window only when given', () => {
   const { body } = buildFilterRequest({ fips: ['53039'], status: 'for_sale', listed_within_days: 90 });
   assert.equal(byKey(body.filters, 'mls_for_sale').days, 90);
 });
 
-test('status sold uses sold_within_days default 365', () => {
+test('status sold uses sold_within_days default 365 (sold needs a window)', () => {
   const { body } = buildFilterRequest({ fips: ['53039'], status: 'sold' });
   assert.equal(byKey(body.filters, 'mls_sold').days, 365);
 });

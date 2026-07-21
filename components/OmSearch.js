@@ -38,7 +38,7 @@ export default function OmSearch() {
   const [countyQuery, setCountyQuery] = useState('');
   const [selected, setSelected] = useState([]);              // [{fips,label}]
   const [status, setStatus] = useState('for_sale');          // for_sale | sold | off_market
-  const [daysWindow, setDaysWindow] = useState(90);                  // listed/sold within N days
+  const [daysWindow, setDaysWindow] = useState('');                  // listed/sold within N days (blank = all active)
   const [acresMin, setAcresMin] = useState(30);
   const [acresMax, setAcresMax] = useState(60);
   const [frontageMin, setFrontageMin] = useState('');
@@ -82,8 +82,10 @@ export default function OmSearch() {
     if (num(acresMax) !== undefined) p.acres_max = num(acresMax);
     if (num(frontageMin) !== undefined) p.frontage_min = num(frontageMin);
     if (status) p.status = status;
-    if (status === 'for_sale') p.listed_within_days = num(daysWindow) ?? 90;
-    if (status === 'sold') p.sold_within_days = num(daysWindow) ?? 365;
+    // Window is optional: only send it when a number is typed. Blank For Sale =
+    // all currently-active listings regardless of list date (matches LP UI).
+    if (status === 'for_sale' && num(daysWindow) !== undefined) p.listed_within_days = num(daysWindow);
+    if (status === 'sold' && num(daysWindow) !== undefined) p.sold_within_days = num(daysWindow);
     if (num(priceMin) !== undefined) p.price_min = num(priceMin);
     if (num(priceMax) !== undefined) p.price_max = num(priceMax);
     if (num(ppaMin) !== undefined) p.ppa_min = num(ppaMin);
@@ -197,7 +199,8 @@ export default function OmSearch() {
           {isMarket && (
             <div>
               <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">{status === 'sold' ? 'Sold within (days)' : 'Listed within last (days)'}</label>
-              <input type="number" value={daysWindow} onChange={(e) => setDaysWindow(e.target.value)} className="w-28 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
+              <input type="number" value={daysWindow} onChange={(e) => setDaysWindow(e.target.value)} placeholder={status === 'sold' ? '365' : 'all active'} className="w-28 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
+              {status === 'for_sale' && <p className="text-[10px] text-slate-500 mt-1">Blank = all active listings</p>}
             </div>
           )}
         </div>
@@ -270,6 +273,7 @@ export default function OmSearch() {
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <span className="font-semibold">{result.count?.toLocaleString()} {isMarket ? 'listings' : 'parcels'}</span>
+            {result.raw_count != null && result.raw_count !== result.count && <span className="text-slate-500 text-xs">({result.raw_count.toLocaleString()} before dedupe)</span>}
             {result.properties?.length < result.count && <span className="text-slate-400">showing first {result.properties.length}</span>}
             {result.cached && <span className="px-2 py-0.5 rounded-full bg-slate-700 text-slate-300 text-[11px]">cached, no quota used</span>}
             {result.warnings?.includes('overflow') && <span className="text-amber-300 text-xs">Over the result cap. Narrow your filters.</span>}
