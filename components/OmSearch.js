@@ -53,7 +53,6 @@ export default function OmSearch() {
   const [countyDict, setCountyDict] = useState({});      // fips -> "Name, AB"
   const [countyList, setCountyList] = useState([]);      // [{fips,name,stateFips,abbr,label}]
   const [activeState, setActiveState] = useState('');    // state FIPS prefix chosen in the cascade
-  const [stateQuery, setStateQuery] = useState('');
   const [countyQuery, setCountyQuery] = useState('');
   const [selected, setSelected] = useState(PRESETS[0].counties); // default: 1 yr STR preset
   const [status, setStatus] = useState('for_sale');
@@ -99,12 +98,11 @@ export default function OmSearch() {
     return () => { live = false; };
   }, []);
 
-  // States that actually have counties in the dictionary, filtered by the typed query.
-  const stateMatches = useMemo(() => {
+  // States that actually have counties in the dictionary (for the State select).
+  const presentStates = useMemo(() => {
     const present = new Set(countyList.map((c) => c.stateFips));
-    const q = stateQuery.trim().toLowerCase();
-    return US_STATES.filter((s) => present.has(s.fips) && (!q || s.name.toLowerCase().includes(q) || s.abbr.toLowerCase() === q));
-  }, [countyList, stateQuery]);
+    return US_STATES.filter((s) => present.has(s.fips));
+  }, [countyList]);
 
   // Counties in the chosen state, filtered by the county search box.
   const countiesInState = useMemo(() => {
@@ -152,7 +150,7 @@ export default function OmSearch() {
 
   const clearAll = () => {
     setResult(null); setError(null); setQuote(null); setReceipt(null); setDetails({});
-    setSelected([]); setActiveState(''); setStateQuery(''); setCountyQuery('');
+    setSelected([]); setActiveState(''); setCountyQuery('');
     setStatus('for_sale'); setDaysWindow(''); setVacantOnly(true);
     setAcresMin(30); setAcresMax(60); setFrontageMin(''); setPriceMin(''); setPriceMax(''); setPpaMin(''); setPpaMax('');
   };
@@ -228,41 +226,30 @@ export default function OmSearch() {
         </div>
 
         {/* State -> County cascade. Pick a state, add its counties, switch states and add more. */}
-        <div className="grid sm:grid-cols-2 gap-3">
-          <div className="relative">
+        <div className="grid sm:grid-cols-2 gap-3 items-start">
+          <div>
             <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">State</label>
-            <input value={activeState ? (stateByFips[activeState]?.name || '') : stateQuery}
-              onChange={(e) => { setActiveState(''); setStateQuery(e.target.value); }}
-              onFocus={() => { setActiveState(''); setStateQuery(''); }}
-              placeholder="Type a state"
-              className="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm placeholder-slate-500 focus:outline-none focus:border-indigo-500" />
-            {!activeState && stateMatches.length > 0 && (
-              <div className="absolute z-30 mt-1 left-0 right-0 bg-slate-800 border border-slate-600 rounded-md shadow-xl max-h-60 overflow-y-auto">
-                {stateMatches.map((s) => (
-                  <button key={s.fips} type="button" onClick={() => { setActiveState(s.fips); setStateQuery(''); setCountyQuery(''); }}
-                    className="flex w-full justify-between px-3 py-1.5 text-sm text-left hover:bg-indigo-600/30">
-                    <span>{s.name}</span><span className="text-slate-500">{s.abbr}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+            <select value={activeState} onChange={(e) => { setActiveState(e.target.value); setCountyQuery(''); }}
+              className="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-indigo-500">
+              <option value="">Select a state</option>
+              {presentStates.map((s) => <option key={s.fips} value={s.fips}>{s.name}</option>)}
+            </select>
           </div>
-          <div className="relative">
-            <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">County</label>
-            <input value={countyQuery} onChange={(e) => setCountyQuery(e.target.value)}
-              disabled={!activeState}
-              placeholder={activeState ? `Search counties in ${stateByFips[activeState]?.abbr}` : 'Pick a state first'}
+          <div>
+            <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">County {activeState && <span className="text-slate-500 normal-case">in {stateByFips[activeState]?.name}</span>}</label>
+            <input value={countyQuery} onChange={(e) => setCountyQuery(e.target.value)} disabled={!activeState}
+              placeholder={activeState ? 'Filter counties' : 'Pick a state first'}
               className="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm placeholder-slate-500 focus:outline-none focus:border-indigo-500 disabled:opacity-50" />
             {activeState && (
-              <div className="absolute z-20 mt-1 left-0 right-0 bg-slate-800 border border-slate-600 rounded-md shadow-xl max-h-60 overflow-y-auto">
-                <button type="button" onClick={addAllInState} className="w-full text-left px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-600/20 border-b border-slate-700">
-                  Add all {countiesInState.length} in {stateByFips[activeState]?.name}
+              <div className="mt-1 border border-slate-600 rounded-md bg-slate-800/70 max-h-48 overflow-y-auto divide-y divide-slate-700/50">
+                <button type="button" onClick={addAllInState} className="w-full text-left px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-600/20 sticky top-0 bg-slate-800">
+                  + Add all {countiesInState.length} in {stateByFips[activeState]?.name}
                 </button>
                 {countiesInState.map((c) => {
                   const on = selSet.has(c.fips);
                   return (
                     <button key={c.fips} type="button" onClick={() => (on ? removeCounty(c.fips) : addCounty(c))}
-                      className="flex w-full justify-between px-3 py-1.5 text-sm text-left hover:bg-indigo-600/30">
+                      className={`flex w-full justify-between px-3 py-1.5 text-sm text-left ${on ? 'bg-indigo-600/25 text-indigo-100' : 'hover:bg-slate-700/50'}`}>
                       <span>{on ? '✓ ' : ''}{c.name}</span><span className="text-slate-500">{c.fips}</span>
                     </button>
                   );
