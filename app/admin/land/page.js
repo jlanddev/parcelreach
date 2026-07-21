@@ -4933,7 +4933,9 @@ export default function LandLeadsAdminPage() {
             <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
               {stableOrder(
                 boardLeads
-                  .filter(l => l.source !== 'subdivision')
+                  /* PPC Inflow is the unified working tab: it now includes subdivision /
+                     OM-Search inflow-stage leads too (they also remain in the Subdivision
+                     Inflow tab as a filtered view). */
                   .filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })())
                   .filter(l => leadMatchesSearch(l, ppcSearch))
                   .filter(l => !pipelineMapped || l.map_uploaded)
