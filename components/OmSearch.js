@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import ParcelMiniMap from '@/components/ParcelMiniMap';
+import { US_STATES, abbrByFips, stateByFips } from '@/lib/usStates';
 
 // OM Search: on-market land search over the Land Portal v2 proxy.
 // - Search is FREE (filter pool). Results show property identity + a View-listing link.
@@ -10,11 +11,12 @@ import ParcelMiniMap from '@/components/ParcelMiniMap';
 //   Geometry/detail is metered (~7c once the small daily pool is spent) and cached
 //   permanently by property_id, so each parcel costs at most one fetch ever.
 
+// The hot markets. California (San Bernardino, Los Angeles) is deliberately
+// excluded from the "1 yr STR" preset: CA's Subdivision Map Act makes the split
+// model impractical. They can still be added manually via the picker.
 const HOT_COUNTIES = [
   { fips: '04005', label: 'Coconino, AZ' },
   { fips: '04015', label: 'Mohave, AZ' },
-  { fips: '06071', label: 'San Bernardino, CA' },
-  { fips: '06037', label: 'Los Angeles, CA' },
   { fips: '08093', label: 'Park, CO' },
   { fips: '08023', label: 'Costilla, CO' },
   { fips: '37039', label: 'Cherokee, NC' },
@@ -24,6 +26,10 @@ const HOT_COUNTIES = [
   { fips: '47153', label: 'Sequatchie, TN' },
   { fips: '47123', label: 'Monroe, TN' },
 ];
+
+// Saved-search presets. "1 yr STR" is the default on tab open, and is what the
+// NL bar's "hot markets" resolves to.
+const PRESETS = [{ id: '1yr-str', label: '1 yr STR', counties: HOT_COUNTIES }];
 
 const num = (v) => (v === '' || v === null || v === undefined ? undefined : Number(v));
 const money = (c) => `$${(c / 100).toFixed(2)}`;
@@ -44,9 +50,12 @@ function acreageFlag(d) {
 }
 
 export default function OmSearch() {
-  const [countyDict, setCountyDict] = useState({});
+  const [countyDict, setCountyDict] = useState({});      // fips -> "Name, AB"
+  const [countyList, setCountyList] = useState([]);      // [{fips,name,stateFips,abbr,label}]
+  const [activeState, setActiveState] = useState('');    // state FIPS prefix chosen in the cascade
+  const [stateQuery, setStateQuery] = useState('');
   const [countyQuery, setCountyQuery] = useState('');
-  const [selected, setSelected] = useState([]);
+  const [selected, setSelected] = useState(PRESETS[0].counties); // default: 1 yr STR preset
   const [status, setStatus] = useState('for_sale');
   const [daysWindow, setDaysWindow] = useState('');
   const [vacantOnly, setVacantOnly] = useState(true);           // default ON: land, no structures
@@ -76,7 +85,12 @@ export default function OmSearch() {
   useEffect(() => {
     let live = true;
     fetch('/api/landportal/counties').then((r) => r.json())
-      .then((d) => { if (live && d.ok) setCountyDict(Object.fromEntries(d.counties.map((c) => [c.fips, `${c.name}, ${c.state_fips}`]))); })
+      .then((d) => {
+        if (!live || !d.ok) return;
+        const list = d.counties.map((c) => { const abbr = abbrByFips[c.state_fips] || c.state_fips; return { fips: c.fips, name: c.name, stateFips: c.state_fips, abbr, label: `${c.name}, ${abbr}` }; });
+        setCountyList(list);
+        setCountyDict(Object.fromEntries(list.map((c) => [c.fips, c.label])));
+      })
       .catch(() => {});
     // seed the daily spend/pool indicator (empty quote spends nothing)
     fetch('/api/landportal/hydrate/quote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: [] }) })
@@ -85,17 +99,27 @@ export default function OmSearch() {
     return () => { live = false; };
   }, []);
 
-  const countyMatches = useMemo(() => {
-    const q = countyQuery.trim().toLowerCase();
-    if (!q) return [];
-    const sel = new Set(selected.map((s) => s.fips));
-    return Object.entries(countyDict)
-      .filter(([fips, name]) => !sel.has(fips) && (name.toLowerCase().includes(q) || fips.includes(q)))
-      .slice(0, 8).map(([fips, name]) => ({ fips, label: name }));
-  }, [countyQuery, countyDict, selected]);
+  // States that actually have counties in the dictionary, filtered by the typed query.
+  const stateMatches = useMemo(() => {
+    const present = new Set(countyList.map((c) => c.stateFips));
+    const q = stateQuery.trim().toLowerCase();
+    return US_STATES.filter((s) => present.has(s.fips) && (!q || s.name.toLowerCase().includes(q) || s.abbr.toLowerCase() === q));
+  }, [countyList, stateQuery]);
 
-  const addCounty = (c) => { setSelected((s) => (s.some((x) => x.fips === c.fips) ? s : [...s, c])); setCountyQuery(''); };
+  // Counties in the chosen state, filtered by the county search box.
+  const countiesInState = useMemo(() => {
+    if (!activeState) return [];
+    const q = countyQuery.trim().toLowerCase();
+    return countyList
+      .filter((c) => c.stateFips === activeState && (!q || c.name.toLowerCase().includes(q) || c.fips.includes(q)))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [countyList, activeState, countyQuery]);
+
+  const selSet = useMemo(() => new Set(selected.map((s) => s.fips)), [selected]);
+  const addCounty = (c) => setSelected((s) => (s.some((x) => x.fips === c.fips) ? s : [...s, { fips: c.fips, label: c.label }]));
   const removeCounty = (fips) => setSelected((s) => s.filter((x) => x.fips !== fips));
+  const addAllInState = () => setSelected((s) => { const have = new Set(s.map((x) => x.fips)); return [...s, ...countiesInState.filter((c) => !have.has(c.fips)).map((c) => ({ fips: c.fips, label: c.label }))]; });
+  const loadPreset = (preset) => setSelected(preset.counties);
 
   const buildParams = () => {
     const p = { fips: selected.map((s) => s.fips) };
@@ -128,7 +152,8 @@ export default function OmSearch() {
 
   const clearAll = () => {
     setResult(null); setError(null); setQuote(null); setReceipt(null); setDetails({});
-    setSelected([]); setStatus('for_sale'); setDaysWindow(''); setVacantOnly(true);
+    setSelected([]); setActiveState(''); setStateQuery(''); setCountyQuery('');
+    setStatus('for_sale'); setDaysWindow(''); setVacantOnly(true);
     setAcresMin(30); setAcresMax(60); setFrontageMin(''); setPriceMin(''); setPriceMax(''); setPpaMin(''); setPpaMax('');
   };
 
@@ -191,34 +216,73 @@ export default function OmSearch() {
 
       {/* Filter panel */}
       <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-4 space-y-4">
-        <div>
-          <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Counties</label>
-          <div className="flex flex-wrap gap-1.5 mb-2">
-            {HOT_COUNTIES.map((c) => {
-              const on = selected.some((s) => s.fips === c.fips);
-              return (
-                <button key={c.fips} type="button" onClick={() => (on ? removeCounty(c.fips) : addCounty(c))}
-                  className={`px-2 py-1 rounded-full text-[11px] border ${on ? 'bg-indigo-600/40 border-indigo-500 text-indigo-100' : 'bg-slate-800 border-slate-600 text-slate-300 hover:border-slate-500'}`}>
-                  {on ? '✓ ' : '+ '}{c.label}
-                </button>
-              );
-            })}
-          </div>
+        {/* Saved-search presets */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Saved</span>
+          {PRESETS.map((preset) => (
+            <button key={preset.id} type="button" onClick={() => loadPreset(preset)}
+              className="px-3 py-1 rounded-full text-xs border border-indigo-500/50 bg-indigo-600/20 text-indigo-200 hover:bg-indigo-600/40">
+              {preset.label} <span className="text-indigo-400">({preset.counties.length})</span>
+            </button>
+          ))}
+        </div>
+
+        {/* State -> County cascade. Pick a state, add its counties, switch states and add more. */}
+        <div className="grid sm:grid-cols-2 gap-3">
           <div className="relative">
-            <input value={countyQuery} onChange={(e) => setCountyQuery(e.target.value)} placeholder="Search any county by name or FIPS"
+            <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">State</label>
+            <input value={activeState ? (stateByFips[activeState]?.name || '') : stateQuery}
+              onChange={(e) => { setActiveState(''); setStateQuery(e.target.value); }}
+              onFocus={() => { setActiveState(''); setStateQuery(''); }}
+              placeholder="Type a state"
               className="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm placeholder-slate-500 focus:outline-none focus:border-indigo-500" />
-            {countyMatches.length > 0 && (
-              <div className="absolute z-20 mt-1 left-0 right-0 bg-slate-800 border border-slate-600 rounded-md shadow-xl max-h-56 overflow-y-auto">
-                {countyMatches.map((c) => (
-                  <button key={c.fips} type="button" onClick={() => addCounty(c)} className="flex w-full justify-between px-3 py-1.5 text-sm text-left hover:bg-indigo-600/30">
-                    <span>{c.label}</span><span className="text-slate-500">{c.fips}</span>
+            {!activeState && stateMatches.length > 0 && (
+              <div className="absolute z-30 mt-1 left-0 right-0 bg-slate-800 border border-slate-600 rounded-md shadow-xl max-h-60 overflow-y-auto">
+                {stateMatches.map((s) => (
+                  <button key={s.fips} type="button" onClick={() => { setActiveState(s.fips); setStateQuery(''); setCountyQuery(''); }}
+                    className="flex w-full justify-between px-3 py-1.5 text-sm text-left hover:bg-indigo-600/30">
+                    <span>{s.name}</span><span className="text-slate-500">{s.abbr}</span>
                   </button>
                 ))}
               </div>
             )}
           </div>
-          {selected.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mt-2">
+          <div className="relative">
+            <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">County</label>
+            <input value={countyQuery} onChange={(e) => setCountyQuery(e.target.value)}
+              disabled={!activeState}
+              placeholder={activeState ? `Search counties in ${stateByFips[activeState]?.abbr}` : 'Pick a state first'}
+              className="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm placeholder-slate-500 focus:outline-none focus:border-indigo-500 disabled:opacity-50" />
+            {activeState && (
+              <div className="absolute z-20 mt-1 left-0 right-0 bg-slate-800 border border-slate-600 rounded-md shadow-xl max-h-60 overflow-y-auto">
+                <button type="button" onClick={addAllInState} className="w-full text-left px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-600/20 border-b border-slate-700">
+                  Add all {countiesInState.length} in {stateByFips[activeState]?.name}
+                </button>
+                {countiesInState.map((c) => {
+                  const on = selSet.has(c.fips);
+                  return (
+                    <button key={c.fips} type="button" onClick={() => (on ? removeCounty(c.fips) : addCounty(c))}
+                      className="flex w-full justify-between px-3 py-1.5 text-sm text-left hover:bg-indigo-600/30">
+                      <span>{on ? '✓ ' : ''}{c.name}</span><span className="text-slate-500">{c.fips}</span>
+                    </button>
+                  );
+                })}
+                {countiesInState.length === 0 && <div className="px-3 py-2 text-xs text-slate-500">No match</div>}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Selected counties, across states */}
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Selected ({selected.length})</span>
+            {selected.length > 0 && <button type="button" onClick={() => setSelected([])} className="text-[11px] text-slate-400 hover:text-white">Remove all</button>}
+          </div>
+          {selected.length === 0 ? (
+            <p className="text-xs text-slate-500">No counties selected. Load a preset or pick a state above.</p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
               {selected.map((c) => (
                 <span key={c.fips} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-200 text-[11px] border border-indigo-500/40">
                   {c.label}<button type="button" onClick={() => removeCounty(c.fips)} className="text-indigo-300 hover:text-white">&times;</button>
@@ -392,8 +456,11 @@ export default function OmSearch() {
                 return (
                   <div key={p.property_id || `${p.fips}-${p.apn}`} className="flex gap-3 rounded-lg border border-slate-700 bg-slate-900/40 p-2.5">
                     <div className="flex-shrink-0">
-                      {d ? <ParcelMiniMap geometry={d.geometry} width={200} height={130} />
-                         : <div className="w-[200px] h-[130px] rounded-md bg-slate-800/70 border border-dashed border-slate-700 flex items-center justify-center text-[11px] text-slate-500 text-center px-2">Map on Run detailed</div>}
+                      {/* Prefer the exact Land Portal boundary once hydrated; otherwise
+                          auto-load a free Regrid boundary by APN (shows where covered). */}
+                      {d?.geometry
+                        ? <ParcelMiniMap geometry={d.geometry} width={200} height={130} />
+                        : <ParcelMiniMap lookup={{ apn: (p.apn || '').trim(), fips: p.fips, county: (countyDict[p.fips] || '').split(',')[0] }} width={200} height={130} />}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-2">

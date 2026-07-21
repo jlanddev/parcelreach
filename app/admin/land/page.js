@@ -3924,7 +3924,7 @@ export default function LandLeadsAdminPage() {
             // with arrow chevrons between them to visualize lead flow.
             const PIPELINE_TABS = ['ppc-inflow', 'appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'];
             const allTabs = isAdmin
-              ? ['shared-calendar', 'activity-log', 'om-search', ...PIPELINE_TABS, 'follow-up', 'lost', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners']
+              ? ['shared-calendar', 'activity-log', ...PIPELINE_TABS, 'follow-up', 'lost', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search']
               : ['shared-calendar', ...PIPELINE_TABS, 'follow-up', 'lost', 'subdivision-inflow', 'all-leads'];
             return allTabs.map((tab, i) => {
               const prevTab = allTabs[i - 1];
