@@ -369,9 +369,13 @@ export default function OmSearch() {
 
           {/* Receipt */}
           {receipt && (
-            <div className="rounded-lg border border-slate-600 bg-slate-800/60 px-4 py-2 text-xs text-slate-300">
+            <div className={`rounded-lg border px-4 py-2 text-xs ${receipt.stoppedShort ? 'border-amber-500/40 bg-amber-500/10 text-amber-200' : 'border-slate-600 bg-slate-800/60 text-slate-300'}`}>
               Fetched {receipt.fetched} {'·'} spent {money(receipt.spentCents)} {'·'} pool {receipt.poolLeft}/8 left today
-              {receipt.stoppedShort && <span className="text-amber-300"> {'·'} stopped early (daily pool/tokens reached)</span>}
+              {receipt.stoppedShort && (
+                <div className="mt-1 text-amber-200">
+                  Stopped early: {receipt.stopReason || 'daily pool and tokens reached'}. Load export tokens in Land Portal to fetch more today, or try tomorrow (the free pool resets).
+                </div>
+              )}
             </div>
           )}
 
