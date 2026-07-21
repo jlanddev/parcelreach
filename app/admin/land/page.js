@@ -1379,6 +1379,29 @@ export default function LandLeadsAdminPage() {
     }
   };
 
+  // Auto-generate the parcel map (satellite + boundary) from the lead's APN and
+  // save it as the lead's map, flagging it Mapped. No manual screenshot needed.
+  const [mapGenerating, setMapGenerating] = useState(false);
+  const handleGenerateMap = async (lead) => {
+    if (!lead?.parcel_id) { showToast('This lead has no parcel ID to map from', 'error'); return; }
+    setMapGenerating(true);
+    try {
+      const res = await fetch('/api/lead/save-map', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadId: lead.id, apn: lead.parcel_id, state: lead.property_state || lead.state, county: lead.property_county || lead.county }),
+      });
+      const d = await res.json();
+      if (!res.ok || !d.ok) throw new Error(d.error || 'Could not generate map');
+      setAllLeads(prev => prev.map(l => (l.id === lead.id ? { ...l, map_uploaded: true, map_image_url: d.url } : l)));
+      if (selectedLead && selectedLead.id === lead.id) setSelectedLead(prev => ({ ...prev, map_uploaded: true, map_image_url: d.url }));
+      showToast('Map generated and saved', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setMapGenerating(false);
+    }
+  };
+
   // Toggle hammer mode on a lead. When ON, every completed touch auto-schedules
   // tomorrow's callback regardless of bucket cadence.
   const toggleHammerMode = async (leadId) => {
@@ -6618,6 +6641,17 @@ export default function LandLeadsAdminPage() {
                     <img src={selectedLead.map_image_url} alt="Property map" className="w-full max-h-64 object-contain rounded-lg border border-slate-700" />
                   </a>
                 )}
+                {/* Auto-generate the parcel map from the APN (no manual screenshot). */}
+                <button
+                  type="button"
+                  onClick={() => handleGenerateMap(selectedLead)}
+                  disabled={mapGenerating || !selectedLead.parcel_id}
+                  title={!selectedLead.parcel_id ? 'Needs a parcel ID' : 'Generate a satellite + boundary map from the parcel and save it'}
+                  className="w-full mb-3 px-3 py-2 rounded-lg bg-emerald-600/90 hover:bg-emerald-600 disabled:opacity-40 text-white text-sm font-semibold inline-flex items-center justify-center gap-2"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" /></svg>
+                  {mapGenerating ? 'Generating map...' : selectedLead.map_uploaded ? 'Regenerate map from parcel' : 'Save map from parcel'}
+                </button>
                 <label className="block">
                   <span className="sr-only">Upload map screenshot</span>
                   <input
