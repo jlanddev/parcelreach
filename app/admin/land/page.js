@@ -6574,6 +6574,42 @@ export default function LandLeadsAdminPage() {
                 </div>
               </div>
 
+              {/* Listing agent contact. For subdivision / on-market leads the person
+                  we reach out to is the property's real estate agent, not the owner.
+                  Agent phone/email drive messaging (they set the lead's phone/email). */}
+              {selectedLead.source === 'subdivision' && (
+                <div className="rounded-lg border border-teal-700/40 bg-teal-900/10 p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs font-bold uppercase tracking-wide text-teal-300">Listing Agent</span>
+                    <span className="text-[11px] text-slate-500">who we contact{selectedLead.form_data?.origin === 'om_search' ? ' (on-market)' : ''}</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Agent Name</label>
+                      <input type="text" value={selectedLead.form_data?.agentName || ''}
+                        onChange={(e) => setSelectedLead({ ...selectedLead, form_data: { ...(selectedLead.form_data || {}), agentName: e.target.value } })}
+                        placeholder="Agent name"
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-teal-500" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Agent Phone</label>
+                      <input type="tel" value={selectedLead.form_data?.agentPhone || selectedLead.phone || ''}
+                        onChange={(e) => setSelectedLead({ ...selectedLead, phone: e.target.value, form_data: { ...(selectedLead.form_data || {}), agentPhone: e.target.value } })}
+                        placeholder="Agent phone"
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-teal-500" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Agent Email</label>
+                      <input type="email" value={selectedLead.form_data?.agentEmail || selectedLead.email || ''}
+                        onChange={(e) => setSelectedLead({ ...selectedLead, email: e.target.value, form_data: { ...(selectedLead.form_data || {}), agentEmail: e.target.value } })}
+                        placeholder="Agent email"
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-teal-500" />
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-2">Owner: {selectedLead.form_data?.listing_owner || selectedLead.full_name || selectedLead.name}. Texts and emails go to the agent phone/email above.</p>
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-semibold text-slate-400 mb-1">Address</label>
                 <input
