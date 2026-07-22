@@ -156,21 +156,45 @@ export default function OmSearch() {
   const bigParent = ((num(acresMin) ?? 30) + (num(acresMax) ?? 60)) / 2 >= 20;
   const exitBand = bigParent ? [5, 10] : [1, 3];
 
+  // Merge per-county deal-finder responses into one result (dedupe listings).
+  const mergeDeals = (list) => {
+    const counties = list.flatMap((r) => r.counties || []);
+    const seen = new Set();
+    const properties = [];
+    for (const r of list) for (const p of (r.properties || [])) {
+      const id = String(p.property_id ?? `${p.fips}:${p.apn}`);
+      if (!seen.has(id)) { seen.add(id); properties.push(p); }
+    }
+    return { ok: true, counties, properties, count: properties.length, params: list[0].params, meta: list[list.length - 1].meta };
+  };
+
   const runDealFinder = async () => {
     setError(null); setQuote(null); setReceipt(null);
     if (!selected.length) { setError({ msg: 'Pick at least one county to search.' }); return; }
     setRunning(true); setResult(null);
     try {
-      const res = await fetch('/api/landportal/deal-finder', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fips: selected.map((s) => s.fips), parentMin: num(acresMin), parentMax: num(acresMax), soldDays: num(soldDays), ratio: Number(ratio) }),
-      });
-      const text = await res.text();
-      let data;
-      try { data = JSON.parse(text); }
-      catch { setError({ msg: 'Deal finder took too long across that many counties. Try fewer counties at a time.' }); return; }
-      if (!res.ok || !data.ok) setError({ code: data.code, msg: data.error || 'Deal finder failed.' });
-      else setResult(data);
+      const cos = selected.map((s) => s.fips);
+      const BATCH = 8; // waves of 8 so LandPortal is not slammed at high county counts
+      const results = [];
+      for (let i = 0; i < cos.length; i += BATCH) {
+        const wave = await Promise.all(cos.slice(i, i + BATCH).map(async (fips) => {
+          try {
+            const res = await fetch('/api/landportal/deal-finder', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ fips: [fips], parentMin: num(acresMin), parentMax: num(acresMax), soldDays: num(soldDays), ratio: Number(ratio) }),
+            });
+            const d = JSON.parse(await res.text());
+            return (res.ok && d.ok) ? d : null;
+          } catch { return null; }
+        }));
+        results.push(...wave);
+        const ok = results.filter(Boolean);
+        if (ok.length) setResult(mergeDeals(ok)); // stream results in wave by wave
+      }
+      const ok = results.filter(Boolean);
+      if (!ok.length) { setError({ msg: 'Deal finder failed. Try again.' }); return; }
+      const failed = results.length - ok.length;
+      setResult({ ...mergeDeals(ok), warnings: failed ? [`${failed} ${failed === 1 ? 'county' : 'counties'} timed out, run again to include them`] : [] });
     } catch (e) { setError({ msg: e.message || 'Deal finder failed.' }); }
     finally { setRunning(false); }
   };
