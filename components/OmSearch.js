@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ParcelMiniMap from '@/components/ParcelMiniMap';
 import { US_STATES, abbrByFips, stateByFips } from '@/lib/usStates';
 
@@ -106,6 +106,17 @@ export default function OmSearch() {
       .catch(() => {});
     return () => { live = false; };
   }, []);
+
+  // Persist the selected counties so a reload / remount never loses them.
+  const persistReady = useRef(false);
+  useEffect(() => {
+    try { const s = sessionStorage.getItem('om_selected'); if (s) { const p = JSON.parse(s); if (Array.isArray(p) && p.length) setSelected(p); } } catch { /* ignore */ }
+    persistReady.current = true;
+  }, []);
+  useEffect(() => {
+    if (!persistReady.current) return;
+    try { sessionStorage.setItem('om_selected', JSON.stringify(selected)); } catch { /* ignore */ }
+  }, [selected]);
 
   // States for the State select. Falls back to ALL states if the county
   // dictionary has not loaded yet, so the dropdown is never empty.
@@ -585,7 +596,12 @@ export default function OmSearch() {
             </div>
           ) : (
             <div className="space-y-2">
-              {rows.map((p) => {
+              {rows.length > 75 && (
+                <div className="text-xs text-slate-400 rounded-md bg-slate-800/60 border border-slate-700 px-3 py-1.5">
+                  Showing the first 75 of {rows.length.toLocaleString()}. Narrow the filters (tighter buy box, fewer counties, or a frontage minimum) to focus on the best deals.
+                </div>
+              )}
+              {rows.slice(0, 75).map((p) => {
                 const d = details[String(p.property_id)];
                 const flag = d ? acreageFlag(d) : null;
                 return (
