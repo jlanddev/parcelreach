@@ -199,22 +199,27 @@ export default function OmSearch() {
     setRunning(true); setResult(null);
     try {
       const cos = selected.map((s) => s.fips);
-      const BATCH = 8; // waves of 8 so LandPortal is not slammed at high county counts
+      const BATCH = 5; // small waves so LandPortal is not throttled at high county counts
       const results = [];
+      let done = 0;
       for (let i = 0; i < cos.length; i += BATCH) {
         const wave = await Promise.all(cos.slice(i, i + BATCH).map(async (fips) => {
+          const ctrl = new AbortController();
+          const to = setTimeout(() => ctrl.abort(), 28000); // never let one county freeze the run
           try {
             const res = await fetch('/api/landportal/deal-finder', {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ fips: [fips], parentMin: num(acresMin), parentMax: num(acresMax), soldDays: num(soldDays), ratio: Number(ratio), frontageMin: num(frontageMin) }),
+              signal: ctrl.signal,
             });
             const d = JSON.parse(await res.text());
             return (res.ok && d.ok) ? d : null;
-          } catch { return null; }
+          } catch { return null; } finally { clearTimeout(to); }
         }));
         results.push(...wave);
+        done += wave.length;
         const ok = results.filter(Boolean);
-        if (ok.length) setResult(mergeDeals(ok)); // stream results in wave by wave
+        if (ok.length) setResult({ ...mergeDeals(ok), progress: `${done}/${cos.length} counties` }); // stream in wave by wave
       }
       const ok = results.filter(Boolean);
       if (!ok.length) { setError({ msg: 'Deal finder failed. Try again.' }); return; }
