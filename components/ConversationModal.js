@@ -30,15 +30,20 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
   const name = lead?.owner_name || lead?.name || lead?.full_name || 'Lead';
 
   // Smart message suggestions, merge-filled from the lead card.
-  const firstName = (lead?.name || lead?.full_name || lead?.owner_name || 'there').trim().split(/\s+/)[0];
+  // On-market (subdivision) leads were sourced by us from a listing; the owner
+  // did NOT submit their property, so the outreach is buyer-side cold contact
+  // to the LISTING AGENT, not "the land you wanted us to check out."
+  const isOnMarket = lead?.source === 'subdivision';
+  const agentFirst = (lead?.form_data?.agentName || '').trim().split(/\s+/)[0];
+  // On-market: greet the agent by first name (or a neutral "there" until entered),
+  // never the owner/company. Inbound: greet the seller/owner.
+  const firstName = isOnMarket
+    ? (agentFirst || 'there')
+    : (lead?.name || lead?.full_name || lead?.owner_name || 'there').trim().split(/\s+/)[0];
   const county = lead?.property_county || lead?.county || lead?.form_data?.propertyCounty || lead?.form_data?.county || 'your area';
   const repName = (currentUserName || '').trim().split(/\s+/)[0];
   const intro = repName ? `this is ${repName} with Haven Ground` : `this is the team at Haven Ground`;
   const leadStatus = (lead?.pipeline_status || lead?.status || '').toUpperCase();
-  // On-market (subdivision) leads were sourced by us from a listing; the owner
-  // did NOT submit their property, so the outreach is buyer-side cold contact
-  // (often via the agent), not "the land you wanted us to check out."
-  const isOnMarket = lead?.source === 'subdivision';
   const suggestions = isOnMarket ? {
     first: { label: 'First touch', text: `Hey ${firstName}, ${intro}. I came across the ${county} property you have listed and we're actively buying land in the area. Would you be open to a cash offer? We close quick and easy.` },
     checkin: { label: 'Check-in', text: `Hey ${firstName}, following up on the ${county} property. Is it still available? We're a serious buyer and would love to put an offer together if you're open to it.` },
