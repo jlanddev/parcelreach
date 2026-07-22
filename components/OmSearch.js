@@ -55,6 +55,9 @@ export default function OmSearch() {
   const [activeState, setActiveState] = useState('');    // state FIPS prefix chosen in the cascade
   const [countyQuery, setCountyQuery] = useState('');
   const [selected, setSelected] = useState(PRESETS[0].counties); // default: 1 yr STR preset
+  const [mode, setMode] = useState('listings');          // 'listings' | 'deals'
+  const [soldDays, setSoldDays] = useState(730);          // deal finder: sold comps window
+  const [ratio, setRatio] = useState(0.5);               // deal finder: buy at this fraction of sold PPA
   const [status, setStatus] = useState('for_sale');
   const [daysWindow, setDaysWindow] = useState('');
   const [vacantOnly, setVacantOnly] = useState(true);           // default ON: land, no structures
@@ -148,6 +151,27 @@ export default function OmSearch() {
     finally { setRunning(false); }
   };
 
+  // Exit (child) lot band derived from the parent band, per the rule of thumb:
+  // 5-20 ac parents -> 1-3 ac lots, 20+ ac -> 5-10 ac lots.
+  const bigParent = ((num(acresMin) ?? 30) + (num(acresMax) ?? 60)) / 2 >= 20;
+  const exitBand = bigParent ? [5, 10] : [1, 3];
+
+  const runDealFinder = async () => {
+    setError(null); setQuote(null); setReceipt(null);
+    if (!selected.length) { setError({ msg: 'Pick at least one county to search.' }); return; }
+    setRunning(true); setResult(null);
+    try {
+      const res = await fetch('/api/landportal/deal-finder', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fips: selected.map((s) => s.fips), parentMin: num(acresMin), parentMax: num(acresMax), soldDays: num(soldDays), ratio: Number(ratio) }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) setError({ code: data.code, msg: data.error || 'Deal finder failed.' });
+      else setResult(data);
+    } catch (e) { setError({ msg: e.message || 'Deal finder failed.' }); }
+    finally { setRunning(false); }
+  };
+
   const clearAll = () => {
     setResult(null); setError(null); setQuote(null); setReceipt(null); setDetails({});
     setSelected([]); setActiveState(''); setCountyQuery('');
@@ -234,6 +258,14 @@ export default function OmSearch() {
 
       {/* Filter panel */}
       <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-4 space-y-4">
+        {/* Mode: plain listing search vs deal finder (buy parent at a fraction of sold child PPA) */}
+        <div className="flex gap-1 w-fit rounded-lg border border-slate-700 bg-slate-800 p-0.5">
+          {[['listings', 'Listings'], ['deals', 'Deal finder']].map(([v, lbl]) => (
+            <button key={v} type="button" onClick={() => { setMode(v); setResult(null); setError(null); }}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium ${mode === v ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:text-white'}`}>{lbl}</button>
+          ))}
+        </div>
+
         {/* Saved-search presets */}
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Saved</span>
@@ -299,45 +331,63 @@ export default function OmSearch() {
           )}
         </div>
 
-        <div className="flex flex-wrap items-end gap-4">
-          <div>
-            <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Market status</label>
-            <div className="flex gap-1">
-              {[['for_sale', 'For Sale'], ['sold', 'Sold'], ['off_market', 'Off Market']].map(([v, lbl]) => (
-                <button key={v} type="button" onClick={() => setStatus(v)}
-                  className={`px-3 py-1.5 rounded-md text-sm border ${status === v ? 'bg-indigo-600/40 border-indigo-500 text-indigo-100' : 'bg-slate-800 border-slate-600 text-slate-300'}`}>{lbl}</button>
-              ))}
-            </div>
-          </div>
-          {isMarket && (
+        {mode === 'listings' && (
+          <div className="flex flex-wrap items-end gap-4">
             <div>
-              <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">{status === 'sold' ? 'Sold within (days)' : 'Listed within last (days)'}</label>
-              <input type="number" value={daysWindow} onChange={(e) => setDaysWindow(e.target.value)} placeholder={status === 'sold' ? '365' : 'all active'} className="w-28 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
-              {status === 'for_sale' && <p className="text-[10px] text-slate-500 mt-1">Blank = all active listings</p>}
+              <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Market status</label>
+              <div className="flex gap-1">
+                {[['for_sale', 'For Sale'], ['sold', 'Sold'], ['off_market', 'Off Market']].map(([v, lbl]) => (
+                  <button key={v} type="button" onClick={() => setStatus(v)}
+                    className={`px-3 py-1.5 rounded-md text-sm border ${status === v ? 'bg-indigo-600/40 border-indigo-500 text-indigo-100' : 'bg-slate-800 border-slate-600 text-slate-300'}`}>{lbl}</button>
+                ))}
+              </div>
             </div>
-          )}
-          <label className="flex items-center gap-2 text-sm cursor-pointer select-none pb-1.5">
-            <input type="checkbox" checked={vacantOnly} onChange={(e) => setVacantOnly(e.target.checked)} className="accent-indigo-500 w-4 h-4" />
-            <span>Vacant land only <span className="text-slate-500 text-xs">(no structures)</span></span>
-          </label>
-        </div>
+            {isMarket && (
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">{status === 'sold' ? 'Sold within (days)' : 'Listed within last (days)'}</label>
+                <input type="number" value={daysWindow} onChange={(e) => setDaysWindow(e.target.value)} placeholder={status === 'sold' ? '365' : 'all active'} className="w-28 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
+                {status === 'for_sale' && <p className="text-[10px] text-slate-500 mt-1">Blank = all active listings</p>}
+              </div>
+            )}
+            <label className="flex items-center gap-2 text-sm cursor-pointer select-none pb-1.5">
+              <input type="checkbox" checked={vacantOnly} onChange={(e) => setVacantOnly(e.target.checked)} className="accent-indigo-500 w-4 h-4" />
+              <span>Vacant land only <span className="text-slate-500 text-xs">(no structures)</span></span>
+            </label>
+          </div>
+        )}
 
         <div className="flex flex-wrap items-end gap-4">
           <div>
-            <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Acreage</label>
+            <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">{mode === 'deals' ? 'Parent parcel size (acres)' : 'Acreage'}</label>
             <div className="flex items-center gap-1.5">
               <input type="number" value={acresMin} onChange={(e) => setAcresMin(e.target.value)} placeholder="min" className="w-24 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
               <span className="text-slate-500">to</span>
               <input type="number" value={acresMax} onChange={(e) => setAcresMax(e.target.value)} placeholder="max" className="w-24 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
             </div>
           </div>
-          <div>
-            <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Road frontage (ft, min)</label>
-            <input type="number" value={frontageMin} onChange={(e) => setFrontageMin(e.target.value)} placeholder="e.g. 800" className="w-32 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
-          </div>
+          {mode === 'listings' && (
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Road frontage (ft, min)</label>
+              <input type="number" value={frontageMin} onChange={(e) => setFrontageMin(e.target.value)} placeholder="e.g. 800" className="w-32 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
+            </div>
+          )}
         </div>
 
-        {isMarket && (
+        {mode === 'deals' && (
+          <div className="flex flex-wrap items-end gap-4 rounded-lg border border-emerald-700/40 bg-emerald-900/10 p-3">
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Sold comps window (days)</label>
+              <input type="number" value={soldDays} onChange={(e) => setSoldDays(e.target.value)} className="w-28 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Buy box (x sold PPA)</label>
+              <input type="number" step="0.05" value={ratio} onChange={(e) => setRatio(e.target.value)} className="w-24 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
+            </div>
+            <p className="text-xs text-slate-400 pb-1.5 max-w-md">Exit lots <span className="text-slate-200">{exitBand[0]}-{exitBand[1]} ac</span> (auto from parent size). Finds active parents priced at or under <span className="text-slate-200">{Math.round(Number(ratio) * 100)}%</span> of each county&rsquo;s median sold PPA for that lot band.</p>
+          </div>
+        )}
+
+        {mode === 'listings' && isMarket && (
           <div className="flex flex-wrap items-end gap-4">
             <div>
               <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">List price ($)</label>
@@ -359,12 +409,12 @@ export default function OmSearch() {
         )}
 
         <div className="flex items-center gap-3">
-          <button type="button" onClick={runSearch} disabled={running}
-            className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold">
-            {running ? 'Searching...' : 'Run search'}
+          <button type="button" onClick={mode === 'deals' ? runDealFinder : runSearch} disabled={running}
+            className={`px-4 py-2 rounded-lg disabled:opacity-50 text-white text-sm font-semibold ${mode === 'deals' ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-indigo-600 hover:bg-indigo-500'}`}>
+            {running ? (mode === 'deals' ? 'Finding deals...' : 'Searching...') : (mode === 'deals' ? 'Find deals' : 'Run search')}
           </button>
           <button type="button" onClick={clearAll} className="px-3 py-2 rounded-lg border border-slate-600 text-slate-300 text-sm hover:bg-slate-800">Clear</button>
-          <span className="text-xs text-slate-500">Search is free. Price and PPA apply to on-market listings only.</span>
+          <span className="text-xs text-slate-500">{mode === 'deals' ? 'Sold comps from Land Portal, filter-pool only, free.' : 'Search is free. Price and PPA apply to on-market listings only.'}</span>
         </div>
       </div>
 
@@ -384,9 +434,23 @@ export default function OmSearch() {
 
       {result && !result.suspicious && (
         <div className="space-y-3">
+          {/* Deal-finder benchmark banner (per county) */}
+          {result.counties && (
+            <div className="rounded-lg border border-emerald-600/40 bg-emerald-900/10 p-3 space-y-1.5">
+              <div className="text-xs font-bold uppercase tracking-wide text-emerald-300">Buy box per county (median sold PPA of {result.params?.parentMin >= 20 || ((result.params?.parentMin + result.params?.parentMax) / 2 >= 20) ? '5-10' : '1-3'} ac lots)</div>
+              <div className="flex flex-wrap gap-2">
+                {result.counties.map((c) => (
+                  <span key={c.fips} className="text-[11px] px-2 py-1 rounded bg-slate-800 border border-slate-700">
+                    <span className="text-slate-200">{countyDict[c.fips] || c.fips}</span>{': '}
+                    {c.soldCount ? <>sold ~${(c.medianPPA || 0).toLocaleString()}/ac{' '}<span className="text-emerald-300">→ buy ≤ ${(c.ceiling || 0).toLocaleString()}/ac</span>{' '}<span className="text-slate-500">({c.listingCount} match{c.listingCount === 1 ? '' : 'es'}, {c.soldCount} comps)</span></> : <span className="text-slate-500">no sold comps</span>}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
           {/* Results header + detailed controls */}
           <div className="flex flex-wrap items-center gap-3 text-sm">
-            <span className="font-semibold">{result.count?.toLocaleString()} {isMarket ? 'listings' : 'parcels'}</span>
+            <span className="font-semibold">{result.count?.toLocaleString()} {result.counties ? 'deals' : (isMarket ? 'listings' : 'parcels')}</span>
             {result.raw_count != null && result.raw_count !== result.count && <span className="text-slate-500 text-xs">({result.raw_count.toLocaleString()} before dedupe)</span>}
             {result.cached && <span className="px-2 py-0.5 rounded-full bg-slate-700 text-slate-300 text-[11px]">cached, no quota used</span>}
             {result.warnings?.includes('overflow') && <span className="text-amber-300 text-xs">Over the result cap. Narrow your filters.</span>}
