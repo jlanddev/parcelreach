@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { clockTime } from '@/lib/format';
+import { playSwoosh } from '@/lib/sound';
 import { OFFER_DIRECTIONS, GENERAL_DIRECTIONS } from '@/lib/followups';
 
 const LEAN_LABEL = Object.fromEntries([...OFFER_DIRECTIONS, ...GENERAL_DIRECTIONS].map((d) => [d.value, d.label]));
@@ -164,6 +165,7 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
     const tempId = `tmp-${Date.now()}-${Math.round(Math.random() * 1e6)}`;
     setOptimistic((o) => [...o, { tempId, content: text, status: 'sending', created_at: new Date().toISOString() }]);
     setDraft('');
+    playSwoosh();
     setSending(true);
     try {
       await postSend(text);

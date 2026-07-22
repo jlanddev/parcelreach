@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { timeAgo } from '@/lib/format';
+import { playSwoosh } from '@/lib/sound';
 
 /**
  * Collaborative notes thread for one lead (Monday-style). Shows all authors'
@@ -144,6 +145,7 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
       });
       if (error) throw error;
       setDraft('');
+      playSwoosh();
 
       // Fire a notification (bell + email) to each tagged teammate.
       for (const uid of mentioned) {
