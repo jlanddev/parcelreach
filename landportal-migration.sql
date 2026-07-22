@@ -26,3 +26,10 @@ create table if not exists landportal_quota (
   tokens_spent_cents int default 0,
   fetches            int default 0
 );
+
+-- Permanent Regrid parcel-boundary cache (each parcel billed once, cached forever).
+create table if not exists regrid_geometry_cache (
+  cache_key  text primary key,
+  geometry   jsonb,
+  fetched_at timestamptz default now()
+);
