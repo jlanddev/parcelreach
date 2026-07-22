@@ -181,7 +181,7 @@ export default function OmSearch() {
           try {
             const res = await fetch('/api/landportal/deal-finder', {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ fips: [fips], parentMin: num(acresMin), parentMax: num(acresMax), soldDays: num(soldDays), ratio: Number(ratio) }),
+              body: JSON.stringify({ fips: [fips], parentMin: num(acresMin), parentMax: num(acresMax), soldDays: num(soldDays), ratio: Number(ratio), frontageMin: num(frontageMin) }),
             });
             const d = JSON.parse(await res.text());
             return (res.ok && d.ok) ? d : null;
@@ -401,16 +401,23 @@ export default function OmSearch() {
         </div>
 
         {mode === 'deals' && (
-          <div className="flex flex-wrap items-end gap-4 rounded-lg border border-emerald-700/40 bg-emerald-900/10 p-3">
-            <div>
-              <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Sold comps window (days)</label>
-              <input type="number" value={soldDays} onChange={(e) => setSoldDays(e.target.value)} className="w-28 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
+          <div className="rounded-lg border border-emerald-700/40 bg-emerald-900/10 p-3 space-y-3">
+            <div className="flex flex-wrap items-end gap-4">
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Sold comps window (days)</label>
+                <input type="number" value={soldDays} onChange={(e) => setSoldDays(e.target.value)} className="w-28 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Road frontage (ft, min)</label>
+                <input type="number" value={frontageMin} onChange={(e) => setFrontageMin(e.target.value)} placeholder="any" className="w-28 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
+              </div>
+              <div className="flex-1 min-w-[220px]">
+                <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Buy box: pay up to <span className="text-emerald-300">{Math.round(Number(ratio) * 100)}%</span> of sold PPA</label>
+                <input type="range" min="0.3" max="1" step="0.05" value={ratio} onChange={(e) => setRatio(e.target.value)} className="w-full accent-emerald-500" />
+                <div className="flex justify-between text-[10px] text-slate-500"><span>30%</span><span>50%</span><span>65%</span><span>100%</span></div>
+              </div>
             </div>
-            <div>
-              <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Buy box (x sold PPA)</label>
-              <input type="number" step="0.05" value={ratio} onChange={(e) => setRatio(e.target.value)} className="w-24 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
-            </div>
-            <p className="text-xs text-slate-400 pb-1.5 max-w-md">Exit lots <span className="text-slate-200">{exitBand[0]}-{exitBand[1]} ac</span> (auto from parent size). Finds active parents priced at or under <span className="text-slate-200">{Math.round(Number(ratio) * 100)}%</span> of each county&rsquo;s median sold PPA for that lot band.</p>
+            <p className="text-xs text-slate-400 max-w-2xl">Exit lots <span className="text-slate-200">{exitBand[0]}-{exitBand[1]} ac</span> (auto from parent size). Finds active vacant parents priced at or under <span className="text-slate-200">{Math.round(Number(ratio) * 100)}%</span> of each county&rsquo;s median sold PPA for that lot band.</p>
           </div>
         )}
 
