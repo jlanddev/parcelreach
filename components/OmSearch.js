@@ -165,7 +165,10 @@ export default function OmSearch() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fips: selected.map((s) => s.fips), parentMin: num(acresMin), parentMax: num(acresMax), soldDays: num(soldDays), ratio: Number(ratio) }),
       });
-      const data = await res.json();
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); }
+      catch { setError({ msg: 'Deal finder took too long across that many counties. Try fewer counties at a time.' }); return; }
       if (!res.ok || !data.ok) setError({ code: data.code, msg: data.error || 'Deal finder failed.' });
       else setResult(data);
     } catch (e) { setError({ msg: e.message || 'Deal finder failed.' }); }
