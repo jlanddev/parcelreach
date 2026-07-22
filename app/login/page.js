@@ -107,13 +107,6 @@ function LoginContent() {
           >
             Sign In
           </button>
-          <button
-            type="button"
-            onClick={() => router.push('/signup')}
-            className="flex-1 py-2 px-4 rounded-md text-sm font-semibold transition-all text-slate-400 hover:text-white"
-          >
-            Sign Up
-          </button>
         </div>
 
         {error && (
