@@ -84,16 +84,22 @@ export default function OmSearch() {
   const [cap, setCap] = useState(50);
   const [daily, setDaily] = useState(null);                     // { spentCents, poolLeft }
 
+  const enrich = (counties) => counties.map((c) => { const abbr = abbrByFips[c.state_fips] || c.state_fips; return { fips: c.fips, name: c.name, stateFips: c.state_fips, abbr, label: `${c.name}, ${abbr}` }; });
+
   useEffect(() => {
     let live = true;
-    fetch('/api/landportal/counties').then((r) => r.json())
-      .then((d) => {
-        if (!live || !d.ok) return;
-        const list = d.counties.map((c) => { const abbr = abbrByFips[c.state_fips] || c.state_fips; return { fips: c.fips, name: c.name, stateFips: c.state_fips, abbr, label: `${c.name}, ${abbr}` }; });
-        setCountyList(list);
-        setCountyDict(Object.fromEntries(list.map((c) => [c.fips, c.label])));
-      })
-      .catch(() => {});
+    const loadCounties = (attempt = 0) => {
+      fetch('/api/landportal/counties').then((r) => r.json())
+        .then((d) => {
+          if (!live) return;
+          if (!d.ok || !Array.isArray(d.counties) || !d.counties.length) throw new Error('empty');
+          const list = enrich(d.counties);
+          setCountyList(list);
+          setCountyDict(Object.fromEntries(list.map((c) => [c.fips, c.label])));
+        })
+        .catch(() => { if (live && attempt < 3) setTimeout(() => loadCounties(attempt + 1), 700 * (attempt + 1)); });
+    };
+    loadCounties();
     // seed the daily spend/pool indicator (empty quote spends nothing)
     fetch('/api/landportal/hydrate/quote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: [] }) })
       .then((r) => r.json()).then((d) => { if (live && d.ok) setDaily({ spentCents: d.quote.dailyTokensSpentCents, poolLeft: d.quote.poolRemaining, ceilingCents: d.quote.dailyTokenCeilingCents }); })
@@ -101,11 +107,30 @@ export default function OmSearch() {
     return () => { live = false; };
   }, []);
 
-  // States that actually have counties in the dictionary (for the State select).
+  // States for the State select. Falls back to ALL states if the county
+  // dictionary has not loaded yet, so the dropdown is never empty.
   const presentStates = useMemo(() => {
+    if (!countyList.length) return US_STATES;
     const present = new Set(countyList.map((c) => c.stateFips));
-    return US_STATES.filter((s) => present.has(s.fips));
+    const filtered = US_STATES.filter((s) => present.has(s.fips));
+    return filtered.length ? filtered : US_STATES;
   }, [countyList]);
+
+  // Load a state's counties on demand if the full dictionary is not available
+  // (belt-and-suspenders so picking a state always yields counties).
+  useEffect(() => {
+    if (!activeState || countyList.some((c) => c.stateFips === activeState)) return;
+    let live = true;
+    fetch(`/api/landportal/counties?state=${activeState}`).then((r) => r.json())
+      .then((d) => {
+        if (!live || !d.ok || !d.counties?.length) return;
+        const add = enrich(d.counties);
+        setCountyList((prev) => { const have = new Set(prev.map((x) => x.fips)); return [...prev, ...add.filter((x) => !have.has(x.fips))]; });
+        setCountyDict((prev) => ({ ...prev, ...Object.fromEntries(add.map((c) => [c.fips, c.label])) }));
+      })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [activeState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Counties in the chosen state, filtered by the county search box.
   const countiesInState = useMemo(() => {
