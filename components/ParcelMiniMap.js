@@ -50,12 +50,12 @@ export default function ParcelMiniMap({ geometry: geomProp, lookup, width = 200,
 
   useEffect(() => {
     if (geomProp) { setGeom(geomProp); setState('ready'); return; }
-    if (!lookup || !lookup.apn) { setState('empty'); return; }
-    const key = `${lookup.fips || ''}:${lookup.apn}`;
+    if (!lookup || (!lookup.apn && !lookup.address)) { setState('empty'); return; }
+    const key = `${lookup.fips || ''}:${lookup.apn || lookup.address}`;
     if (geomCache.has(key)) { const g = geomCache.get(key); setGeom(g); setState(g ? 'ready' : 'none'); return; }
     let live = true;
     setState('loading');
-    const qs = new URLSearchParams({ apn: lookup.apn, fips: lookup.fips || '', county: lookup.county || '' });
+    const qs = new URLSearchParams({ apn: lookup.apn || '', fips: lookup.fips || '', county: lookup.county || '', address: lookup.address || '' });
     fetch(`/api/regrid/geometry?${qs}`).then((r) => r.json()).then((d) => {
       if (!live) return;
       const g = d.ok ? d.geometry : null;
@@ -63,7 +63,7 @@ export default function ParcelMiniMap({ geometry: geomProp, lookup, width = 200,
       setGeom(g); setState(g ? 'ready' : 'none');
     }).catch(() => { if (live) setState('none'); });
     return () => { live = false; };
-  }, [geomProp, lookup?.apn, lookup?.fips]);
+  }, [geomProp, lookup?.apn, lookup?.fips, lookup?.address]);
 
   useEffect(() => {
     if (!expanded) return;

@@ -248,7 +248,8 @@ LEAD STATE:
 - Land: ${county ? `${county} County` : 'unknown county'}${acres ? `, ${acres} acres` : ''}
 - Current stage: ${stage}
 - Lead type: ${lead.source === 'subdivision' ? 'ON-MARKET (we sourced this from a listing; the seller did NOT submit it; outbound buyer outreach, contact is the listing agent)' : 'INBOUND (the seller submitted their property to us)'}${lead.source === 'subdivision' ? `
-- WHO WE ARE CONTACTING: the LISTING AGENT${lead.form_data?.agentName ? `, ${lead.form_data.agentName}` : ' (name not yet entered)'}. Address the agent by their first name when known, NOT the owner (${lead.form_data?.listing_owner || lead.full_name || lead.name}). Reference the listing/property, ask about the seller's price and timeline, and position as a serious cash buyer who can close quick. Never greet or thank the owner by name.` : ''}
+- WHO WE ARE CONTACTING: the LISTING AGENT${lead.form_data?.agentName ? `, ${lead.form_data.agentName}` : ' (name not yet entered)'}. Address the agent by their first name when known, NOT the owner (${lead.form_data?.listing_owner || lead.full_name || lead.name}). Reference the listing/property, ask about the seller's price and timeline, and position as a serious cash buyer who can close quick. Never greet or thank the owner by name.
+- PHRASING: refer to the location as "${county} County" (with the word County), never the bare name (e.g. "Austin" alone reads like the city). Reference the property size (${acres ? `${acres} acres` : 'the acreage'}) when it helps.` : ''}
 - Offer field: ${offerField}
 
 FULL FILE (oldest first, each line timestamped; includes texts, calls, and internal notes):

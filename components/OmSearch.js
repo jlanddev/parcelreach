@@ -611,7 +611,7 @@ export default function OmSearch() {
                           auto-load a free Regrid boundary by APN (shows where covered). */}
                       {d?.geometry
                         ? <ParcelMiniMap geometry={d.geometry} width={320} height={220} />
-                        : <ParcelMiniMap lookup={{ apn: (p.apn || '').trim(), fips: p.fips, county: (countyDict[p.fips] || '').split(',')[0] }} width={320} height={220} />}
+                        : <ParcelMiniMap lookup={{ apn: (p.apn || '').trim(), fips: p.fips, county: (countyDict[p.fips] || '').split(',')[0], address: p.street_address || '' }} width={320} height={220} />}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-2">

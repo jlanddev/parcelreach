@@ -40,18 +40,24 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
   const firstName = isOnMarket
     ? (agentFirst || 'there')
     : (lead?.name || lead?.full_name || lead?.owner_name || 'there').trim().split(/\s+/)[0];
-  const county = lead?.property_county || lead?.county || lead?.form_data?.propertyCounty || lead?.form_data?.county || 'your area';
+  const countyRaw = lead?.property_county || lead?.county || lead?.form_data?.propertyCounty || lead?.form_data?.county || '';
+  // Say "Austin County", not "Austin" (which reads like the city). Fall back to
+  // "your area" when we have no county.
+  const countyPhrase = countyRaw ? `${countyRaw.replace(/\s+county$/i, '')} County` : 'your area';
+  // Reference the property size when we have it.
+  const acresNum = Number(lead?.acres || lead?.acreage || lead?.lot_size_acres || lead?.form_data?.acres);
+  const sizePhrase = acresNum && !Number.isNaN(acresNum) ? `${Math.round(acresNum)}-acre ` : '';
   const repName = (currentUserName || '').trim().split(/\s+/)[0];
   const intro = repName ? `this is ${repName} with Haven Ground` : `this is the team at Haven Ground`;
   const leadStatus = (lead?.pipeline_status || lead?.status || '').toUpperCase();
   const suggestions = isOnMarket ? {
-    first: { label: 'First touch', text: `Hey ${firstName}, ${intro}. I came across the ${county} property you have listed and we're actively buying land in the area. Would you be open to a cash offer? We close quick and easy.` },
-    checkin: { label: 'Check-in', text: `Hey ${firstName}, following up on the ${county} property. Is it still available? We're a serious buyer and would love to put an offer together if you're open to it.` },
-    offer: { label: 'Offer follow-up', text: `Hey ${firstName}, wanted to follow up on the offer we put together on the ${county} property. Confident in our numbers and we can close without a hitch. Happy to talk it through.` },
+    first: { label: 'First touch', text: `Hey ${firstName}, ${intro}. I came across the ${sizePhrase}listing in ${countyPhrase} and we're actively buying land in the area. Would you be open to a cash offer? We close quick and easy.` },
+    checkin: { label: 'Check-in', text: `Hey ${firstName}, following up on the ${sizePhrase}${countyPhrase} listing. Is it still available? We're a serious buyer and would love to put an offer together if you're open to it.` },
+    offer: { label: 'Offer follow-up', text: `Hey ${firstName}, wanted to follow up on the offer we put together on the ${sizePhrase}${countyPhrase} listing. Confident in our numbers and we can close without a hitch. Happy to talk it through.` },
   } : {
-    first: { label: 'First touch', text: `Hey ${firstName}, ${intro}. Reaching out about the land you wanted us to check out in ${county}. When's a good time to call and discuss?` },
-    checkin: { label: 'Check-in', text: `Hey ${firstName}, checking in on the land you wanted us to check out in ${county}. Did you end up getting that sold, or are you still interested in us buying?` },
-    offer: { label: 'Offer follow-up', text: `Hey ${firstName}, wanted to check in on the offer we made on the land in ${county}. Very confident in our underwriting and our ability to close this without a hitch.` },
+    first: { label: 'First touch', text: `Hey ${firstName}, ${intro}. Reaching out about your ${sizePhrase}property in ${countyPhrase}. When's a good time to call and discuss?` },
+    checkin: { label: 'Check-in', text: `Hey ${firstName}, checking in on your ${sizePhrase}property in ${countyPhrase}. Did you end up getting that sold, or are you still interested in us buying?` },
+    offer: { label: 'Offer follow-up', text: `Hey ${firstName}, wanted to check in on the offer we made on your ${sizePhrase}property in ${countyPhrase}. Very confident in our underwriting and our ability to close this without a hitch.` },
   };
   const order = ['OFFER_SENT', 'NEGOTIATING', 'AGREEMENT_SENT', 'APPT_SET_FOR_JORDAN'].includes(leadStatus)
     ? ['offer', 'checkin', 'first']
