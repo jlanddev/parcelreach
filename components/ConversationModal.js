@@ -51,9 +51,9 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
   const intro = repName ? `this is ${repName} with Haven Ground` : `this is the team at Haven Ground`;
   const leadStatus = (lead?.pipeline_status || lead?.status || '').toUpperCase();
   const suggestions = isOnMarket ? {
-    first: { label: 'First touch', text: `Hey ${firstName}, ${intro}. I came across the ${sizePhrase}listing in ${countyPhrase} and we're actively buying land in the area. Would you be open to a cash offer? We close quick and easy.` },
-    checkin: { label: 'Check-in', text: `Hey ${firstName}, following up on the ${sizePhrase}${countyPhrase} listing. Is it still available? We're a serious buyer and would love to put an offer together if you're open to it.` },
-    offer: { label: 'Offer follow-up', text: `Hey ${firstName}, wanted to follow up on the offer we put together on the ${sizePhrase}${countyPhrase} listing. Confident in our numbers and we can close without a hitch. Happy to talk it through.` },
+    first: { label: 'First touch', text: `Hey ${firstName}, ${intro}. I came across the ${sizePhrase}listing in ${countyPhrase}. Do you have time to chat about it? Thanks` },
+    checkin: { label: 'Check-in', text: `Hey ${firstName}, following up on the ${sizePhrase}listing in ${countyPhrase}. Is it still available? Would love to connect when you have a minute.` },
+    offer: { label: 'Offer follow-up', text: `Hey ${firstName}, following up on the offer we sent over for the ${sizePhrase}listing in ${countyPhrase}. Still very interested, happy to talk through any of it.` },
   } : {
     first: { label: 'First touch', text: `Hey ${firstName}, ${intro}. Reaching out about your ${sizePhrase}property in ${countyPhrase}. When's a good time to call and discuss?` },
     checkin: { label: 'Check-in', text: `Hey ${firstName}, checking in on your ${sizePhrase}property in ${countyPhrase}. Did you end up getting that sold, or are you still interested in us buying?` },
