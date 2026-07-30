@@ -5949,8 +5949,13 @@ export default function LandLeadsAdminPage() {
               .filter(sentOk)
               .filter((l) => leadMatchesSearch(l, q))
               .filter(passesEngagement),
-            (a, b) => new Date(b.last_activity_at || b.created_at) - new Date(a.last_activity_at || a.created_at),
-            `partners:${partnerStage}:${partnerDirection}:${partnerSentFilter}:${pipelineMapped}:${q}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`
+            (a, b) => {
+              const useCreated = pipelineSort.startsWith('created');
+              const av = new Date(useCreated ? a.created_at : (a.last_activity_at || a.created_at));
+              const bv = new Date(useCreated ? b.created_at : (b.last_activity_at || b.created_at));
+              return pipelineSort.endsWith('asc') ? av - bv : bv - av;
+            },
+            `partners:${pipelineSort}:${partnerStage}:${partnerDirection}:${partnerSentFilter}:${pipelineMapped}:${q}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`
           );
           return (
             <div className="space-y-6">
@@ -5993,6 +5998,12 @@ export default function LandLeadsAdminPage() {
                   <option value="__any__">Sent to anyone</option>
                   <option value="__none__">Not sent yet</option>
                   {partnerOptions.map((name) => <option key={name} value={name}>Sent to {name}</option>)}
+                </select>
+                <select value={pipelineSort} onChange={(e) => setPipelineSort(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50">
+                  <option value="activity_desc">Last activity: newest first</option>
+                  <option value="activity_asc">Last activity: oldest first</option>
+                  <option value="created_desc">Newest Inbound</option>
+                  <option value="created_asc">Oldest Inbound</option>
                 </select>
                 <button onClick={() => setPipelineMapped((v) => !v)} className={`px-3 py-2 rounded-lg text-sm font-medium border ${pipelineMapped ? 'bg-green-600/30 border-green-600/50 text-green-300' : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800'}`}>{pipelineMapped ? '✓ ' : ''}Mapped only</button>
                 {renderEngagementFilters()}
