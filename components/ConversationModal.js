@@ -55,9 +55,11 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
     checkin: { label: 'Check-in', text: `Hey ${firstName}, following up on the ${sizePhrase}listing in ${countyPhrase}. Is it still available? Would love to connect when you have a minute.` },
     offer: { label: 'Offer follow-up', text: `Hey ${firstName}, following up on the offer we sent over for the ${sizePhrase}listing in ${countyPhrase}. Still very interested, happy to talk through any of it.` },
   } : {
-    first: { label: 'First touch', text: `Hey ${firstName}, ${intro}. Reaching out about your ${sizePhrase}property in ${countyPhrase}. When's a good time to call and discuss?` },
-    checkin: { label: 'Check-in', text: `Hey ${firstName}, checking in on your ${sizePhrase}property in ${countyPhrase}. Did you end up getting that sold, or are you still interested in us buying?` },
-    offer: { label: 'Offer follow-up', text: `Hey ${firstName}, wanted to check in on the offer we made on your ${sizePhrase}property in ${countyPhrase}. Very confident in our underwriting and our ability to close this without a hitch.` },
+    // INBOUND / PPC leads: NEVER reference acreage (the submitted value is often a
+    // range and comes out wrong). Keep it about their property in their county.
+    first: { label: 'First touch', text: `Hey ${firstName}, ${intro}. Reaching out about your property in ${countyPhrase}. When's a good time to call and discuss?` },
+    checkin: { label: 'Check-in', text: `Hey ${firstName}, checking in on your property in ${countyPhrase}. Did you end up getting that sold, or are you still interested in us buying?` },
+    offer: { label: 'Offer follow-up', text: `Hey ${firstName}, wanted to check in on the offer we made on your property in ${countyPhrase}. Very confident in our underwriting and our ability to close this without a hitch.` },
   };
   const order = ['OFFER_SENT', 'NEGOTIATING', 'AGREEMENT_SENT', 'APPT_SET_FOR_JORDAN'].includes(leadStatus)
     ? ['offer', 'checkin', 'first']
