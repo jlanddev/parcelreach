@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -32,7 +32,7 @@ const parseTs = (s) => new Date(/Z|[+-]\d\d:?\d\d$/.test(s || '') ? s : (s || ''
 export default function LandLeadsAdminPage() {
   const router = useRouter();
   const [organizations, setOrganizations] = useState([]);
-  const [allLeads, setAllLeads] = useState([]);
+  const [rawLeads, setRawLeads] = useState([]);
   const [selectedOrg, setSelectedOrg] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('ppc-inflow');
@@ -55,6 +55,45 @@ export default function LandLeadsAdminPage() {
   const [acquisitionManagerId, setAcquisitionManagerId] = useState(null); // Anthony's user id, used to push leads to his queue
   const isAdmin = currentUserRole === 'admin';
   const isAcquisitionManager = currentUserRole === 'acquisition_manager';
+
+  // ---- Clean View ---------------------------------------------------------
+  // A curated focus mode: hides everything except leads explicitly pushed into
+  // it (clean_view = true). Pushed leads keep their real status and notes, so
+  // they still sort into their correct stage tabs. Acquisition managers
+  // (Anthony) are locked into Clean View so their board stays uncluttered;
+  // admins (Jordan) toggle it and default to the full board (the "motherboard").
+  const [cleanViewPref, setCleanViewPref] = useState(false);
+  useEffect(() => {
+    if (typeof window !== 'undefined') setCleanViewPref(localStorage.getItem('pr_clean_view') === '1');
+  }, []);
+  const cleanViewActive = isAcquisitionManager ? true : cleanViewPref;
+  const toggleCleanView = () => {
+    setCleanViewPref((v) => {
+      const next = !v;
+      if (typeof window !== 'undefined') localStorage.setItem('pr_clean_view', next ? '1' : '0');
+      return next;
+    });
+  };
+  // The list every tab/count/board reads from. In Clean View it is the pushed
+  // subset only; otherwise it is the full raw set. Renaming the raw state to
+  // rawLeads and deriving allLeads here means all ~100 read sites filter at once.
+  const allLeads = useMemo(
+    () => (cleanViewActive ? rawLeads.filter((l) => l.clean_view) : rawLeads),
+    [cleanViewActive, rawLeads]
+  );
+  // Push a lead into (or pull it out of) Clean View. Admin-only curation.
+  const setLeadCleanView = async (leadId, on) => {
+    setRawLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, clean_view: on } : l)));
+    setSelectedLead((prev) => (prev && prev.id === leadId ? { ...prev, clean_view: on } : prev));
+    const { error } = await supabase.from('leads').update({ clean_view: on }).eq('id', leadId);
+    if (error) {
+      setRawLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, clean_view: !on } : l)));
+      showToast('Could not update Clean View', 'error');
+    } else {
+      showToast(on ? 'Pushed to Clean View' : 'Removed from Clean View', 'success');
+    }
+  };
+  // -------------------------------------------------------------------------
 
   // "Mapped" pill rendered on lead cards when a property map screenshot has been uploaded.
   const MappedBadge = () => (
@@ -591,7 +630,7 @@ export default function LandLeadsAdminPage() {
       }).eq('id', leadId);
 
       // Update local state
-      setAllLeads(prev => prev.map(l =>
+      setRawLeads(prev => prev.map(l =>
         l.id === leadId ? { ...l, last_activity_at: new Date().toISOString() } : l
       ));
 
@@ -700,6 +739,7 @@ export default function LandLeadsAdminPage() {
     if (isSubdivisionInflow(lead)) return 'subdivision-inflow';
     if (s === 'FOLLOW_UP') return 'follow-up';
     if (s === 'LOST') return 'lost';
+    if (s === 'OFFER_CURATED') return 'offer-curated';
     if (s === 'APPT_SET_FOR_JORDAN') return 'appointment-set';
     if (['OFFER_SENT', 'NEGOTIATING'].includes(s)) return 'offer-made';
     if (s === 'AGREEMENT_SENT') return 'agreement-sent';
@@ -747,7 +787,7 @@ export default function LandLeadsAdminPage() {
   // --- Offer, direction, and Follow-Up handlers -------------------------------
 
   const patchLead = (leadId, patch) => {
-    setAllLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, ...patch } : l)));
+    setRawLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, ...patch } : l)));
     setSelectedLead((prev) => (prev && prev.id === leadId ? { ...prev, ...patch } : prev));
     supabase.from('leads').update(patch).eq('id', leadId).then(
       ({ error }) => { if (error) showToast(`Could not save: ${error.message}`, 'error'); },
@@ -901,7 +941,7 @@ export default function LandLeadsAdminPage() {
       await supabase.from('leads').update(updates).eq('id', leadId);
 
       // Update local state
-      setAllLeads(prev => prev.map(l =>
+      setRawLeads(prev => prev.map(l =>
         l.id === leadId ? { ...l, ...updates } : l
       ));
 
@@ -928,6 +968,7 @@ export default function LandLeadsAdminPage() {
     { value: 'CONTACTING', label: 'In Contact' },
     { value: 'ANTHONY_CONTACTED', label: 'Anthony Contacted' },
     { value: 'ANTHONY_FOLLOW_UP', label: 'Anthony Follow-up' },
+    { value: 'OFFER_CURATED', label: 'Offer Curated' },
     { value: 'APPT_SET_FOR_JORDAN', label: 'Appt Set for Jordan' },
     { value: 'OFFER_SENT', label: 'Offer Sent' },
     { value: 'NEGOTIATING', label: 'Negotiating' },
@@ -1235,7 +1276,7 @@ export default function LandLeadsAdminPage() {
     } catch { /* table not migrated yet, keep jsonb values */ }
 
     setOrganizations(orgsData || []);
-    setAllLeads(leadsWithPushes);
+    setRawLeads(leadsWithPushes);
     setLeadAssignments(assignmentsByLead);
     setScheduledTasks(tasksData || []);
     setLoading(false);
@@ -1269,7 +1310,7 @@ export default function LandLeadsAdminPage() {
     console.log('Updating status:', { leadId, oldStatus, newStatus });
 
     // Update local state immediately for responsiveness
-    setAllLeads(prev => prev.map(l =>
+    setRawLeads(prev => prev.map(l =>
       l.id === leadId ? { ...l, pipeline_status: newStatus, status: newStatus.toLowerCase() } : l
     ));
 
@@ -1310,7 +1351,7 @@ export default function LandLeadsAdminPage() {
     // next status, so once that lands the mode resets.
     if (newStatus !== oldStatus && lead?.hammer_mode) {
       await supabase.from('leads').update({ hammer_mode: false }).eq('id', leadId);
-      setAllLeads(prev => prev.map(l => l.id === leadId ? { ...l, hammer_mode: false } : l));
+      setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, hammer_mode: false } : l));
     }
 
     // Auto-cancel pending tasks for terminal statuses so they stop cluttering the rundown
@@ -1365,7 +1406,7 @@ export default function LandLeadsAdminPage() {
         .eq('id', leadId);
       if (updateErr) throw updateErr;
 
-      setAllLeads(prev => prev.map(l =>
+      setRawLeads(prev => prev.map(l =>
         l.id === leadId ? { ...l, map_uploaded: true, map_image_url: publicUrl } : l
       ));
       if (selectedLead && selectedLead.id === leadId) {
@@ -1392,7 +1433,7 @@ export default function LandLeadsAdminPage() {
       });
       const d = await res.json();
       if (!res.ok || !d.ok) throw new Error(d.error || 'Could not generate map');
-      setAllLeads(prev => prev.map(l => (l.id === lead.id ? { ...l, map_uploaded: true, map_image_url: d.url } : l)));
+      setRawLeads(prev => prev.map(l => (l.id === lead.id ? { ...l, map_uploaded: true, map_image_url: d.url } : l)));
       if (selectedLead && selectedLead.id === lead.id) setSelectedLead(prev => ({ ...prev, map_uploaded: true, map_image_url: d.url }));
       showToast('Map generated and saved', 'success');
     } catch (err) {
@@ -1416,7 +1457,7 @@ export default function LandLeadsAdminPage() {
       showToast('Toggle failed: ' + error.message, 'error');
       return;
     }
-    setAllLeads(prev => prev.map(l => l.id === leadId ? { ...l, hammer_mode: next } : l));
+    setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, hammer_mode: next } : l));
     if (selectedLead && selectedLead.id === leadId) {
       setSelectedLead(prev => ({ ...prev, hammer_mode: next }));
     }
@@ -1468,7 +1509,7 @@ export default function LandLeadsAdminPage() {
       showToast('Toggle failed: ' + error.message, 'error');
       return;
     }
-    setAllLeads(prev => prev.map(l => l.id === leadId ? { ...l, current_owner_id: nextOwner } : l));
+    setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, current_owner_id: nextOwner } : l));
     if (selectedLead && selectedLead.id === leadId) {
       setSelectedLead(prev => ({ ...prev, current_owner_id: nextOwner }));
     }
@@ -1490,7 +1531,7 @@ export default function LandLeadsAdminPage() {
     const lead = allLeads.find(l => l.id === leadId);
     if (!lead || lead.current_owner_id || !currentUserId) return;
     await supabase.from('leads').update({ current_owner_id: currentUserId }).eq('id', leadId);
-    setAllLeads(prev => prev.map(l => l.id === leadId ? { ...l, current_owner_id: currentUserId } : l));
+    setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, current_owner_id: currentUserId } : l));
     if (selectedLead && selectedLead.id === leadId) {
       setSelectedLead(prev => ({ ...prev, current_owner_id: currentUserId }));
     }
@@ -1535,7 +1576,7 @@ export default function LandLeadsAdminPage() {
 
       // Flip lead ownership to acquisition manager so the badge reflects who's working it
       await supabase.from('leads').update({ current_owner_id: acquisitionManagerId }).eq('id', leadId);
-      setAllLeads(prev => prev.map(l => l.id === leadId ? { ...l, current_owner_id: acquisitionManagerId } : l));
+      setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, current_owner_id: acquisitionManagerId } : l));
 
       showToast('Pushed to Acquisition Manager', 'success', leadName);
     } catch (err) {
@@ -1603,7 +1644,7 @@ export default function LandLeadsAdminPage() {
         statusErr = null;
       }
 
-      setAllLeads(prev => prev.map(l =>
+      setRawLeads(prev => prev.map(l =>
         l.id === apptModalLeadId
           ? { ...l, pipeline_status: 'APPT_SET_FOR_JORDAN', status: 'appt_set_for_jordan', current_owner_id: adminUserId }
           : l
@@ -1661,7 +1702,7 @@ export default function LandLeadsAdminPage() {
       }
 
       // Update local state
-      setAllLeads(allLeads.map(l =>
+      setRawLeads(allLeads.map(l =>
         l.id === activityLeadId ? {
           ...l,
           status: (!lead?.status || lead.status === 'new') ? 'contacted' : l.status,
@@ -1838,7 +1879,7 @@ export default function LandLeadsAdminPage() {
       const lead = allLeads.find(l => l.id === leadId);
       const leadName = lead?.full_name || lead?.name || 'Lead';
       await supabase.from('leads').update({ status: 'archived' }).eq('id', leadId);
-      setAllLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'archived' } : l));
+      setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'archived' } : l));
       showToast('Archived', 'success', leadName);
     } catch (err) {
       showToast('Error: ' + err.message, 'error');
@@ -1851,7 +1892,7 @@ export default function LandLeadsAdminPage() {
       const lead = allLeads.find(l => l.id === leadId);
       const leadName = lead?.full_name || lead?.name || 'Lead';
       await supabase.from('leads').update({ status: 'new' }).eq('id', leadId);
-      setAllLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'new' } : l));
+      setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'new' } : l));
       showToast('Restored', 'success', leadName);
     } catch (err) {
       showToast('Error: ' + err.message, 'error');
@@ -1871,7 +1912,7 @@ export default function LandLeadsAdminPage() {
       // Delete the lead
       const { error } = await supabase.from('leads').delete().eq('id', leadId);
       if (error) throw error;
-      setAllLeads(prev => prev.filter(l => l.id !== leadId));
+      setRawLeads(prev => prev.filter(l => l.id !== leadId));
       setScheduledTasks(prev => prev.filter(t => t.lead_id !== leadId));
       showToast('Permanently deleted', 'success', leadName);
     } catch (err) {
@@ -2970,7 +3011,7 @@ export default function LandLeadsAdminPage() {
       if (!res.ok) throw new Error(data.error || 'Failed to create');
 
       // Add to local state
-      setAllLeads(prev => [data.lead, ...prev]);
+      setRawLeads(prev => [data.lead, ...prev]);
 
       // Reset form
       setSubdivForm({ county: '', state: 'TX', acreage: '', seller_name: '', agent_name: '', agent_phone: '', agent_email: '', parcel_id: '' });
@@ -3407,7 +3448,7 @@ export default function LandLeadsAdminPage() {
                               .update({ name: e.target.value, full_name: e.target.value })
                               .eq('id', lead.id);
                             if (!error) {
-                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, name: e.target.value, full_name: e.target.value} : l));
+                              setRawLeads(allLeads.map(l => l.id === lead.id ? {...l, name: e.target.value, full_name: e.target.value} : l));
                             }
                           }}
                           className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-2 text-white font-semibold text-lg focus:outline-none focus:border-blue-500/50"
@@ -3433,7 +3474,7 @@ export default function LandLeadsAdminPage() {
                             })
                             .eq('id', lead.id);
                           if (!error) {
-                            setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, street_address: e.target.value, address: e.target.value} : l));
+                            setRawLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, street_address: e.target.value, address: e.target.value} : l));
                           }
                         }}
                         className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50"
@@ -3455,7 +3496,7 @@ export default function LandLeadsAdminPage() {
                               })
                               .eq('id', lead.id);
                             if (!error) {
-                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, property_county: e.target.value, county: e.target.value} : l));
+                              setRawLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, property_county: e.target.value, county: e.target.value} : l));
                             }
                           }}
                           className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50"
@@ -3476,7 +3517,7 @@ export default function LandLeadsAdminPage() {
                               })
                               .eq('id', lead.id);
                             if (!error) {
-                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, property_state: e.target.value, state: e.target.value} : l));
+                              setRawLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, property_state: e.target.value, state: e.target.value} : l));
                             }
                           }}
                           className="w-20 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50"
@@ -3498,7 +3539,7 @@ export default function LandLeadsAdminPage() {
                             })
                             .eq('id', lead.id);
                           if (!error) {
-                            setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, acres: parseFloat(e.target.value) || null, acreage: parseFloat(e.target.value) || null} : l));
+                            setRawLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, acres: parseFloat(e.target.value) || null, acreage: parseFloat(e.target.value) || null} : l));
                           }
                         }}
                         className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm font-semibold text-orange-400 focus:outline-none focus:border-blue-500/50"
@@ -3579,7 +3620,7 @@ export default function LandLeadsAdminPage() {
                               .update({ email: e.target.value, owner_email: e.target.value })
                               .eq('id', lead.id);
                             if (!error) {
-                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, email: e.target.value, owner_email: e.target.value} : l));
+                              setRawLeads(allLeads.map(l => l.id === lead.id ? {...l, email: e.target.value, owner_email: e.target.value} : l));
                             }
                           }}
                           className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-slate-300 focus:outline-none focus:border-blue-500/50"
@@ -3600,7 +3641,7 @@ export default function LandLeadsAdminPage() {
                               .update({ phone: e.target.value, owner_phone: e.target.value })
                               .eq('id', lead.id);
                             if (!error) {
-                              setAllLeads(allLeads.map(l => l.id === lead.id ? {...l, phone: e.target.value, owner_phone: e.target.value} : l));
+                              setRawLeads(allLeads.map(l => l.id === lead.id ? {...l, phone: e.target.value, owner_phone: e.target.value} : l));
                             }
                           }}
                           className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-slate-300 focus:outline-none focus:border-blue-500/50"
@@ -3771,6 +3812,20 @@ export default function LandLeadsAdminPage() {
                       </button>
                     </div>
 
+                    {/* Clean View push (admin only) */}
+                    {isAdmin && (
+                      <div className="mt-2">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setLeadCleanView(lead.id, !lead.clean_view); }}
+                          className={`w-full px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1.5 ${lead.clean_view ? 'bg-teal-600/25 text-teal-300 hover:bg-teal-600/40 border border-teal-500/40' : 'bg-slate-700/50 hover:bg-slate-600/50 text-slate-300 border border-transparent'}`}
+                          title={lead.clean_view ? 'In Clean View. Click to remove.' : 'Push this lead into Clean View'}
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={lead.clean_view ? 'M5 13l4 4L19 7' : 'M12 4v16m8-8H4'} /></svg>
+                          {lead.clean_view ? 'In Clean View' : 'Push to Clean View'}
+                        </button>
+                      </div>
+                    )}
+
                     {/* Archive / Delete */}
                     <div className="mt-2 flex gap-2">
                       <button
@@ -3939,13 +3994,33 @@ export default function LandLeadsAdminPage() {
         </div>
       </div>
 
+      {/* Clean View toggle (admin only). Anthony is locked into Clean View and
+          never sees this control. */}
+      {isAdmin && (
+        <div className={`px-6 py-2 flex items-center justify-end gap-3 border-b ${cleanViewActive ? 'bg-teal-900/25 border-teal-700/40' : 'bg-slate-800/20 border-slate-700/40'}`}>
+          {cleanViewActive && (
+            <span className="text-teal-300 text-xs font-medium flex items-center gap-1.5">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+              Clean View active. Showing only pushed leads.
+            </span>
+          )}
+          <button
+            onClick={toggleCleanView}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${cleanViewActive ? 'bg-teal-600 text-white hover:bg-teal-500' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+            title={cleanViewActive ? 'Switch back to the full board' : 'Switch to your curated Clean View'}
+          >
+            {cleanViewActive ? 'Clean View: ON' : 'Clean View: OFF'}
+          </button>
+        </div>
+      )}
+
       {/* Tabs */}
       <div className="bg-slate-800/30 border-b border-slate-700/50 px-6 overflow-x-auto">
         <div className="flex items-center gap-2 min-w-max">
           {(() => {
             // Pipeline buckets render east-to-west between Daily Rundown and the other tabs,
             // with arrow chevrons between them to visualize lead flow.
-            const PIPELINE_TABS = ['ppc-inflow', 'appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'];
+            const PIPELINE_TABS = ['ppc-inflow', 'offer-curated', 'appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'];
             const allTabs = isAdmin
               ? ['shared-calendar', 'activity-log', ...PIPELINE_TABS, 'follow-up', 'lost', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search']
               : ['shared-calendar', ...PIPELINE_TABS, 'follow-up', 'lost', 'subdivision-inflow', 'all-leads'];
@@ -3992,9 +4067,10 @@ export default function LandLeadsAdminPage() {
                   <path d="M11 7h2v10h-2zm4 4h2v6h-2zM7 9h2v8H7zm12-7H5c-1.1 0-2 .9-2 2v18l4-4h13c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
                 </svg>
               )}
-              {tab === 'om-search' ? 'OM Search' : tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'appointment-set' ? 'Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Agreement Sent' : tab === 'signed-contract' ? 'Signed Contract' : tab === 'closed-deal' ? 'Closed Deal' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab.replace('-', ' ')}
+              {tab === 'om-search' ? 'OM Search' : tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'offer-curated' ? 'Offer Curated' : tab === 'appointment-set' ? 'Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Agreement Sent' : tab === 'signed-contract' ? 'Signed Contract' : tab === 'closed-deal' ? 'Closed Deal' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab.replace('-', ' ')}
               {tab === 'unassigned' && ` (${unassignedLeads.length})`}
               {tab === 'ppc-inflow' && ` (${allLeads.filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })()).length})`}
+              {tab === 'offer-curated' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'OFFER_CURATED').length})`}
               {tab === 'appointment-set' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN').length})`}
               {tab === 'offer-made' && ` (${allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING'].includes((l.pipeline_status || l.status || '').toUpperCase())).length})`}
               {tab === 'agreement-sent' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'AGREEMENT_SENT').length})`}
@@ -4959,8 +5035,14 @@ export default function LandLeadsAdminPage() {
         )}
 
         {/* PIPELINE BUCKETS, Appointment Set / Offer Made / Agreement Sent / Signed Contract / Closed Deal */}
-        {['appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal', 'follow-up', 'lost'].includes(activeTab) && (() => {
+        {['offer-curated', 'appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal', 'follow-up', 'lost'].includes(activeTab) && (() => {
           const bucketConfig = {
+            'offer-curated': {
+              title: 'Offer Curated',
+              subtitle: 'Reviewed and offer built, ready to go out the door',
+              statuses: ['OFFER_CURATED'],
+              accent: 'teal',
+            },
             'follow-up': {
               title: 'Follow-Up',
               subtitle: 'Parked deals on a drip. Most overdue first, work the top of the list.',
@@ -5013,6 +5095,7 @@ export default function LandLeadsAdminPage() {
             emerald:{ ring: 'border-emerald-500/40',text: 'text-emerald-300',bg: 'from-emerald-500/10 to-emerald-600/5' },
             rose:   { ring: 'border-rose-500/40',   text: 'text-rose-300',   bg: 'from-rose-500/10 to-rose-600/5' },
             zinc:   { ring: 'border-zinc-500/40',   text: 'text-zinc-300',   bg: 'from-zinc-500/10 to-zinc-600/5' },
+            teal:   { ring: 'border-teal-500/40',   text: 'text-teal-300',   bg: 'from-teal-500/10 to-teal-600/5' },
           };
           const c = accentMap[cfg.accent];
           const sorters = {
@@ -7111,7 +7194,7 @@ export default function LandLeadsAdminPage() {
 
                     // Refresh leads
                     const { data } = await supabase.from('leads').select('*').order('created_at', { ascending: false });
-                    if (data) setAllLeads(data);
+                    if (data) setRawLeads(data);
 
                     setDetailsModalOpen(false);
                     setSelectedLead(null);
@@ -7577,7 +7660,7 @@ export default function LandLeadsAdminPage() {
 
                     // Refresh leads
                     const { data } = await supabase.from('leads').select('*').order('created_at', { ascending: false });
-                    if (data) setAllLeads(data);
+                    if (data) setRawLeads(data);
 
                     // Close modal
                     setFindMapModalOpen(false);
