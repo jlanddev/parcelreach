@@ -62,21 +62,23 @@ export default function MondayPushButton({ lead, onToast }) {
 
   const closeComposer = () => { setComposerOpen(false); setExpanded(false); };
 
-  // Draft the note in Jordan's voice from the lead file (facts + notes + SMS).
+  // Two modes, decided by whether the box already has your own writing:
+  //  - empty box  -> compile the note from the logged notes/texts (grounded)
+  //  - your text  -> just clean up your writing, add nothing new
   const generateSummary = async () => {
     setGenerating(true);
     try {
       const res = await fetch('/api/ai/partner-summary', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leadId: lead.id }),
+        body: JSON.stringify({ leadId: lead.id, draft: summary }),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Could not generate');
       setSummary(data.summary);
-      onToast && onToast('Note drafted. Review it, then send.', 'success');
+      onToast && onToast(data.mode === 'polish' ? 'Cleaned up your note.' : 'Note drafted from your logs. Review it, then send.', 'success');
     } catch (e) {
-      onToast && onToast('Draft failed: ' + (e?.message || e), 'error');
+      onToast && onToast('Generate failed: ' + (e?.message || e), 'error');
     } finally {
       setGenerating(false);
     }
@@ -237,11 +239,11 @@ export default function MondayPushButton({ lead, onToast }) {
                       type="button"
                       onClick={generateSummary}
                       disabled={generating}
-                      title="Draft the note in your voice from the notes, texts, and property details"
+                      title={summary.trim() ? 'Clean up and improve what you wrote. Adds nothing new.' : 'Draft the note from this lead’s logged notes and texts'}
                       className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-cyan-600/20 hover:bg-cyan-600/40 disabled:opacity-50 text-cyan-300 text-[11px] font-semibold"
                     >
                       <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2l1.9 5.8L20 9.7l-4.7 3.7L16.9 20 12 16.3 7.1 20l1.6-6.6L4 9.7l6.1-1.9L12 2z" /></svg>
-                      {generating ? 'Writing…' : 'Generate'}
+                      {generating ? 'Writing…' : summary.trim() ? 'Clean up' : 'Generate'}
                     </button>
                     {whySelling && (
                       <button

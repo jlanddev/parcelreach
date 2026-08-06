@@ -37,8 +37,34 @@ export async function POST(request) {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return NextResponse.json({ error: 'AI not configured' }, { status: 500 });
 
-    const { leadId } = await request.json();
+    const { leadId, draft } = await request.json();
     if (!leadId) return NextResponse.json({ error: 'Missing leadId' }, { status: 400 });
+
+    // Two modes. POLISH: Jordan typed his own note, so we only clean up his
+    // writing and add nothing. COMPILE: the box is empty, so we build the note
+    // from the logged conversation, strictly grounded.
+    const typed = typeof draft === 'string' ? draft.trim() : '';
+    const isPolish = typed.length > 0;
+
+    // POLISH MODE: correct and improve Jordan's own words, invent nothing.
+    if (isPolish) {
+      const system = `You are cleaning up Jordan's own writing for a note he will send to a land partner. Rewrite it to read clearly and professionally in his voice: fix grammar, spelling, and punctuation, tighten the wording, and make it flow.
+
+CRITICAL: Use ONLY the information Jordan wrote. Do NOT add, invent, or infer any new fact, number, price, acreage, name, condition, or detail. Do not pull in anything from outside his text. If he did not write it, it does not appear. Keep every fact exactly as he stated it and do not change his meaning. Do not add a greeting or sign-off he did not write.
+
+NEVER use em dashes or en dashes. Use commas, periods, or parentheses. Hard rule.
+Output ONLY the cleaned-up note. No preamble, no "Here is", no quotes, no labels.`;
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 600, temperature: 0, system, messages: [{ role: 'user', content: `Jordan's note, clean it up and add nothing:\n\n${typed}` }] }),
+      });
+      const data = await res.json();
+      if (!res.ok) return NextResponse.json({ error: data.error?.message || 'AI error' }, { status: 502 });
+      let out = (data.content?.[0]?.text || '').trim().replace(/\s*[—–]\s*/g, ', ').replace(/^["']|["']$/g, '').trim();
+      if (!out) return NextResponse.json({ error: 'Could not clean up the note' }, { status: 502 });
+      return NextResponse.json({ ok: true, summary: out, mode: 'polish' });
+    }
 
     const supabase = supabaseAdmin();
     const { data: lead } = await supabase.from('leads').select('*').eq('id', leadId).maybeSingle();
@@ -123,47 +149,58 @@ export async function POST(request) {
     const priceRange = lead.form_data?.priceRange ? String(lead.form_data.priceRange).replace(/-/g, ' to ').replace('plus', '+').replace('under', 'under ') : '';
     const whySelling = lead.form_data?.whySelling || '';
 
-    const facts = [
+    // Objective identifiers we can state plainly (location and parcel IDs, not
+    // deal terms).
+    const identifiers = [
       county ? `County: ${county} County` : '',
       state ? `State: ${state}` : '',
-      acres ? `Acreage: ${acres} acres` : '',
-      apn ? `Parcel/APN: ${apn}` : '',
-      `Where it sits now: ${stage}`,
-      offer ? `Our offer on record: ${offer}` : '',
-      priceRange ? `Seller price range (from intake): ${priceRange}` : '',
-      whySelling ? `Why selling (from intake): ${whySelling}` : '',
-    ].filter(Boolean).join('\n');
+      apn ? `Parcel/APN on file: ${apn}` : '',
+      `Pipeline stage: ${stage}`,
+    ].filter(Boolean).join('\n') || 'None on file.';
 
-    const system = `You write internal deal summaries for a land-buying company, in the voice of Jordan, the principal. Your job: turn the property facts and the team's notes, texts, and call recaps into ONE clean summary that Jordan will paste into a partner's CRM so a co-buyer or disposition partner understands the deal at a glance.
+    // Unverified system/intake fields. These are frequently WRONG: acreage is
+    // often a county estimate, and the intake price range and offer field are
+    // not parcel-specific and go stale. The model must not trust these over the
+    // conversation, and must never present them as deal facts.
+    const systemFields = [
+      acres ? `Acreage (system estimate, often wrong): ${acres}` : '',
+      priceRange ? `Intake price range (seller's rough form input, not a firm ask): ${priceRange}` : '',
+      offer ? `Offer field value (may be stale or for a different parcel): ${offer}` : '',
+      whySelling ? `Why selling (intake form): ${whySelling}` : '',
+    ].filter(Boolean).join('\n') || 'None on file.';
 
-VOICE: Write as Jordan, first person, the way he actually writes: direct, factual, confident, no fluff, no hype, no sales language. Professional but human, like a sharp operator briefing a partner. Fix all grammar and spelling. Do NOT sound like AI. Model the tone on this real example of his corrected writing: "Spoke with Justin, they inherited this property from his mother-in-law, Ann Hunter. Just looking to cash out. Power available at the road. Pretty straightforward piece in a good market. Comps vary from $12K to $20K per acre, but I'm thinking it depends on if public water is available or not."
+    const system = `You write internal deal summaries for a land-buying company, in the voice of Jordan, the principal. Jordan pastes your summary into a partner's CRM so a co-buyer understands the deal. A WRONG summary is far worse than a short one: it makes Jordan look careless to his partners and can blow up a deal. Accuracy over completeness, always.
 
-WHAT TO COVER (only what the file actually supports, in this order, as flowing prose not a bulleted list):
-1. Where the deal currently sits (status, and the offer or the seller's number if there is one).
-2. The property: acreage, county and state, and any physical detail from the notes (utilities, access, structures, water, road frontage).
-3. The seller situation and motivation, only if the file shows it.
-4. Your read on value or next step, only if the notes contain it. Do not invent a market read that is not in the file.
+ABSOLUTE GROUNDING RULES (most important):
+- The CONVERSATION RECORD (the team's notes, the texts, the call recaps) is the ONLY source of truth for deal terms: prices, who wants to sell what, motivation, condition, timeline. Derive every one of those from the record. If the record does not say it, do NOT write it.
+- NEVER invent, estimate, average, or infer a price. Every dollar figure you write must appear in the record, and you must attribute it correctly: is it the SELLER'S asking price, OUR offer, or a COMP? If the record does not make a number's source clear, leave the number out.
+- Do NOT trust the system/intake fields over the conversation. The acreage estimate, intake price range, and offer field are often wrong or belong to a different parcel. Use the identifiers (county, state, APN) for location only. Never state a price or motivation from a system field.
+- MULTIPLE PARCELS: if the seller has more than one parcel, keep them SEPARATE. Never merge them or blend their acreage or prices. For each parcel, only if the record says it, state: which parcel, whether they want to SELL it or KEEP it, its acreage, and their price expectation. Getting which parcel is which wrong, or attaching a price to the wrong parcel, is the single worst mistake you can make. If the record is ambiguous about which parcel a detail belongs to, say it needs confirming rather than guessing.
+- Do NOT smooth gaps into a clean story. If a key fact (price, which parcel, acreage) is unclear or missing, either leave it out or flag it plainly, e.g. "still need to confirm the acreage." A short summary that says only what is known beats a complete-sounding one that guesses.
 
-RULES:
-- Use ONLY what is in the facts and the file. Never invent acreage, comps, prices, utilities, or motivation. If something is unknown, leave it out silently. Better short and true than padded.
-- Pull real detail out of the SMS thread only when it adds something (a number, a condition, a timeline, a motivation). Ignore small talk.
-- Keep it tight: 2 to 5 sentences, one short paragraph. This is a briefing, not an essay.
-- Write numbers cleanly ($90K, 7.94 acres, $12K to $20K per acre).
-- NEVER use em dashes or en dashes. Use commas, periods, or parentheses. This is a hard rule.
-- Output ONLY the summary text. No preamble, no "Here is the summary", no quotes, no labels.`;
+VOICE: Write as Jordan, first person, direct and factual, no fluff, no hype, no sales language. Professional but human, like a sharp operator briefing a partner. Fix grammar and spelling. Do NOT sound like AI. Tone example of his real writing: "Spoke with Justin, they inherited this from his mother-in-law, Ann Hunter. Just looking to cash out. Power available at the road. Comps vary from $12K to $20K per acre, but I'm thinking it depends on if public water is available."
 
-    const user = `PROPERTY FACTS:
-${facts}
+FORMAT:
+- One tight paragraph, 2 to 6 sentences. Lead with where the deal sits and the seller's number(s) if the record gives them.
+- Write numbers cleanly ($290K, 6 acres, $12K to $20K per acre).
+- NEVER use em dashes or en dashes. Use commas, periods, or parentheses. Hard rule.
+- Output ONLY the summary text. No preamble, no "Here is", no quotes, no labels.`;
 
-TEAM FILE (oldest first, timestamped; notes, texts, calls):
+    const user = `LOCATION / IDENTIFIERS (safe to state):
+${identifiers}
+
+SYSTEM / INTAKE FIELDS (unverified, often wrong, do NOT trust over the conversation, never state as deal facts):
+${systemFields}
+
+CONVERSATION RECORD (the source of truth; oldest first, each line timestamped; notes, texts, calls):
 ${record}
 
-Write Jordan's partner summary now. Output only the summary text.`;
+Write Jordan's partner summary now, grounded ONLY in the conversation record for all deal terms. If the record is thin, write a short accurate summary and flag what still needs confirming. Output only the summary text.`;
 
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 500, temperature: 0.3, system, messages: [{ role: 'user', content: user }] }),
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 600, temperature: 0, system, messages: [{ role: 'user', content: user }] }),
     });
     const data = await res.json();
     if (!res.ok) return NextResponse.json({ error: data.error?.message || 'AI error' }, { status: 502 });
