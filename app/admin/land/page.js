@@ -82,10 +82,12 @@ export default function LandLeadsAdminPage() {
     [cleanViewActive, rawLeads]
   );
   // Push a lead into (or pull it out of) Clean View. Admin-only curation.
+  // clean_view_at stamps when it was pushed, so Clean View can sort newest-first.
   const setLeadCleanView = async (leadId, on) => {
-    setRawLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, clean_view: on } : l)));
-    setSelectedLead((prev) => (prev && prev.id === leadId ? { ...prev, clean_view: on } : prev));
-    const { error } = await supabase.from('leads').update({ clean_view: on }).eq('id', leadId);
+    const at = on ? new Date().toISOString() : null;
+    setRawLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, clean_view: on, clean_view_at: at } : l)));
+    setSelectedLead((prev) => (prev && prev.id === leadId ? { ...prev, clean_view: on, clean_view_at: at } : prev));
+    const { error } = await supabase.from('leads').update({ clean_view: on, clean_view_at: at }).eq('id', leadId);
     if (error) {
       setRawLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, clean_view: !on } : l)));
       showToast('Could not update Clean View', 'error');
@@ -470,6 +472,10 @@ export default function LandLeadsAdminPage() {
   const [pipelineSearch, setPipelineSearch] = useState('');
   const [pipelineMapped, setPipelineMapped] = useState(false);
   const [pipelineSort, setPipelineSort] = useState('activity_desc');
+  // Clean View defaults to "newest pushed first"; exiting restores last-activity.
+  useEffect(() => {
+    setPipelineSort(cleanViewActive ? 'cleanview_desc' : 'activity_desc');
+  }, [cleanViewActive]);
   // Engagement filters shared across PPC Inflow and the pipeline buckets.
   const [needsResponseOnly, setNeedsResponseOnly] = useState(false); // last message was theirs
   const [uncontactedOnly, setUncontactedOnly] = useState(false);     // still NEW, never reached
@@ -4997,6 +5003,7 @@ export default function LandLeadsAdminPage() {
                 onChange={(e) => setPipelineSort(e.target.value)}
                 className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-3 text-sm text-white focus:outline-none focus:border-blue-500"
               >
+                {cleanViewActive && <option value="cleanview_desc">Newest to Clean View</option>}
                 <option value="activity_desc">Last activity: newest first</option>
                 <option value="activity_asc">Last activity: oldest first</option>
                 <option value="created_desc">Newest Inbound</option>
@@ -5017,6 +5024,7 @@ export default function LandLeadsAdminPage() {
                   .filter(l => !pipelineMapped || l.map_uploaded)
                   .filter(passesEngagement),
                 (a, b) => {
+                  if (pipelineSort === 'cleanview_desc') return new Date(b.clean_view_at || 0) - new Date(a.clean_view_at || 0);
                   const useCreated = pipelineSort.startsWith('created');
                   const av = new Date(useCreated ? a.created_at : (a.last_activity_at || a.created_at));
                   const bv = new Date(useCreated ? b.created_at : (b.last_activity_at || b.created_at));
@@ -5103,6 +5111,7 @@ export default function LandLeadsAdminPage() {
             activity_asc: (a, b) => new Date(a.last_activity_at || a.created_at) - new Date(b.last_activity_at || b.created_at),
             created_desc: (a, b) => new Date(b.created_at) - new Date(a.created_at),
             created_asc: (a, b) => new Date(a.created_at) - new Date(b.created_at),
+            cleanview_desc: (a, b) => new Date(b.clean_view_at || 0) - new Date(a.clean_view_at || 0),
           };
           const q = pipelineSearch.trim().toLowerCase();
           // Subdivision leads only appear in the shared buckets once they cross
@@ -5168,6 +5177,7 @@ export default function LandLeadsAdminPage() {
                   onChange={(e) => setPipelineSort(e.target.value)}
                   className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500/50"
                 >
+                  {cleanViewActive && <option value="cleanview_desc">Newest to Clean View</option>}
                   <option value="activity_desc">Last activity: newest first</option>
                   <option value="activity_asc">Last activity: oldest first</option>
                   <option value="created_desc">Newest Inbound</option>
@@ -5263,6 +5273,7 @@ export default function LandLeadsAdminPage() {
                 onChange={(e) => setPipelineSort(e.target.value)}
                 className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-3 text-sm text-white focus:outline-none focus:border-blue-500"
               >
+                {cleanViewActive && <option value="cleanview_desc">Newest to Clean View</option>}
                 <option value="activity_desc">Last activity: newest first</option>
                 <option value="activity_asc">Last activity: oldest first</option>
                 <option value="created_desc">Newest Inbound</option>
@@ -5378,6 +5389,7 @@ export default function LandLeadsAdminPage() {
                   .filter(l => !pipelineMapped || l.map_uploaded)
                   .filter(passesEngagement),
                 (a, b) => {
+                  if (pipelineSort === 'cleanview_desc') return new Date(b.clean_view_at || 0) - new Date(a.clean_view_at || 0);
                   const useCreated = pipelineSort.startsWith('created');
                   const av = new Date(useCreated ? a.created_at : (a.last_activity_at || a.created_at));
                   const bv = new Date(useCreated ? b.created_at : (b.last_activity_at || b.created_at));
@@ -6083,6 +6095,7 @@ export default function LandLeadsAdminPage() {
                   {partnerOptions.map((name) => <option key={name} value={name}>Sent to {name}</option>)}
                 </select>
                 <select value={pipelineSort} onChange={(e) => setPipelineSort(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50">
+                  {cleanViewActive && <option value="cleanview_desc">Newest to Clean View</option>}
                   <option value="activity_desc">Last activity: newest first</option>
                   <option value="activity_asc">Last activity: oldest first</option>
                   <option value="created_desc">Newest Inbound</option>

@@ -39,11 +39,15 @@ export async function POST(request) {
     // source of truth (one row per lead+board, upserted on re-push) so the
     // history can never be clobbered by a lead-row update or lost-update race.
     const pushedAt = new Date().toISOString();
+    // The exact note this partner received, so the card can show what went to
+    // whom (partners are not connected, so notes can differ per partner).
+    const noteSent = typeof summary === 'string' ? summary : (lead.partner_summary || '');
     const entry = {
       board_id: String(boardId),
       board_name: result.board,
       item_id: String(result.itemId),
       pushed_at: pushedAt,
+      note: noteSent || null,
       tagged: result.tagged || null,
       map_uploaded: !!result.mapUploaded,
       tag_in_bubble: !!result.tagInBubble,
@@ -59,6 +63,7 @@ export async function POST(request) {
           board_id: String(boardId),
           board_name: result.board,
           item_id: String(result.itemId),
+          note: noteSent || null,
           tagged: result.tagged || null,
           map_uploaded: !!result.mapUploaded,
           tag_in_bubble: !!result.tagInBubble,
