@@ -16,6 +16,7 @@ import DealStrip from '@/components/DealStrip';
 import MondayPushButton from '@/components/MondayPushButton';
 import OmSearch from '@/components/OmSearch';
 import { timeAgo, channelLabel } from '@/lib/format';
+import { playDing } from '@/lib/sound';
 import { DIRECTIONS, OFFER_DIRECTIONS, GENERAL_DIRECTIONS, FOLLOWUP_BUCKETS, FOLLOWUP_KEYS, LOST_REASONS, formatOffer, mergeScript, firstTouch, touchForStep } from '@/lib/followups';
 
 // A conversation note is anything that isn't an auto-logged activity marker.
@@ -24,6 +25,16 @@ const isConversationNote = (content) =>
 
 // Last 10 digits of a phone, the stable key for matching messages to leads.
 const phoneKey = (p) => (p || '').replace(/\D/g, '').slice(-10);
+
+// Short human label for a pipeline status, used in live stage-change alerts.
+const STAGE_LABEL_SHORT = (s) => ({
+  NEW: 'New', CONTACTING: 'In Contact', CONTACTED: 'In Contact',
+  ANTHONY_CONTACTED: 'Anthony Contacted', ANTHONY_FOLLOW_UP: 'Anthony Follow-up',
+  OFFER_CURATED: 'Offer Curated', APPT_SET_FOR_JORDAN: 'Appt Set',
+  OFFER_SENT: 'Offer Made', NEGOTIATING: 'Negotiating', AGREEMENT_SENT: 'Agreement Sent',
+  UNDER_CONTRACT: 'Signed Contract', CLOSED: 'Closed', DEAD: 'Dead',
+  WE_PASSED: 'We Passed', NURTURE: 'Nurture', LOST: 'Lost', ARCHIVED: 'Archived', FOLLOW_UP: 'Follow-Up',
+}[(s || '').toUpperCase()] || (s || 'Updated'));
 
 // activities.created_at is a naive `timestamp` storing the UTC instant. Force
 // UTC parsing so it isn't re-read as local time (adds the tz offset otherwise).
@@ -62,17 +73,36 @@ export default function LandLeadsAdminPage() {
   // they still sort into their correct stage tabs. Acquisition managers
   // (Anthony) are locked into Clean View so their board stays uncluttered;
   // admins (Jordan) toggle it and default to the full board (the "motherboard").
+  // Per-TAB, not per-browser: each tab keeps its own view so you can have the
+  // full board open in one tab and Clean View in another without them changing
+  // each other. Source of truth is the ?cleanview=1 URL param (so a tab can be
+  // opened straight into a view and survive refresh), backed by sessionStorage
+  // (per tab). localStorage is deliberately NOT used (that is what synced tabs).
   const [cleanViewPref, setCleanViewPref] = useState(false);
   useEffect(() => {
-    if (typeof window !== 'undefined') setCleanViewPref(localStorage.getItem('pr_clean_view') === '1');
+    if (typeof window === 'undefined') return;
+    const param = new URLSearchParams(window.location.search).get('cleanview');
+    if (param === '1') setCleanViewPref(true);
+    else if (param === '0') setCleanViewPref(false);
+    else setCleanViewPref(sessionStorage.getItem('pr_clean_view') === '1');
   }, []);
   const cleanViewActive = isAcquisitionManager ? true : cleanViewPref;
-  const toggleCleanView = () => {
-    setCleanViewPref((v) => {
-      const next = !v;
-      if (typeof window !== 'undefined') localStorage.setItem('pr_clean_view', next ? '1' : '0');
-      return next;
-    });
+  const setCleanView = (next) => {
+    setCleanViewPref(next);
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('pr_clean_view', next ? '1' : '0');
+      const url = new URL(window.location.href);
+      url.searchParams.set('cleanview', next ? '1' : '0');
+      window.history.replaceState({}, '', url);
+    }
+  };
+  const toggleCleanView = () => setCleanView(!cleanViewPref);
+  // Open the OTHER view in a fresh tab so both can sit side by side.
+  const openViewInNewTab = (clean) => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('cleanview', clean ? '1' : '0');
+    window.open(url.toString(), '_blank');
   };
   // The list every tab/count/board reads from. In Clean View it is the pushed
   // subset only; otherwise it is the full raw set. Renaming the raw state to
@@ -95,6 +125,48 @@ export default function LandLeadsAdminPage() {
       showToast(on ? 'Pushed to Clean View' : 'Removed from Clean View', 'success');
     }
   };
+
+  // Live board. A realtime feed on the leads table so a lead pushed to Clean
+  // View (or a stage change) shows up on other sessions without a refresh, with
+  // a ding. The actor does not ding themselves: they already updated their own
+  // rawLeads optimistically, so when the echo arrives prev === row and no
+  // transition is detected. Only sessions that did not make the change alert.
+  const rawLeadsRef = useRef([]);
+  useEffect(() => { rawLeadsRef.current = rawLeads; }, [rawLeads]);
+  const cleanViewActiveRef = useRef(cleanViewActive);
+  useEffect(() => { cleanViewActiveRef.current = cleanViewActive; }, [cleanViewActive]);
+  useEffect(() => {
+    if (!currentUserRole) return;
+    const ch = supabase
+      .channel('leads-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, (payload) => {
+        const row = payload.new;
+        if (!row || !row.id) return;
+        const prev = (rawLeadsRef.current || []).find((l) => l.id === row.id);
+        const name = row.full_name || row.name || 'Lead';
+        const statusOfRow = (row.pipeline_status || row.status || '').toUpperCase();
+        const statusOfPrev = (prev?.pipeline_status || prev?.status || '').toUpperCase();
+
+        // Merge the change into the board (or add a brand new lead).
+        setRawLeads((cur) => {
+          if (!cur.some((l) => l.id === row.id)) return [{ ...row }, ...cur];
+          return cur.map((l) => (l.id === row.id ? { ...l, ...row, partner_pushes: l.partner_pushes || row.partner_pushes } : l));
+        });
+
+        // Alerts. Only for real transitions (so the actor stays silent).
+        const becameCleanView = !!row.clean_view && (!prev || !prev.clean_view);
+        const stageChanged = prev && statusOfRow && statusOfRow !== statusOfPrev;
+        if (becameCleanView && cleanViewActiveRef.current) {
+          playDing();
+          showToast('New Lead. Contact ASAP.', 'success', name);
+        } else if (stageChanged) {
+          playDing();
+          showToast(`Stage changed to ${STAGE_LABEL_SHORT(statusOfRow)}`, 'success', name);
+        }
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [currentUserRole]);
   // -------------------------------------------------------------------------
 
   // "Mapped" pill rendered on lead cards when a property map screenshot has been uploaded.
@@ -4010,6 +4082,14 @@ export default function LandLeadsAdminPage() {
               Clean View active. Showing only pushed leads.
             </span>
           )}
+          <button
+            onClick={() => openViewInNewTab(!cleanViewActive)}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-700 transition-colors flex items-center gap-1.5"
+            title="Open the other view in a new tab so you can watch both at once"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+            Open {cleanViewActive ? 'full board' : 'Clean View'} in new tab
+          </button>
           <button
             onClick={toggleCleanView}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${cleanViewActive ? 'bg-teal-600 text-white hover:bg-teal-500' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
