@@ -101,7 +101,8 @@ export default function MondayPushButton({ lead, onToast }) {
     const targets = boards.filter((b) => selectedBoards.has(String(b.id)));
     if (!targets.length || !summary.trim()) return;
     setPushingMany(true);
-    const okNames = [];
+    const newNames = [];
+    const updatedNames = [];
     const failNames = [];
     let latestPushes = null;
     for (const board of targets) {
@@ -115,7 +116,7 @@ export default function MondayPushButton({ lead, onToast }) {
         if (!res.ok || !data.ok) throw new Error(data.error || 'Push failed');
         if (Array.isArray(data.partner_pushes)) latestPushes = data.partner_pushes;
         else latestPushes = [...(latestPushes || sent).filter((p) => String(p.board_id) !== String(board.id)), { board_id: board.id, board_name: board.name, note: summary.trim() }];
-        okNames.push(board.name);
+        (data.updatedExisting ? updatedNames : newNames).push(board.name);
       } catch (err) {
         failNames.push(board.name);
         console.warn('[monday push]', board.name, err?.message);
@@ -124,8 +125,11 @@ export default function MondayPushButton({ lead, onToast }) {
     if (latestPushes) setSent(latestPushes);
     setSelectedBoards(new Set());
     setPushingMany(false);
-    if (okNames.length && !failNames.length) onToast && onToast(`Sent to ${okNames.join(', ')}. Compose the next note or close.`, 'success');
-    else if (okNames.length && failNames.length) onToast && onToast(`Sent to ${okNames.join(', ')}. Failed: ${failNames.join(', ')}`, 'error');
+    const okBits = [];
+    if (newNames.length) okBits.push(`Sent to ${newNames.join(', ')} with the map`);
+    if (updatedNames.length) okBits.push(`Posted an update to ${updatedNames.join(', ')} (no map, already had the lead)`);
+    if (okBits.length && !failNames.length) onToast && onToast(okBits.join('. '), 'success');
+    else if (okBits.length && failNames.length) onToast && onToast(`${okBits.join('. ')}. Failed: ${failNames.join(', ')}`, 'error');
     else onToast && onToast(`Push failed: ${failNames.join(', ')}`, 'error');
   };
 
@@ -223,7 +227,7 @@ export default function MondayPushButton({ lead, onToast }) {
                           {checked && <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
                         </span>
                         {b.name}
-                        {sentIds.has(String(b.id)) && <span className="text-[9px] opacity-70">sent</span>}
+                        {sentIds.has(String(b.id)) && <span className="text-[9px] opacity-70">update, no map</span>}
                       </button>
                     );
                   })}

@@ -33,7 +33,25 @@ export async function POST(request) {
       .order('created_at', { ascending: true });
     lead.notes = notes || [];
 
-    const result = await pushLeadToBoard(boardId, lead);
+    // Has this lead already been pushed to THIS board? If so, we post a
+    // follow-up update to the existing item (no duplicate item, no map) instead
+    // of creating a new one. Source of truth is the durable table; fall back to
+    // the lead's jsonb mirror.
+    let existingItemId = null;
+    try {
+      const { data: prior } = await supabase
+        .from('partner_pushes')
+        .select('item_id')
+        .eq('lead_id', leadId).eq('board_id', String(boardId))
+        .maybeSingle();
+      if (prior?.item_id) existingItemId = String(prior.item_id);
+    } catch { /* table may not exist; jsonb fallback below */ }
+    if (!existingItemId && Array.isArray(lead.partner_pushes)) {
+      const mirror = lead.partner_pushes.find((p) => String(p.board_id) === String(boardId));
+      if (mirror?.item_id) existingItemId = String(mirror.item_id);
+    }
+
+    const result = await pushLeadToBoard(boardId, lead, { existingItemId });
 
     // Record this push. The durable, append-only partner_pushes TABLE is the
     // source of truth (one row per lead+board, upserted on re-push) so the
