@@ -121,8 +121,31 @@ export default function LandLeadsAdminPage() {
     if (error) {
       setRawLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, clean_view: !on } : l)));
       showToast('Could not update Clean View', 'error');
-    } else {
-      showToast(on ? 'Pushed to Clean View' : 'Removed from Clean View', 'success');
+      return;
+    }
+    showToast(on ? 'Pushed to Clean View' : 'Removed from Clean View', 'success');
+
+    // Ping Anthony's bell (reliable: realtime + 30s poll fallback + sound +
+    // browser notification) so a lead landing in Clean View never gets missed.
+    if (on && acquisitionManagerId && acquisitionManagerId !== currentUserId) {
+      const lead = rawLeads.find((l) => l.id === leadId);
+      const nm = lead?.full_name || lead?.name || 'New lead';
+      const acresTxt = lead?.acreage || lead?.acres ? `${lead.acreage || lead.acres} acres` : '';
+      const countyTxt = (lead?.property_county || lead?.county) ? `${lead.property_county || lead.county} County` : '';
+      const detail = [acresTxt, countyTxt].filter(Boolean).join(', ');
+      fetch('/api/notifications/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: acquisitionManagerId,
+          fromUserId: currentUserId,
+          type: 'lead_assigned',
+          title: 'New Lead. Contact ASAP.',
+          message: `${nm}${detail ? ` (${detail})` : ''} was pushed to your Clean View. Contact ASAP.`,
+          link: `/admin/land?lead=${leadId}`,
+          sendEmail: true,
+        }),
+      }).catch((e) => console.warn('clean-view notify failed', e?.message));
     }
   };
 
