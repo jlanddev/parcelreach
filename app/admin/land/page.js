@@ -1035,6 +1035,41 @@ export default function LandLeadsAdminPage() {
     }
   };
 
+  // ---- Daily Action Tray ---------------------------------------------------
+  // Today's due calls/tasks for the logged-in person, forced in front of them
+  // until cleared, so scheduled follow-ups actually get worked.
+  const [trayOpen, setTrayOpen] = useState(true);
+  const [dailyScan, setDailyScan] = useState(null);
+  const [scanLoading, setScanLoading] = useState(false);
+
+  const completeTaskQuick = async (task) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id || null }).eq('id', task.id);
+      setScheduledTasks((prev) => prev.filter((t) => t.id !== task.id));
+      showToast('Cleared', 'success');
+    } catch (e) { showToast('Could not clear: ' + (e?.message || e), 'error'); }
+  };
+  const snoozeTask = async (task, days) => {
+    const d = new Date(); d.setDate(d.getDate() + days); d.setHours(10, 0, 0, 0);
+    const iso = d.toISOString();
+    try {
+      await supabase.from('scheduled_tasks').update({ due_at: iso, updated_at: new Date().toISOString() }).eq('id', task.id);
+      setScheduledTasks((prev) => prev.map((t) => t.id === task.id ? { ...t, due_at: iso } : t));
+      showToast(`Snoozed to ${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}`, 'success');
+    } catch (e) { showToast('Could not snooze: ' + (e?.message || e), 'error'); }
+  };
+  const runDailyScan = async () => {
+    setScanLoading(true); setDailyScan(null);
+    try {
+      const res = await fetch('/api/ai/daily-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: currentUserId }) });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Scan failed');
+      setDailyScan(data);
+    } catch (e) { setDailyScan({ error: e.message }); }
+    finally { setScanLoading(false); }
+  };
+
   // Quick log activity (one-tap)
   const quickLogActivity = async (leadId, outcome) => {
     const lead = allLeads.find(l => l.id === leadId);
@@ -4134,6 +4169,75 @@ export default function LandLeadsAdminPage() {
           </div>
         </div>
       </div>
+
+      {/* Daily Action Tray: today's due calls/tasks for the logged-in person,
+          forced up top until cleared. Per person (assigned_to === you). */}
+      {(() => {
+        const now = Date.now();
+        const endToday = new Date(); endToday.setHours(23, 59, 59, 999);
+        const due = scheduledTasks
+          .filter((t) => t.status === 'pending' && t.assigned_to === currentUserId && new Date(t.due_at).getTime() <= endToday.getTime())
+          .sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+        const overdueCount = due.filter((t) => new Date(t.due_at).getTime() < now - 12 * 3600 * 1000).length;
+        return (
+          <div className="bg-slate-900 border-b border-slate-700/70">
+            <div className="px-6 py-2 flex items-center gap-3">
+              <button onClick={() => setTrayOpen((v) => !v)} className="flex items-center gap-2 text-sm font-semibold text-white">
+                <svg className={`w-4 h-4 text-cyan-400 transition-transform ${trayOpen ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
+                Today
+                <span className={`px-2 py-0.5 rounded-full text-xs ${due.length ? 'bg-cyan-500/20 text-cyan-300' : 'bg-slate-700 text-slate-400'}`}>{due.length} to work</span>
+                {overdueCount > 0 && <span className="px-2 py-0.5 rounded-full text-xs bg-rose-500/20 text-rose-300">{overdueCount} overdue</span>}
+              </button>
+              <div className="ml-auto flex items-center gap-2">
+                <button onClick={runDailyScan} disabled={scanLoading} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 text-xs font-semibold disabled:opacity-50">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
+                  {scanLoading ? 'Scanning…' : 'AI Scan My Day'}
+                </button>
+              </div>
+            </div>
+            {trayOpen && (
+              <div className="px-6 pb-3">
+                {dailyScan && (
+                  <div className="mb-2 rounded-lg border border-cyan-500/30 bg-cyan-500/5 px-3 py-2 text-sm text-slate-200 whitespace-pre-wrap">
+                    {dailyScan.error ? <span className="text-rose-300">{dailyScan.error}</span> : dailyScan.summary}
+                    <button onClick={() => setDailyScan(null)} className="ml-2 text-slate-500 hover:text-slate-300 text-xs">dismiss</button>
+                  </div>
+                )}
+                {due.length === 0 ? (
+                  <div className="text-sm text-slate-500 py-2">Nothing due today. Nice and clear.</div>
+                ) : (
+                  <div className="grid gap-1.5 max-h-64 overflow-y-auto">
+                    {due.map((task) => {
+                      const lead = allLeads.find((l) => l.id === task.lead_id);
+                      const nm = lead?.full_name || lead?.name || 'Lead';
+                      const overdue = new Date(task.due_at).getTime() < now - 12 * 3600 * 1000;
+                      return (
+                        <div key={task.id} className="flex items-center gap-2 rounded-lg bg-slate-800/60 border border-slate-700/50 px-3 py-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm text-slate-100 truncate">
+                              <button onClick={() => lead && navigateToLeadCard(lead)} className="hover:text-cyan-300 hover:underline font-medium">{nm}</button>
+                              <span className="text-slate-400"> · {task.title?.split(':')[0] || 'Call'}</span>
+                            </div>
+                            <div className={`text-xs ${overdue ? 'text-rose-300' : 'text-slate-500'}`}>{overdue ? 'Overdue · ' : ''}{new Date(task.due_at).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</div>
+                          </div>
+                          {lead && (lead.phone || lead.owner_phone) && (
+                            <button onClick={() => setCallLead(lead)} title="Call" className="px-2.5 py-1.5 rounded-lg bg-green-600/20 hover:bg-green-600/40 text-green-300 text-xs font-medium">Call</button>
+                          )}
+                          {lead && (
+                            <button onClick={() => openConversation(lead)} title="Text" className="px-2.5 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 text-xs font-medium">Text</button>
+                          )}
+                          <button onClick={() => snoozeTask(task, 1)} title="Snooze 1 day" className="px-2 py-1.5 rounded-lg bg-slate-700/60 hover:bg-slate-600 text-slate-300 text-xs">+1d</button>
+                          <button onClick={() => completeTaskQuick(task)} title="Clear" className="px-2.5 py-1.5 rounded-lg bg-slate-700/60 hover:bg-green-600/40 text-slate-200 hover:text-green-200 text-xs font-medium">Done</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Clean View toggle (admin only). Anthony is locked into Clean View and
           never sees this control. */}
