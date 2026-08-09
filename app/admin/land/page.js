@@ -997,6 +997,44 @@ export default function LandLeadsAdminPage() {
     }
   };
 
+  // Assign a deliberate task on a lead (who + when), the canonical next-touch.
+  // Supersedes any existing pending follow-up/callback so a lead never carries
+  // two conflicting next-touches. assignedTo defaults to the lead's owner.
+  const assignTask = async (leadId, { assignedTo, dueISO, label, taskType = 'callback' } = {}) => {
+    const due = dueISO ? new Date(dueISO) : null;
+    if (!due || isNaN(due.getTime())) { showToast('Pick a date and time for the task', 'error'); return; }
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const lead = (allLeadsRef.current || []).find((l) => l.id === leadId);
+      const owner = assignedTo || lead?.current_owner_id || acquisitionManagerId || user?.id || null;
+      // One active next-touch per lead: supersede prior pending follow-up/callback.
+      await supabase.from('scheduled_tasks')
+        .update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id || null })
+        .eq('lead_id', leadId).eq('status', 'pending').in('task_type', ['follow_up', 'callback'])
+        .then(() => {}, () => {});
+      setScheduledTasks((prev) => prev.map((t) =>
+        (t.lead_id === leadId && t.status === 'pending' && ['follow_up', 'callback'].includes(t.task_type))
+          ? { ...t, status: 'completed' } : t));
+      const { data: task, error } = await supabase.from('scheduled_tasks').insert({
+        lead_id: leadId,
+        created_by: user?.id || null,
+        assigned_to: owner,
+        task_type: taskType,
+        title: `${label || 'Call'}: ${lead?.name || lead?.full_name || 'Lead'}`,
+        description: 'Assigned from the note screen',
+        due_at: due.toISOString(),
+        status: 'pending',
+        priority: 'normal',
+      }).select().maybeSingle();
+      if (error) throw error;
+      if (task) setScheduledTasks((prev) => [...prev, task]);
+      const whoName = usersById[owner]?.split(' ')[0] || 'the owner';
+      showToast(`Task set for ${whoName}, ${due.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`, 'success');
+    } catch (e) {
+      showToast('Could not assign task: ' + (e?.message || e), 'error');
+    }
+  };
+
   // Quick log activity (one-tap)
   const quickLogActivity = async (leadId, outcome) => {
     const lead = allLeads.find(l => l.id === leadId);
@@ -3967,6 +4005,7 @@ export default function LandLeadsAdminPage() {
           onOpenLead={(l) => navigateToLeadCard(l)}
           onSetDirection={(id, val) => setDealDirection(id, val)}
           onScheduleFollowUp={scheduleSmartFollowUp}
+          onAssignTask={assignTask}
         />
       )}
       {notesModalLead && (
@@ -3981,6 +4020,7 @@ export default function LandLeadsAdminPage() {
           onOpenLead={(l) => navigateToLeadCard(l)}
           onSetDirection={(id, val) => setDealDirection(id, val)}
           onScheduleFollowUp={scheduleSmartFollowUp}
+          onAssignTask={assignTask}
         />
       )}
       {callLead && (

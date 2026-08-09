@@ -15,7 +15,7 @@ import { playSwoosh } from '@/lib/sound';
  */
 const LEAN_LABEL = { hot: 'Hot', warm: 'Warm', cold: 'Cold', ready: 'Ready' };
 
-export default function NotesModal({ lead, currentUserId, currentUserName, roster = [], usersById = {}, onClose, onPosted, onOpenLead, onSetDirection, onScheduleFollowUp }) {
+export default function NotesModal({ lead, currentUserId, currentUserName, roster = [], usersById = {}, onClose, onPosted, onOpenLead, onSetDirection, onScheduleFollowUp, onAssignTask }) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState('');
@@ -29,7 +29,11 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
   const [expanded, setExpanded] = useState(false);          // bigger note window
   const [draftFiles, setDraftFiles] = useState([]);         // [{url,name,type}] attached to the note being written
   const [uploading, setUploading] = useState(false);
-  const [fuOpen, setFuOpen] = useState(false);              // follow-up quick picker
+  const [taskOpen, setTaskOpen] = useState(false);          // assign-task form
+  const [taskAssignee, setTaskAssignee] = useState('');
+  const [taskDate, setTaskDate] = useState('');
+  const [taskTime, setTaskTime] = useState('10:00');
+  const [taskLabel, setTaskLabel] = useState('Call');
   const taRef = useRef(null);
   const scrollRef = useRef(null);
   const fileRef = useRef(null);
@@ -56,19 +60,15 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
     }
   };
 
-  // Set a follow-up N days out (or a specific date), keeping the lead's stage.
-  const setFollowUp = (daysOrISO, label) => {
-    if (!onScheduleFollowUp) return;
-    let iso;
-    if (typeof daysOrISO === 'number') {
-      const d = new Date(); d.setDate(d.getDate() + daysOrISO); d.setHours(10, 0, 0, 0);
-      iso = d.toISOString();
-    } else {
-      const d = new Date(daysOrISO + 'T10:00:00'); iso = d.toISOString();
-    }
-    onScheduleFollowUp(lead.id, iso, label || 'Follow up');
-    setFuOpen(false);
+  // Assign a task (who + when) as the lead's next touch. Keeps the lead's stage,
+  // and supersedes any existing follow-up (handled in the parent) so nothing conflicts.
+  const submitTask = () => {
+    if (!onAssignTask || !taskDate) return;
+    const dueISO = new Date(`${taskDate}T${taskTime || '10:00'}:00`).toISOString();
+    onAssignTask(lead.id, { assignedTo: taskAssignee || undefined, dueISO, label: taskLabel || 'Call' });
+    setTaskOpen(false); setTaskDate('');
   };
+  const quickDate = (days) => { const d = new Date(); d.setDate(d.getDate() + days); setTaskDate(d.toISOString().slice(0, 10)); };
 
   // Notes brain: reads the WHOLE file (texts + calls + notes) via the same
   // endpoint the message brain uses, so both see everything.
@@ -371,16 +371,38 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
               ))}
             </div>
           )}
-          {/* Set Follow-Up: schedules the next touch, keeps the lead's stage. */}
-          {onScheduleFollowUp && (
-            <div className="mb-2 flex items-center gap-2 flex-wrap">
-              <span className="text-[11px] uppercase tracking-wide text-slate-500">Follow up in</span>
-              {[['2d', 2], ['4d', 4], ['1wk', 7], ['2wk', 14]].map(([lbl, days]) => (
-                <button key={lbl} type="button" onClick={() => setFollowUp(days, 'Follow up')}
-                  className="px-2.5 py-1 rounded-md bg-slate-700/60 hover:bg-blue-600/40 text-slate-200 text-xs font-medium">{lbl}</button>
-              ))}
-              <input type="date" onChange={(e) => e.target.value && setFollowUp(e.target.value, 'Follow up')}
-                className="px-2 py-1 rounded-md bg-slate-900/70 border border-slate-700 text-slate-300 text-xs" title="Pick a date" />
+          {/* Assign Task: sets the lead's next touch (who + when), keeps its stage. */}
+          {onAssignTask && (
+            <div className="mb-2">
+              {!taskOpen ? (
+                <button type="button" onClick={() => { setTaskOpen(true); if (!taskDate) quickDate(2); }}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-slate-700/60 hover:bg-slate-600 text-slate-200 text-xs font-medium">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
+                  Assign Task
+                </button>
+              ) : (
+                <div className="rounded-lg border border-slate-700 bg-slate-800/60 p-2 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] uppercase tracking-wide text-slate-400">Assign a task</span>
+                    <button type="button" onClick={() => setTaskOpen(false)} className="text-slate-500 hover:text-slate-300 text-sm">×</button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <select value={taskAssignee} onChange={(e) => setTaskAssignee(e.target.value)} className="col-span-2 bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1.5 text-xs text-slate-200">
+                      <option value="">Assign to owner</option>
+                      {roster.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                    </select>
+                    <input value={taskLabel} onChange={(e) => setTaskLabel(e.target.value)} placeholder="Call" className="col-span-2 bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1.5 text-xs text-slate-200" />
+                    <input type="date" value={taskDate} onChange={(e) => setTaskDate(e.target.value)} className="bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1.5 text-xs text-slate-200" />
+                    <input type="time" value={taskTime} onChange={(e) => setTaskTime(e.target.value)} className="bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1.5 text-xs text-slate-200" />
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {[['2d', 2], ['4d', 4], ['1wk', 7], ['2wk', 14]].map(([lbl, days]) => (
+                      <button key={lbl} type="button" onClick={() => quickDate(days)} className="px-2 py-1 rounded-md bg-slate-700/60 hover:bg-blue-600/40 text-slate-300 text-[11px]">{lbl}</button>
+                    ))}
+                    <button type="button" onClick={submitTask} disabled={!taskDate} className="ml-auto px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs font-medium">Set task</button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
