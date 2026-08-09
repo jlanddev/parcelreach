@@ -26,8 +26,49 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
   const [ai, setAi] = useState(null); // { lean, follow_up, summary } or { error }
   const [aiApplied, setAiApplied] = useState({});
   const [aiDismissed, setAiDismissed] = useState({});
+  const [expanded, setExpanded] = useState(false);          // bigger note window
+  const [draftFiles, setDraftFiles] = useState([]);         // [{url,name,type}] attached to the note being written
+  const [uploading, setUploading] = useState(false);
+  const [fuOpen, setFuOpen] = useState(false);              // follow-up quick picker
   const taRef = useRef(null);
   const scrollRef = useRef(null);
+  const fileRef = useRef(null);
+
+  // Upload one attachment to the note-attachments bucket, return its public URL.
+  const uploadFiles = async (files) => {
+    if (!files?.length) return;
+    setUploading(true);
+    try {
+      const added = [];
+      for (const file of Array.from(files)) {
+        const rand = Math.random().toString(36).slice(2, 8);
+        const path = `${lead.id}/${Date.now()}-${rand}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        const { error } = await supabase.storage.from('note-attachments').upload(path, file, { contentType: file.type, upsert: false });
+        if (error) throw error;
+        const { data } = supabase.storage.from('note-attachments').getPublicUrl(path);
+        added.push({ url: data.publicUrl, name: file.name, type: file.type });
+      }
+      setDraftFiles((prev) => [...prev, ...added]);
+    } catch (e) {
+      alert('Upload failed: ' + (e?.message || e));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // Set a follow-up N days out (or a specific date), keeping the lead's stage.
+  const setFollowUp = (daysOrISO, label) => {
+    if (!onScheduleFollowUp) return;
+    let iso;
+    if (typeof daysOrISO === 'number') {
+      const d = new Date(); d.setDate(d.getDate() + daysOrISO); d.setHours(10, 0, 0, 0);
+      iso = d.toISOString();
+    } else {
+      const d = new Date(daysOrISO + 'T10:00:00'); iso = d.toISOString();
+    }
+    onScheduleFollowUp(lead.id, iso, label || 'Follow up');
+    setFuOpen(false);
+  };
 
   // Notes brain: reads the WHOLE file (texts + calls + notes) via the same
   // endpoint the message brain uses, so both see everything.
@@ -129,7 +170,7 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
 
   const post = async () => {
     const content = draft.trim();
-    if (!content || posting) return;
+    if ((!content && draftFiles.length === 0) || posting) return;
     setPosting(true);
     try {
       const mentioned = roster
@@ -140,11 +181,13 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
       const { error } = await supabase.from('lead_notes').insert({
         lead_id: lead.id,
         user_id: currentUserId,
-        content,
+        content: content || '(attachment)',
         mentioned_users: mentioned,
+        attachments: draftFiles,
       });
       if (error) throw error;
       setDraft('');
+      setDraftFiles([]);
       playSwoosh();
 
       // Fire a notification (bell + email) to each tagged teammate.
@@ -183,7 +226,7 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="w-full max-w-md h-[620px] bg-slate-900 border border-slate-700 rounded-xl flex flex-col overflow-hidden shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className={`w-full bg-slate-900 border border-slate-700 rounded-xl flex flex-col overflow-hidden shadow-2xl ${expanded ? 'max-w-3xl h-[88vh]' : 'max-w-md h-[620px]'}`} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-700/70 bg-slate-800/60">
           <div className="flex-1 min-w-0">
             <button
@@ -196,6 +239,13 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
             </button>
             <div className="text-slate-400 text-xs">{notes.length} note{notes.length === 1 ? '' : 's'} · tap name for the lead card</div>
           </div>
+          <button onClick={() => setExpanded((v) => !v)} title={expanded ? 'Shrink' : 'Expand'} className="p-2 rounded-lg hover:bg-slate-700/60 text-slate-400">
+            {expanded ? (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9L4 4m0 0v4m0-4h4m7 5l5-5m0 0v4m0-4h-4m-1 12l5 5m0 0v-4m0 4h-4M9 15l-5 5m0 0v-4m0 4h4" /></svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg>
+            )}
+          </button>
           <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-700/60 text-slate-400">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
           </button>
@@ -221,6 +271,23 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
                   }`}
                 >
                   {renderContent(n.content)}
+                  {Array.isArray(n.attachments) && n.attachments.length > 0 && (
+                    <div className="mt-2 flex flex-col gap-2">
+                      {n.attachments.map((f, i) => (
+                        (f.type || '').startsWith('image/') ? (
+                          <a key={i} href={f.url} target="_blank" rel="noreferrer">
+                            <img src={f.url} alt={f.name} className="max-h-48 rounded-lg border border-slate-600/40" />
+                          </a>
+                        ) : (
+                          <a key={i} href={f.url} target="_blank" rel="noreferrer"
+                            className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-slate-800/70 border border-slate-600/40 text-xs text-blue-300 hover:text-blue-200 max-w-full">
+                            <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+                            <span className="truncate">{f.name}</span>
+                          </a>
+                        )
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -304,17 +371,51 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
               ))}
             </div>
           )}
+          {/* Set Follow-Up: schedules the next touch, keeps the lead's stage. */}
+          {onScheduleFollowUp && (
+            <div className="mb-2 flex items-center gap-2 flex-wrap">
+              <span className="text-[11px] uppercase tracking-wide text-slate-500">Follow up in</span>
+              {[['2d', 2], ['4d', 4], ['1wk', 7], ['2wk', 14]].map(([lbl, days]) => (
+                <button key={lbl} type="button" onClick={() => setFollowUp(days, 'Follow up')}
+                  className="px-2.5 py-1 rounded-md bg-slate-700/60 hover:bg-blue-600/40 text-slate-200 text-xs font-medium">{lbl}</button>
+              ))}
+              <input type="date" onChange={(e) => e.target.value && setFollowUp(e.target.value, 'Follow up')}
+                className="px-2 py-1 rounded-md bg-slate-900/70 border border-slate-700 text-slate-300 text-xs" title="Pick a date" />
+            </div>
+          )}
+
+          {/* Attachments queued on the note being written. */}
+          {draftFiles.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-2">
+              {draftFiles.map((f, i) => (
+                <span key={i} className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-slate-700/60 text-xs text-slate-200 max-w-[180px]">
+                  <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+                  <span className="truncate">{f.name}</span>
+                  <button type="button" onClick={() => setDraftFiles((prev) => prev.filter((_, idx) => idx !== i))} className="text-slate-400 hover:text-rose-300">×</button>
+                </span>
+              ))}
+            </div>
+          )}
+
           <div className="flex items-end gap-2">
+            <input ref={fileRef} type="file" multiple className="hidden" onChange={(e) => { uploadFiles(e.target.files); e.target.value = ''; }} />
+            <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading} title="Attach a file" className="p-2 rounded-lg bg-slate-700/60 hover:bg-slate-600 text-slate-300 disabled:opacity-50">
+              {uploading ? (
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" /></svg>
+              ) : (
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+              )}
+            </button>
             <textarea
               ref={taRef}
               value={draft}
               onChange={onChange}
               onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); post(); } }}
-              rows={2}
+              rows={expanded ? 4 : 2}
               placeholder="Add a note… use @ to tag a teammate (⌘+Enter to send)"
-              className="flex-1 resize-none max-h-32 bg-slate-900/70 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500/60"
+              className="flex-1 resize-none max-h-48 bg-slate-900/70 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500/60"
             />
-            <button onClick={post} disabled={!draft.trim() || posting} className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm font-medium">
+            <button onClick={post} disabled={(!draft.trim() && draftFiles.length === 0) || posting} className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm font-medium">
               Post
             </button>
           </div>
