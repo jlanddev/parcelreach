@@ -1152,7 +1152,14 @@ export default function LandLeadsAdminPage() {
           let { error: ce } = await supabase.from('scheduled_tasks').insert(cp);
           if (ce) { const { source, ...ns } = cp; await supabase.from('scheduled_tasks').insert(ns); }
         } else {
-          queueRows.push({ enrollment_id: enrollment.id, lead_id: leadId, campaign_id: camp.id, step_index: i, type: 'text', message: fillTokens(s.message, lead), due_at: due.toISOString(), status: 'pending' });
+          const msg = fillTokens(s.message, lead);
+          if (delayMins <= 0 && lead?.phone) {
+            // Due now: fire the intro text immediately (speed to lead) and mark it sent.
+            fetch('/api/pb/send-sms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: lead.phone, message: msg, leadId, userId: user?.id }) }).catch(() => {});
+            queueRows.push({ enrollment_id: enrollment.id, lead_id: leadId, campaign_id: camp.id, step_index: i, type: 'text', message: msg, due_at: due.toISOString(), status: 'sent', processed_at: new Date().toISOString() });
+          } else {
+            queueRows.push({ enrollment_id: enrollment.id, lead_id: leadId, campaign_id: camp.id, step_index: i, type: 'text', message: msg, due_at: due.toISOString(), status: 'pending' });
+          }
         }
       }
       if (queueRows.length) await supabase.from('campaign_queue').insert(queueRows);
