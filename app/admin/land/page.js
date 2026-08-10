@@ -995,7 +995,7 @@ export default function LandLeadsAdminPage() {
       setScheduledTasks((prev) => prev.map((t) =>
         (t.lead_id === leadId && t.status === 'pending' && ['follow_up', 'callback'].includes(t.task_type))
           ? { ...t, status: 'completed' } : t));
-      const { data: task, error } = await supabase.from('scheduled_tasks').insert({
+      const fuPayload = {
         lead_id: leadId,
         created_by: user?.id || null,
         assigned_to: user?.id || lead?.current_owner_id || null,
@@ -1006,7 +1006,12 @@ export default function LandLeadsAdminPage() {
         due_at: due.toISOString(),
         status: 'pending',
         priority: 'normal',
-      }).select().maybeSingle();
+      };
+      let { data: task, error } = await supabase.from('scheduled_tasks').insert(fuPayload).select().maybeSingle();
+      if (error) {
+        const { source, ...noSource } = fuPayload;
+        ({ data: task, error } = await supabase.from('scheduled_tasks').insert(noSource).select().maybeSingle());
+      }
       if (error) throw error;
       if (task) setScheduledTasks((prev) => [...prev, task]);
       showToast(`Follow-up set for ${due.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`, 'success');
@@ -1033,7 +1038,7 @@ export default function LandLeadsAdminPage() {
       setScheduledTasks((prev) => prev.map((t) =>
         (t.lead_id === leadId && t.status === 'pending' && ['follow_up', 'callback'].includes(t.task_type))
           ? { ...t, status: 'completed' } : t));
-      const { data: task, error } = await supabase.from('scheduled_tasks').insert({
+      const taskPayload = {
         lead_id: leadId,
         created_by: user?.id || null,
         assigned_to: owner,
@@ -1044,7 +1049,12 @@ export default function LandLeadsAdminPage() {
         due_at: due.toISOString(),
         status: 'pending',
         priority: 'normal',
-      }).select().maybeSingle();
+      };
+      let { data: task, error } = await supabase.from('scheduled_tasks').insert(taskPayload).select().maybeSingle();
+      if (error) { // 'source' column may not be migrated yet; retry without it
+        const { source, ...noSource } = taskPayload;
+        ({ data: task, error } = await supabase.from('scheduled_tasks').insert(noSource).select().maybeSingle());
+      }
       if (error) throw error;
       if (task) setScheduledTasks((prev) => [...prev, task]);
       const whoName = usersById[owner]?.split(' ')[0] || 'the owner';
