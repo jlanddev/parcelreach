@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 
 // Campaigns tab: create and edit nurture sequences. A campaign is a list of
@@ -18,14 +18,17 @@ export default function CampaignsTab({ onToast }) {
   };
   useEffect(() => { load(); }, []);
 
-  const blank = () => ({ name: '', description: '', active: true, steps: [{ day: 0, type: 'text', message: '' }] });
+  const blank = () => ({ name: '', description: '', active: true, steps: [{ value: 0, unit: 'minutes', type: 'text', message: '' }] });
 
   const save = async (c) => {
+    const toMins = (v, u) => (Number(v) || 0) * (u === 'days' ? 1440 : u === 'hours' ? 60 : 1);
     const steps = (c.steps || []).map((s) => ({
-      day: Number(s.day) || 0,
+      delayMins: toMins(s.value, s.unit),
+      value: Number(s.value) || 0,
+      unit: s.unit || 'minutes',
       type: s.type === 'call' ? 'call' : 'text',
       ...(s.type === 'call' ? { label: s.label || 'Call' } : { message: s.message || '' }),
-    })).sort((a, b) => a.day - b.day);
+    })).sort((a, b) => a.delayMins - b.delayMins);
     const payload = { name: c.name?.trim(), description: c.description || '', active: c.active !== false, steps };
     if (!payload.name) { setErr('Name is required'); return; }
     try {
@@ -97,12 +100,34 @@ export default function CampaignsTab({ onToast }) {
   );
 }
 
+const MERGE_FIELDS = [['First name', '{{first}}'], ['County', '{{county}}'], ['State', '{{state}}'], ['Acres', '{{acres}}'], ['Sender', '{{sender}}']];
+
 function Editor({ initial, onSave, onCancel, err }) {
-  const [c, setC] = useState(() => JSON.parse(JSON.stringify(initial)));
+  // Normalize steps to value+unit (from delayMins, or legacy day).
+  const normalize = (steps) => (steps || []).map((s) => {
+    if (s.value != null && s.unit) return s;
+    const mins = Number.isFinite(s.delayMins) ? s.delayMins : (Number(s.day) || 0) * 1440;
+    const d = mins >= 1440 && mins % 1440 === 0 ? { value: mins / 1440, unit: 'days' } : mins >= 60 && mins % 60 === 0 ? { value: mins / 60, unit: 'hours' } : { value: mins, unit: 'minutes' };
+    return { ...s, value: d.value, unit: d.unit };
+  });
+  const [c, setC] = useState(() => { const x = JSON.parse(JSON.stringify(initial)); x.steps = normalize(x.steps); return x; });
+  const msgRefs = useRef({});
   const setField = (k, v) => setC((p) => ({ ...p, [k]: v }));
   const setStep = (i, k, v) => setC((p) => ({ ...p, steps: p.steps.map((s, idx) => idx === i ? { ...s, [k]: v } : s) }));
-  const addStep = () => setC((p) => ({ ...p, steps: [...(p.steps || []), { day: ((p.steps || []).reduce((m, s) => Math.max(m, Number(s.day) || 0), 0)) + 2, type: 'text', message: '' }] }));
+  const addStep = () => setC((p) => ({ ...p, steps: [...(p.steps || []), { value: 1, unit: 'days', type: 'text', message: '' }] }));
   const removeStep = (i) => setC((p) => ({ ...p, steps: p.steps.filter((_, idx) => idx !== i) }));
+  // Insert a merge token at the cursor of a step's message box.
+  const insertToken = (i, token) => {
+    const el = msgRefs.current[i];
+    const cur = c.steps[i]?.message || '';
+    if (el && typeof el.selectionStart === 'number') {
+      const pos = el.selectionStart;
+      setStep(i, 'message', cur.slice(0, pos) + token + cur.slice(el.selectionEnd));
+      setTimeout(() => { try { el.focus(); el.selectionStart = el.selectionEnd = pos + token.length; } catch {} }, 0);
+    } else {
+      setStep(i, 'message', (cur ? cur + ' ' : '') + token);
+    }
+  };
 
   return (
     <div className="space-y-4 max-w-3xl">
@@ -128,14 +153,20 @@ function Editor({ initial, onSave, onCancel, err }) {
       <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
         <div className="flex items-center justify-between mb-2">
           <span className="text-sm font-medium text-slate-200">Steps</span>
-          <span className="text-xs text-slate-500">Use {'{{first}}'} for the seller's first name</span>
+          <span className="text-xs text-slate-500">Timed from when a lead is enrolled</span>
         </div>
         <div className="space-y-2">
           {(c.steps || []).map((s, i) => (
             <div key={i} className="bg-slate-900/50 border border-slate-700/50 rounded-lg p-3">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-xs text-slate-400">Day</span>
-                <input type="number" min="0" value={s.day} onChange={(e) => setStep(i, 'day', e.target.value)} className="w-16 bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1 text-sm text-slate-100" />
+              <div className="flex items-center gap-2 mb-2 flex-wrap">
+                <span className="text-xs text-slate-400">Send after</span>
+                <input type="number" min="0" value={s.value ?? 0} onChange={(e) => setStep(i, 'value', e.target.value)} className="w-16 bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1 text-sm text-slate-100" />
+                <select value={s.unit || 'minutes'} onChange={(e) => setStep(i, 'unit', e.target.value)} className="bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1 text-sm text-slate-100">
+                  <option value="minutes">minutes</option>
+                  <option value="hours">hours</option>
+                  <option value="days">days</option>
+                </select>
+                <span className="text-xs text-slate-500">of enrollment</span>
                 <select value={s.type} onChange={(e) => setStep(i, 'type', e.target.value)} className="bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1 text-sm text-slate-100">
                   <option value="text">Send text</option>
                   <option value="call">Schedule call</option>
@@ -145,7 +176,14 @@ function Editor({ initial, onSave, onCancel, err }) {
               {s.type === 'call' ? (
                 <input value={s.label || ''} onChange={(e) => setStep(i, 'label', e.target.value)} placeholder="Call reason, e.g. Follow up on offer" className="w-full bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1.5 text-sm text-slate-100" />
               ) : (
-                <textarea value={s.message || ''} onChange={(e) => setStep(i, 'message', e.target.value)} rows={2} placeholder="Hi {{first}}, just following up..." className="w-full resize-none bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1.5 text-sm text-slate-100" />
+                <div>
+                  <textarea ref={(el) => { msgRefs.current[i] = el; }} value={s.message || ''} onChange={(e) => setStep(i, 'message', e.target.value)} rows={2} placeholder="Hi {{first}}, this is {{sender}} with Haven Ground..." className="w-full resize-none bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1.5 text-sm text-slate-100" />
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    {MERGE_FIELDS.map(([label, token]) => (
+                      <button key={token} type="button" onClick={() => insertToken(i, token)} className="px-2 py-0.5 rounded-md bg-slate-700/60 hover:bg-blue-600/40 text-slate-300 text-[11px]">+ {label}</button>
+                    ))}
+                  </div>
+                </div>
               )}
             </div>
           ))}

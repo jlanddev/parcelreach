@@ -148,6 +148,27 @@ export default function LandLeadsAdminPage() {
         }),
       }).catch((e) => console.warn('clean-view notify failed', e?.message));
     }
+
+    // New pushed lead: kick off the New Lead drip (starts with a text) and drop
+    // a speed-to-lead call into the tray so it gets called within minutes. Only
+    // for new-ish leads, so we never drip a lead that's already deep in the pipe.
+    if (on) {
+      const lead = rawLeads.find((l) => l.id === leadId);
+      const stage = (lead?.pipeline_status || lead?.status || '').toUpperCase();
+      const isNewish = !stage || ['NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(stage);
+      if (isNewish) {
+        const leadName = lead?.full_name || lead?.name || 'Lead';
+        enrollInCampaign(leadId, 'New Lead, No Contact');
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          const owner = acquisitionManagerId || lead?.current_owner_id || user?.id || null;
+          const cp = { lead_id: leadId, created_by: user?.id || null, assigned_to: owner, task_type: 'callback', source: 'pipeline', title: `Call new lead ASAP: ${leadName}`, description: 'New lead, call within 5 minutes', due_at: new Date(Date.now() + 5 * 60000).toISOString(), status: 'pending', priority: 'high' };
+          let { data: t, error: te } = await supabase.from('scheduled_tasks').insert(cp).select().maybeSingle();
+          if (te) { const { source, ...ns } = cp; ({ data: t } = await supabase.from('scheduled_tasks').insert(ns).select().maybeSingle()); }
+          if (t) setScheduledTasks((prev) => [...prev, t]);
+        } catch { /* non-fatal */ }
+      }
+    }
   };
 
   // Live board. A realtime feed on the leads table so a lead pushed to Clean
@@ -295,6 +316,40 @@ export default function LandLeadsAdminPage() {
       ? `Hey ${first}, this is ${sender} with Haven Ground. Just tried you to check in on our offer for the land${where}. Give me a shout when you get a sec.`
       : `Hey ${first}, this is ${sender} with Haven Ground. Just tried giving you a call about the land${where} you wanted us to look at. When is a good time to connect?`;
   };
+
+  // Replace campaign merge tokens with the lead's real values, at enrollment.
+  const fillTokens = (msg, l) => {
+    const first = (l?.name || l?.full_name || '').trim().split(' ')[0] || 'there';
+    const county = l?.property_county || l?.county || l?.form_data?.county || '';
+    const state = l?.property_state || l?.state || l?.form_data?.state || '';
+    const acres = l?.acreage || l?.acres || l?.form_data?.acreage || '';
+    const sender = (currentUserName || '').trim().split(' ')[0] || 'Anthony';
+    return (msg || '')
+      .replace(/\{\{\s*first\s*\}\}/gi, first)
+      .replace(/\{\{\s*county\s*\}\}/gi, county)
+      .replace(/\{\{\s*state\s*\}\}/gi, state)
+      .replace(/\{\{\s*acres\s*\}\}/gi, acres)
+      .replace(/\{\{\s*sender\s*\}\}/gi, sender);
+  };
+
+  // Campaign list (for the Add to Campaign picker) and which campaign each lead
+  // is actively in (for the card badge).
+  const [campaignsList, setCampaignsList] = useState([]);
+  const [enrollmentsByLead, setEnrollmentsByLead] = useState({});
+  useEffect(() => {
+    if (!currentUserRole) return;
+    (async () => {
+      try {
+        const { data: camps } = await supabase.from('campaigns').select('id, name').eq('active', true).order('name');
+        setCampaignsList(camps || []);
+        const byId = Object.fromEntries((camps || []).map((c) => [c.id, c.name]));
+        const { data: enrs } = await supabase.from('campaign_enrollments').select('lead_id, campaign_id').eq('status', 'active');
+        const map = {};
+        for (const e of enrs || []) map[e.lead_id] = byId[e.campaign_id] || 'Campaign';
+        setEnrollmentsByLead(map);
+      } catch { /* campaigns not migrated */ }
+    })();
+  }, [currentUserRole]);
   const [frozenBoardLeads, setFrozenBoardLeads] = useState(null); // snapshot so cards don't reshuffle while a modal is open
   const [notesRefresh, setNotesRefresh] = useState(0);
   const [activityLogDate, setActivityLogDate] = useState(() => new Date().toISOString().split('T')[0]);
@@ -1081,23 +1136,25 @@ export default function LandLeadsAdminPage() {
       } else enrollment = enr;
       if (!enrollment) throw new Error('Could not enroll');
 
-      const now = new Date();
+      const now = Date.now();
       const owner = lead?.current_owner_id || acquisitionManagerId || user?.id || null;
-      const first = (lead?.name || lead?.full_name || '').trim().split(' ')[0] || 'there';
       const queueRows = [];
       for (let i = 0; i < (camp.steps || []).length; i++) {
         const s = camp.steps[i];
-        const due = new Date(now); due.setDate(due.getDate() + (Number(s.day) || 0));
-        if ((Number(s.day) || 0) > 0) due.setHours(10, 0, 0, 0);
+        const delayMins = Number.isFinite(s.delayMins) ? s.delayMins : (Number(s.day) || 0) * 1440;
+        const due = new Date(now + delayMins * 60000);
         if (s.type === 'call') {
-          await supabase.from('scheduled_tasks').insert({ lead_id: leadId, created_by: user?.id || null, assigned_to: owner, task_type: 'callback', source: 'pipeline', title: `${s.label || 'Call'}: ${lead?.name || lead?.full_name || 'Lead'}`, description: `Campaign: ${camp.name}`, due_at: due.toISOString(), status: 'pending', priority: 'normal' });
+          const cp = { lead_id: leadId, created_by: user?.id || null, assigned_to: owner, task_type: 'callback', source: 'pipeline', title: `${s.label || 'Call'}: ${lead?.name || lead?.full_name || 'Lead'}`, description: `Campaign: ${camp.name}`, due_at: due.toISOString(), status: 'pending', priority: 'normal' };
+          let { error: ce } = await supabase.from('scheduled_tasks').insert(cp);
+          if (ce) { const { source, ...ns } = cp; await supabase.from('scheduled_tasks').insert(ns); }
         } else {
-          queueRows.push({ enrollment_id: enrollment.id, lead_id: leadId, campaign_id: camp.id, step_index: i, type: 'text', message: (s.message || '').replace(/\{\{first\}\}/g, first), due_at: due.toISOString(), status: 'pending' });
+          queueRows.push({ enrollment_id: enrollment.id, lead_id: leadId, campaign_id: camp.id, step_index: i, type: 'text', message: fillTokens(s.message, lead), due_at: due.toISOString(), status: 'pending' });
         }
       }
       if (queueRows.length) await supabase.from('campaign_queue').insert(queueRows);
       const { data: freshTasks } = await supabase.from('scheduled_tasks').select('*').eq('status', 'pending').order('due_at', { ascending: true });
       if (freshTasks) setScheduledTasks(freshTasks);
+      setEnrollmentsByLead((prev) => ({ ...prev, [leadId]: camp.name }));
       showToast(`Enrolled in ${camp.name}`, 'success', lead?.name || lead?.full_name);
     } catch (e) { showToast('Enroll failed: ' + (e?.message || e), 'error'); }
   };
@@ -4069,6 +4126,26 @@ export default function LandLeadsAdminPage() {
                         </button>
                       </div>
                     )}
+
+                    {/* Campaign: show the active one, or drop the lead into one. */}
+                    <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+                      {enrollmentsByLead[lead.id] ? (
+                        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-purple-600/15 border border-purple-500/30 text-purple-200 text-xs">
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                          In campaign: <span className="font-semibold">{enrollmentsByLead[lead.id]}</span>
+                        </div>
+                      ) : (
+                        <select
+                          value=""
+                          onChange={(e) => { if (e.target.value) enrollInCampaign(lead.id, e.target.value); }}
+                          className="w-full px-3 py-1.5 rounded-lg bg-slate-700/50 hover:bg-slate-600/50 border border-transparent text-slate-300 text-xs font-medium cursor-pointer"
+                          title="Add this lead to a campaign"
+                        >
+                          <option value="">+ Add to Campaign…</option>
+                          {campaignsList.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+                        </select>
+                      )}
+                    </div>
 
                     {/* Archive / Delete */}
                     <div className="mt-2 flex gap-2">
