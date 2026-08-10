@@ -6,9 +6,10 @@ import { supabase } from '@/lib/supabase';
 // Campaigns tab: create and edit nurture sequences. A campaign is a list of
 // steps (text or call) each with a day offset. Enrolling a lead (from the lead
 // card / note screen) drips the texts and schedules the calls.
-export default function CampaignsTab({ onToast }) {
+export default function CampaignsTab({ onToast, onEnroll, leads = [] }) {
   const [campaigns, setCampaigns] = useState(null);
   const [editing, setEditing] = useState(null); // campaign being edited/created
+  const [viewing, setViewing] = useState(null);  // campaign whose enrolled leads we're inspecting
   const [err, setErr] = useState('');
 
   const load = async () => {
@@ -55,6 +56,7 @@ export default function CampaignsTab({ onToast }) {
   };
 
   if (editing) return <Editor initial={editing} onSave={save} onCancel={() => { setEditing(null); setErr(''); }} err={err} />;
+  if (viewing) return <CampaignDetail campaign={viewing} leads={leads} onEnroll={onEnroll} onToast={onToast} onBack={() => setViewing(null)} />;
 
   return (
     <div className="space-y-4">
@@ -88,6 +90,7 @@ export default function CampaignsTab({ onToast }) {
                 <div className="text-xs text-slate-500 mt-1">{(c.steps || []).length} steps · {texts} texts · {calls} calls · over {span} days</div>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
+                <button onClick={() => setViewing(c)} className="px-3 py-1.5 rounded-lg bg-purple-600/70 hover:bg-purple-500 text-white text-xs font-medium">View leads</button>
                 <button onClick={() => toggleActive(c)} className="px-3 py-1.5 rounded-lg bg-slate-700/60 hover:bg-slate-600 text-slate-200 text-xs">{c.active ? 'Pause' : 'Activate'}</button>
                 <button onClick={() => setEditing(c)} className="px-3 py-1.5 rounded-lg bg-blue-600/80 hover:bg-blue-500 text-white text-xs font-medium">Edit</button>
                 <button onClick={() => remove(c.id)} className="px-2.5 py-1.5 rounded-lg bg-rose-900/30 hover:bg-rose-800/40 text-rose-300 text-xs">Delete</button>
@@ -189,6 +192,112 @@ function Editor({ initial, onSave, onCancel, err }) {
           ))}
         </div>
         <button onClick={addStep} className="mt-3 px-3 py-1.5 rounded-lg bg-slate-700/60 hover:bg-slate-600 text-slate-200 text-sm">+ Add step</button>
+      </div>
+    </div>
+  );
+}
+
+// Inside-a-campaign view: every enrolled lead, the texts they got and when, and
+// where they are in the drip. Plus enroll a lead starting at any step.
+function CampaignDetail({ campaign, leads, onEnroll, onToast, onBack }) {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState('');
+  const [q, setQ] = useState('');
+  const [pickLead, setPickLead] = useState(null);
+  const [startStep, setStartStep] = useState(0);
+  const steps = campaign.steps || [];
+
+  const load = async () => {
+    try {
+      const { data: enrs } = await supabase.from('campaign_enrollments').select('*').eq('campaign_id', campaign.id).order('enrolled_at', { ascending: false });
+      const leadIds = [...new Set((enrs || []).map((e) => e.lead_id))];
+      let names = {};
+      if (leadIds.length) {
+        const { data: ls } = await supabase.from('leads').select('id, full_name, name, phone').in('id', leadIds);
+        names = Object.fromEntries((ls || []).map((l) => [l.id, l.full_name || l.name || 'Lead']));
+      }
+      const { data: queue } = await supabase.from('campaign_queue').select('*').eq('campaign_id', campaign.id).order('due_at', { ascending: true });
+      const byLead = {};
+      for (const item of queue || []) (byLead[item.lead_id] = byLead[item.lead_id] || []).push(item);
+      setRows((enrs || []).map((e) => ({ ...e, name: names[e.lead_id] || 'Lead', items: byLead[e.lead_id] || [] })));
+    } catch (e) { setErr(e.message); }
+  };
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const when = (iso) => iso ? new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  const matches = q ? leads.filter((l) => (l.name || '').toLowerCase().includes(q.toLowerCase()) || (l.phone || '').includes(q)).slice(0, 6) : [];
+
+  const doEnroll = async () => {
+    if (!pickLead || !onEnroll) return;
+    await onEnroll(pickLead.id, campaign.name, Number(startStep) || 0);
+    setPickLead(null); setQ(''); setStartStep(0);
+    setTimeout(load, 600);
+  };
+
+  const statusPill = (s) => s === 'active' ? 'bg-green-500/20 text-green-300' : s === 'stopped' ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-600/40 text-slate-300';
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <button onClick={onBack} className="px-3 py-1.5 rounded-lg bg-slate-700/60 hover:bg-slate-600 text-slate-200 text-sm">← Back</button>
+        <div>
+          <h2 className="text-xl font-semibold text-white">{campaign.name}</h2>
+          <div className="text-sm text-slate-400">{rows ? `${rows.length} leads` : 'Loading…'} · {steps.length} steps</div>
+        </div>
+      </div>
+      {err && <p className="text-rose-400 text-sm">{err}</p>}
+
+      {/* Enroll a lead at a chosen step */}
+      <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
+        <div className="text-sm font-medium text-slate-200 mb-2">Add a lead to this campaign</div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative">
+            <input value={pickLead ? pickLead.name : q} onChange={(e) => { setPickLead(null); setQ(e.target.value); }} placeholder="Search a lead by name or phone" className="w-64 bg-slate-900/70 border border-slate-700 rounded-md px-3 py-2 text-sm text-slate-100" />
+            {matches.length > 0 && !pickLead && (
+              <div className="absolute z-20 mt-1 left-0 right-0 bg-slate-800 border border-slate-600 rounded-lg overflow-hidden shadow-xl">
+                {matches.map((l) => (
+                  <button key={l.id} onClick={() => { setPickLead(l); setQ(''); }} className="block w-full text-left px-3 py-1.5 text-sm text-slate-200 hover:bg-purple-600/30">{l.name} <span className="text-slate-500">{l.phone}</span></button>
+                ))}
+              </div>
+            )}
+          </div>
+          <span className="text-xs text-slate-400">start at</span>
+          <select value={startStep} onChange={(e) => setStartStep(e.target.value)} className="bg-slate-900/70 border border-slate-700 rounded-md px-2 py-2 text-sm text-slate-100">
+            {steps.map((s, i) => <option key={i} value={i}>Step {i + 1}: {s.type === 'call' ? (s.label || 'Call') : (s.message || 'Text').slice(0, 30)}</option>)}
+          </select>
+          <button onClick={doEnroll} disabled={!pickLead} className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:opacity-40 text-white text-sm font-medium">Enroll</button>
+        </div>
+      </div>
+
+      {/* Enrolled leads with their progress */}
+      <div className="space-y-2">
+        {rows && rows.length === 0 && <div className="text-slate-400 text-sm bg-slate-800/40 border border-slate-700/50 rounded-xl p-6">No leads in this campaign yet.</div>}
+        {rows && rows.map((r) => {
+          const sent = r.items.filter((i) => i.status === 'sent').length;
+          const pending = r.items.filter((i) => i.status === 'pending').length;
+          const next = r.items.find((i) => i.status === 'pending');
+          return (
+            <div key={r.id} className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-white font-medium">{r.name}</span>
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full ${statusPill(r.status)}`}>{r.status}</span>
+                </div>
+                <div className="text-xs text-slate-400">{sent} sent · {pending} to go{next ? ` · next ${when(next.due_at)}` : ''}</div>
+              </div>
+              <div className="space-y-1">
+                {r.items.map((i) => (
+                  <div key={i.id} className="flex items-start gap-2 text-xs">
+                    <span className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${i.status === 'sent' ? 'bg-green-400' : i.status === 'pending' ? 'bg-slate-500' : 'bg-rose-400'}`} />
+                    <span className="text-slate-500 flex-shrink-0 w-28">{i.status === 'sent' ? `Sent ${when(i.processed_at)}` : i.status === 'pending' ? `Due ${when(i.due_at)}` : i.status}</span>
+                    <span className="text-slate-300">{i.message}</span>
+                  </div>
+                ))}
+                {r.items.length === 0 && <div className="text-xs text-slate-500">Call-only steps, or no texts queued.</div>}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

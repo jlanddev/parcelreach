@@ -1121,10 +1121,10 @@ export default function LandLeadsAdminPage() {
 
   // Enroll a lead into a campaign (drip). Call steps become scheduled tasks
   // (they show in the tray on their day); text steps queue for the scheduler.
-  const enrollInCampaign = async (leadId, campaignName) => {
+  const enrollInCampaign = async (leadId, campaignName, startStep = 0) => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      const lead = (allLeadsRef.current || []).find((l) => l.id === leadId);
+      const lead = (allLeadsRef.current || []).find((l) => l.id === leadId) || (rawLeads.find((l) => l.id === leadId));
       const { data: camp } = await supabase.from('campaigns').select('*').ilike('name', campaignName).eq('active', true).maybeSingle();
       if (!camp) { showToast(`Campaign "${campaignName}" not found`, 'error'); return; }
       let enrollment;
@@ -1139,9 +1139,13 @@ export default function LandLeadsAdminPage() {
       const now = Date.now();
       const owner = lead?.current_owner_id || acquisitionManagerId || user?.id || null;
       const queueRows = [];
-      for (let i = 0; i < (camp.steps || []).length; i++) {
+      // startStep lets you drop a lead in partway through the drip. We rebase the
+      // timing so the chosen step fires now and later steps keep their spacing.
+      const baseDelay = startStep > 0 && camp.steps?.[startStep] ? (Number.isFinite(camp.steps[startStep].delayMins) ? camp.steps[startStep].delayMins : (Number(camp.steps[startStep].day) || 0) * 1440) : 0;
+      for (let i = startStep; i < (camp.steps || []).length; i++) {
         const s = camp.steps[i];
-        const delayMins = Number.isFinite(s.delayMins) ? s.delayMins : (Number(s.day) || 0) * 1440;
+        const rawDelay = Number.isFinite(s.delayMins) ? s.delayMins : (Number(s.day) || 0) * 1440;
+        const delayMins = Math.max(0, rawDelay - baseDelay);
         const due = new Date(now + delayMins * 60000);
         if (s.type === 'call') {
           const cp = { lead_id: leadId, created_by: user?.id || null, assigned_to: owner, task_type: 'callback', source: 'pipeline', title: `${s.label || 'Call'}: ${lead?.name || lead?.full_name || 'Lead'}`, description: `Campaign: ${camp.name}`, due_at: due.toISOString(), status: 'pending', priority: 'normal' };
@@ -6573,7 +6577,13 @@ export default function LandLeadsAdminPage() {
 
         {/* EXPORT CSV TAB */}
         {activeTab === 'om-search' && <OmSearch />}
-        {activeTab === 'campaigns' && <CampaignsTab onToast={showToast} />}
+        {activeTab === 'campaigns' && (
+          <CampaignsTab
+            onToast={showToast}
+            onEnroll={enrollInCampaign}
+            leads={allLeads.map((l) => ({ id: l.id, name: l.full_name || l.name || 'Lead', phone: l.phone }))}
+          />
+        )}
 
         {activeTab === 'export' && (
           <div className="max-w-2xl mx-auto space-y-6">
