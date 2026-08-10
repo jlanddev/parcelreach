@@ -12,6 +12,11 @@ async function mark(supabase, id, status) {
 }
 
 async function run(request) {
+  // KILL SWITCH: automated campaign sending is disabled. Nothing goes out from
+  // here no matter what triggers it. Do not re-enable without Jordan's say-so.
+  return NextResponse.json({ ok: true, disabled: true, sent: 0 });
+
+  // eslint-disable-next-line no-unreachable
   const secret = process.env.CAMPAIGN_RUN_SECRET;
   if (secret) {
     const auth = request.headers.get('authorization') || '';
