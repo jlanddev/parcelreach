@@ -41,9 +41,21 @@ async function run(request) {
     try {
       const { data: enr } = await supabase.from('campaign_enrollments').select('status').eq('id', item.enrollment_id).maybeSingle();
       if (enr && enr.status !== 'active') { await mark(supabase, item.id, 'cancelled'); skipped++; continue; }
-      const { data: lead } = await supabase.from('leads').select('phone, sms_opt_out').eq('id', item.lead_id).maybeSingle();
+      const { data: lead } = await supabase.from('leads').select('phone, sms_opt_out, last_contact_at, last_contact_dir').eq('id', item.lead_id).maybeSingle();
       if (!lead?.phone) { await mark(supabase, item.id, 'failed'); failed++; continue; }
       if (lead.sms_opt_out) { await mark(supabase, item.id, 'cancelled'); skipped++; continue; }
+
+      // One automated text per lead per day. If we already sent this lead
+      // something today (Central), don't stack a second on top, push this one
+      // to tomorrow so it goes out then instead. Manual texts are unaffected.
+      if (lead.last_contact_at && lead.last_contact_dir === 'outbound') {
+        const dayOf = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date(d));
+        if (dayOf(lead.last_contact_at) === dayOf(new Date())) {
+          const tomorrow = new Date(Date.now() + 20 * 60 * 60 * 1000).toISOString();
+          await supabase.from('campaign_queue').update({ due_at: tomorrow }).eq('id', item.id);
+          skipped++; continue;
+        }
+      }
 
       await sendMessage({ to: lead.phone, message: item.message });
 
