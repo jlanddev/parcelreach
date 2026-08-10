@@ -4134,6 +4134,7 @@ export default function LandLeadsAdminPage() {
             if (outcome === 'spoke') { setNotesPostCall(true); setNotesModalLead(l); }
             else { setPrefillDraft(buildNoAnswerText(l)); setConversationLead(l); } // no answer -> text screen, pre-filled
           }}
+          onOpenNotes={(l) => setNotesModalLead(l)}
         />
       )}
       {toast && (

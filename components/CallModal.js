@@ -16,7 +16,7 @@ const toE164 = (p) => {
  * logs the call to the activities timeline (attributed to the caller) when it
  * ends, so it shows in Last Contacted and the Activity Log.
  */
-export default function CallModal({ lead, currentUserId, onClose, onLogged, onEnded }) {
+export default function CallModal({ lead, currentUserId, onClose, onLogged, onEnded, onOpenNotes }) {
   const phone = lead?.phone || lead?.owner_phone || '';
   const name = lead?.full_name || lead?.name || lead?.owner_name || 'Lead';
 
@@ -25,6 +25,7 @@ export default function CallModal({ lead, currentUserId, onClose, onLogged, onEn
   const [error, setError] = useState(null);
   const [muted, setMuted] = useState(false);
   const [seconds, setSeconds] = useState(0);
+  const [minimized, setMinimized] = useState(false); // shrink to a floating widget so the rep can roam the CRM mid-call
 
   const deviceRef = useRef(null);
   const callRef = useRef(null);
@@ -152,9 +153,34 @@ export default function CallModal({ lead, currentUserId, onClose, onLogged, onEn
     error: 'Could not connect',
   }[status];
 
+  // Minimized: a small floating widget (no backdrop) so the rep can browse the
+  // CRM, open the lead, and take notes / use the assistant while still on the call.
+  if (minimized && phase === 'live') {
+    return (
+      <div className="fixed bottom-4 right-4 z-[70] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl px-3 py-2 flex items-center gap-2">
+        <span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse flex-shrink-0" />
+        <div className="min-w-0 mr-1">
+          <div className="text-sm text-white font-medium truncate max-w-[130px]">{name}</div>
+          <div className={`text-xs font-mono ${status === 'in-call' ? 'text-green-400' : 'text-slate-400'}`}>{statusText}</div>
+        </div>
+        <button onClick={toggleMute} title={muted ? 'Unmute' : 'Mute'} className={`px-2 py-1.5 rounded-md text-xs border ${muted ? 'bg-slate-600 border-slate-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-300'}`}>{muted ? 'Off' : 'Mic'}</button>
+        {onOpenNotes && <button onClick={() => onOpenNotes(lead)} title="Open notes / assistant" className="px-2 py-1.5 rounded-md bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 text-xs font-medium">Notes</button>}
+        <button onClick={() => setMinimized(false)} title="Expand" className="px-2 py-1.5 rounded-md bg-slate-800 border border-slate-700 text-slate-300 text-xs">Expand</button>
+        <button onClick={hangup} title="Hang up" className="w-8 h-8 rounded-full bg-red-600 hover:bg-red-500 text-white flex items-center justify-center flex-shrink-0">
+          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a.956.956 0 01-.29-.7c0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-1.78 1.78c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.74-1.69-1.36-2.67-1.85a1.01 1.01 0 01-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z" /></svg>
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4" onClick={phase === 'done' || status === 'error' ? onClose : undefined}>
-      <div className="w-full max-w-xs bg-slate-900 border border-slate-700 rounded-2xl p-6 text-center shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-xs bg-slate-900 border border-slate-700 rounded-2xl p-6 text-center shadow-2xl relative" onClick={(e) => e.stopPropagation()}>
+        {phase === 'live' && (
+          <button onClick={() => setMinimized(true)} title="Minimize and keep the call going" className="absolute top-3 right-3 p-1.5 rounded-lg hover:bg-slate-700/60 text-slate-400">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" /></svg>
+          </button>
+        )}
         <div className="w-16 h-16 mx-auto rounded-full bg-green-600/20 border border-green-600/40 flex items-center justify-center mb-3">
           <svg className="w-7 h-7 text-green-400" fill="currentColor" viewBox="0 0 24 24">
             <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" />
