@@ -73,16 +73,47 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
   // AI assistant: talk to it. Ask for a read, or tell it to do something
   // ("set a call in 3 days", "move to Offer Pending"); it acts on the lead.
   const [asstInput, setAsstInput] = useState('');
+  const [asstOpen, setAsstOpen] = useState(!!postCall);
   const [asstMsgs, setAsstMsgs] = useState(
-    postCall ? [{ role: 'ai', text: 'Call logged. Tell me how it went and what to do next, like "still needs time, put her in the family drip" or "she is ready, move to offer" or "call back Tuesday at 2".' }] : []
+    postCall ? [{ role: 'ai', text: 'How did the call go? Tell me and I will suggest the next move for you to approve.' }] : []
   ); // { role:'user'|'ai', text }
   const [asstBusy, setAsstBusy] = useState(false);
-  const askAssistant = async (text) => {
+  const [pending, setPending] = useState(null); // proposed action awaiting your OK
+  const [cleaning, setCleaning] = useState(false);
+
+  // Clean up the note the rep is writing (grammar/flow, in their voice, adds
+  // nothing). Same tool as the partner summary, on regular notes.
+  const cleanupNote = async () => {
+    const text = draft.trim();
+    if (!text || cleaning) return;
+    setCleaning(true);
+    try {
+      const res = await fetch('/api/ai/partner-summary', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leadId: lead.id, draft: text }) });
+      const data = await res.json();
+      if (res.ok && data.ok && data.summary) setDraft(data.summary);
+    } catch { /* leave the note as is */ } finally { setCleaning(false); }
+  };
+
+  const actionSummary = (a) => {
+    if (!a) return '';
+    if (a.type === 'set_task') {
+      const when = a.date ? `${a.date}${a.time ? ' ' + a.time : ''}` : `in ${a.in_days ?? 2} day${(a.in_days ?? 2) === 1 ? '' : 's'}${a.time ? ' at ' + a.time : ''}`;
+      return `Set follow-up "${a.label || 'Call'}" ${when}`;
+    }
+    if (a.type === 'enroll_campaign') return `Add to campaign: ${a.campaign}`;
+    if (a.type === 'set_stage') return `Move stage to ${a.stage}`;
+    if (a.type === 'set_lean') return `Set lean to ${a.lean}`;
+    return 'Take an action';
+  };
+
+  // Ask Claude. It PROPOSES; nothing happens to the lead until you approve.
+  const askAssistant = async (text, isSuggest) => {
     const instruction = (text ?? asstInput).trim();
     if (!instruction || asstBusy) return;
     setAsstMsgs((m) => [...m, { role: 'user', text: instruction }]);
     setAsstInput('');
     setAsstBusy(true);
+    setPending(null);
     try {
       const res = await fetch('/api/ai/assistant', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -90,42 +121,37 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
       });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Assistant failed');
-      let done = '';
-      let logSuffix = '';
-      const a = data.action;
-      if (a?.type === 'set_task' && onAssignTask) {
-        let dueISO;
-        if (a.date) dueISO = new Date(`${a.date}T${a.time || '10:00'}:00`).toISOString();
-        else { const d = new Date(); d.setDate(d.getDate() + (a.in_days || 2)); const [hh, mm] = (a.time || '10:00').split(':').map(Number); d.setHours(hh || 10, mm || 0, 0, 0); dueISO = d.toISOString(); }
-        onAssignTask(lead.id, { assignedTo: undefined, dueISO, label: a.label || 'Call' });
-        done = ' ✓ Task set.'; logSuffix = `set a follow-up (${a.label || 'Call'})`;
-      } else if (a?.type === 'enroll_campaign' && onEnrollCampaign && a.campaign) {
-        onEnrollCampaign(lead.id, a.campaign);
-        done = ` ✓ In ${a.campaign}.`; logSuffix = `enrolled in campaign "${a.campaign}"`;
-      } else if (a?.type === 'set_stage' && onSetStage && a.stage) {
-        onSetStage(lead.id, a.stage);
-        done = ` ✓ Moved to ${a.stage}.`; logSuffix = `moved to ${a.stage}`;
-      } else if (a?.type === 'set_lean' && onSetDirection && a.lean) {
-        onSetDirection(lead.id, a.lean); done = ' ✓ Lean set.'; logSuffix = `set lean ${a.lean}`;
-      }
-      setAsstMsgs((m) => [...m, { role: 'ai', text: (data.reply || 'Done.') + done }]);
-
-      // Log what the rep typed as a timestamped note on the lead (with what the
-      // assistant did), so the outcome is on the record.
-      try {
-        await supabase.from('lead_notes').insert({
-          lead_id: lead.id,
-          user_id: currentUserId,
-          content: instruction + (logSuffix ? `\n→ ${logSuffix}` : ''),
-          mentioned_users: [],
-        });
-        load();
-        onPosted && onPosted();
-      } catch { /* non-fatal */ }
+      setAsstMsgs((m) => [...m, { role: 'ai', text: data.reply || 'Okay.' }]);
+      if (data.action) setPending({ action: data.action, instruction, isSuggest: !!isSuggest });
     } catch (e) {
       setAsstMsgs((m) => [...m, { role: 'ai', text: 'Error: ' + (e.message || e) }]);
     } finally { setAsstBusy(false); }
   };
+
+  // Approve the proposed action: NOW it acts + logs a note (your own words, plus
+  // what was done). The canned Suggest prompt is never logged as your note.
+  const approvePending = async () => {
+    if (!pending) return;
+    const a = pending.action;
+    let logSuffix = '';
+    if (a.type === 'set_task' && onAssignTask) {
+      let dueISO;
+      if (a.date) dueISO = new Date(`${a.date}T${a.time || '10:00'}:00`).toISOString();
+      else { const d = new Date(); d.setDate(d.getDate() + (a.in_days ?? 2)); const [hh, mm] = (a.time || '10:00').split(':').map(Number); d.setHours(hh || 10, mm || 0, 0, 0); dueISO = d.toISOString(); }
+      onAssignTask(lead.id, { assignedTo: undefined, dueISO, label: a.label || 'Call' });
+      logSuffix = actionSummary(a);
+    } else if (a.type === 'enroll_campaign' && onEnrollCampaign && a.campaign) { onEnrollCampaign(lead.id, a.campaign); logSuffix = `Enrolled in "${a.campaign}"`; }
+    else if (a.type === 'set_stage' && onSetStage && a.stage) { onSetStage(lead.id, a.stage); logSuffix = `Moved to ${a.stage}`; }
+    else if (a.type === 'set_lean' && onSetDirection && a.lean) { onSetDirection(lead.id, a.lean); logSuffix = `Lean set to ${a.lean}`; }
+    setAsstMsgs((m) => [...m, { role: 'ai', text: `✓ ${actionSummary(a)}` }]);
+    try {
+      const typed = pending.isSuggest ? '' : pending.instruction;
+      const content = [typed, logSuffix ? `→ ${logSuffix}` : ''].filter(Boolean).join('\n');
+      if (content) { await supabase.from('lead_notes').insert({ lead_id: lead.id, user_id: currentUserId, content, mentioned_users: [] }); load(); onPosted && onPosted(); }
+    } catch { /* non-fatal */ }
+    setPending(null);
+  };
+  const cancelPending = () => { setPending(null); setAsstMsgs((m) => [...m, { role: 'ai', text: 'Holding off. Tell me what to change.' }]); };
 
   // Notes brain: reads the WHOLE file (texts + calls + notes) via the same
   // endpoint the message brain uses, so both see everything.
@@ -371,28 +397,46 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
           );
         })()}
 
-        {/* AI Assistant: talk to it. Ask for a read, or tell it what to do. */}
-        <div className="border-t border-slate-700/70 px-2 pt-2 bg-slate-800/40">
-          {asstMsgs.length > 0 && (
-            <div className="mb-2 max-h-44 overflow-y-auto space-y-1.5 pr-1">
-              {asstMsgs.map((m, i) => (
-                <div key={i} className={`text-xs px-2.5 py-1.5 rounded-lg whitespace-pre-wrap ${m.role === 'user' ? 'bg-blue-600/20 text-blue-100 ml-8' : 'bg-slate-800/70 border border-cyan-500/20 text-slate-200 mr-8'}`}>{m.text}</div>
-              ))}
-              {asstBusy && <div className="text-xs text-slate-500 px-2">Thinking…</div>}
+        {/* AI Assistant: collapsible. It PROPOSES; nothing happens to the lead
+            until you approve. Click the header to open or close it. */}
+        <div className="border-t border-slate-700/70 px-2 py-2 bg-slate-800/40">
+          <button type="button" onClick={() => setAsstOpen((v) => !v)} className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-cyan-300 hover:text-cyan-200">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
+            Assistant
+            <svg className={`w-3 h-3 transition-transform ${asstOpen ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
+          </button>
+          {asstOpen && (
+            <div className="mt-2">
+              {asstMsgs.length > 0 && (
+                <div className="mb-2 max-h-40 overflow-y-auto space-y-1.5 pr-1">
+                  {asstMsgs.map((m, i) => (
+                    <div key={i} className={`text-xs px-2.5 py-1.5 rounded-lg whitespace-pre-wrap ${m.role === 'user' ? 'bg-blue-600/20 text-blue-100 ml-8' : 'bg-slate-800/70 border border-cyan-500/20 text-slate-200 mr-8'}`}>{m.text}</div>
+                  ))}
+                  {asstBusy && <div className="text-xs text-slate-500 px-2">Thinking…</div>}
+                </div>
+              )}
+              {pending && (
+                <div className="mb-2 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-2">
+                  <div className="text-xs text-cyan-100 mb-1.5">Approve this? <span className="font-semibold">{actionSummary(pending.action)}</span></div>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={approvePending} className="px-3 py-1 rounded-md bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold">Approve</button>
+                    <button type="button" onClick={cancelPending} className="px-3 py-1 rounded-md bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs">Cancel</button>
+                  </div>
+                </div>
+              )}
+              <div className="flex items-center gap-1.5">
+                <input
+                  value={asstInput}
+                  onChange={(e) => setAsstInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); askAssistant(); } }}
+                  placeholder="Tell me what happened, or ask for the next move…"
+                  className="flex-1 bg-slate-900/70 border border-slate-700 rounded-md px-2.5 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500/60"
+                />
+                <button type="button" onClick={() => askAssistant()} disabled={asstBusy || !asstInput.trim()} className="px-3 py-2 rounded-md bg-cyan-600/30 hover:bg-cyan-600/50 disabled:opacity-40 text-cyan-100 text-xs font-medium">Send</button>
+                <button type="button" onClick={() => askAssistant("What's the smartest next move on this lead?", true)} disabled={asstBusy} title="Get a read" className="px-3 py-2 rounded-md bg-slate-700/60 hover:bg-slate-600 text-slate-300 text-xs">Suggest</button>
+              </div>
             </div>
           )}
-          <div className="flex items-center gap-1.5 mb-1">
-            <svg className="w-4 h-4 text-cyan-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
-            <input
-              value={asstInput}
-              onChange={(e) => setAsstInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); askAssistant(); } }}
-              placeholder="Ask, or tell me: set a call in 3 days, what's the next move…"
-              className="flex-1 bg-slate-900/70 border border-slate-700 rounded-md px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500/60"
-            />
-            <button type="button" onClick={() => askAssistant()} disabled={asstBusy || !asstInput.trim()} className="px-2.5 py-1.5 rounded-md bg-cyan-600/30 hover:bg-cyan-600/50 disabled:opacity-40 text-cyan-100 text-xs font-medium">Send</button>
-            <button type="button" onClick={() => askAssistant("What's the smartest next move on this lead, and set the follow-up if one makes sense?")} disabled={asstBusy} title="Get a read + set the follow-up" className="px-2 py-1.5 rounded-md bg-slate-700/60 hover:bg-slate-600 text-slate-300 text-xs">Suggest</button>
-          </div>
         </div>
 
         <div className="border-t border-slate-700/70 p-2 bg-slate-800/40 relative">
@@ -468,6 +512,13 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
               placeholder="Add a note… use @ to tag a teammate (⌘+Enter to send)"
               className="flex-1 resize-none max-h-48 bg-slate-900/70 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500/60"
             />
+            <button type="button" onClick={cleanupNote} disabled={!draft.trim() || cleaning} title="Clean up this note (grammar and flow, in your voice)" className="p-2 rounded-lg bg-slate-700/60 hover:bg-cyan-600/40 text-cyan-300 disabled:opacity-40" >
+              {cleaning ? (
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" /></svg>
+              ) : (
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
+              )}
+            </button>
             <button onClick={post} disabled={(!draft.trim() && draftFiles.length === 0) || posting} className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm font-medium">
               Post
             </button>
