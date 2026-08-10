@@ -70,6 +70,41 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
   };
   const quickDate = (days) => { const d = new Date(); d.setDate(d.getDate() + days); setTaskDate(d.toISOString().slice(0, 10)); };
 
+  // AI assistant: talk to it. Ask for a read, or tell it to do something
+  // ("set a call in 3 days", "move to Offer Pending"); it acts on the lead.
+  const [asstInput, setAsstInput] = useState('');
+  const [asstMsgs, setAsstMsgs] = useState([]); // { role:'user'|'ai', text }
+  const [asstBusy, setAsstBusy] = useState(false);
+  const askAssistant = async (text) => {
+    const instruction = (text ?? asstInput).trim();
+    if (!instruction || asstBusy) return;
+    setAsstMsgs((m) => [...m, { role: 'user', text: instruction }]);
+    setAsstInput('');
+    setAsstBusy(true);
+    try {
+      const res = await fetch('/api/ai/assistant', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadId: lead.id, instruction }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Assistant failed');
+      let done = '';
+      const a = data.action;
+      if (a?.type === 'set_task' && onAssignTask) {
+        let dueISO;
+        if (a.date) dueISO = new Date(`${a.date}T${a.time || '10:00'}:00`).toISOString();
+        else { const d = new Date(); d.setDate(d.getDate() + (a.in_days || 2)); const [hh, mm] = (a.time || '10:00').split(':').map(Number); d.setHours(hh || 10, mm || 0, 0, 0); dueISO = d.toISOString(); }
+        onAssignTask(lead.id, { assignedTo: undefined, dueISO, label: a.label || 'Call' });
+        done = ' ✓ Task set.';
+      } else if (a?.type === 'set_lean' && onSetDirection && a.lean) {
+        onSetDirection(lead.id, a.lean); done = ' ✓ Lean set.';
+      }
+      setAsstMsgs((m) => [...m, { role: 'ai', text: (data.reply || 'Done.') + done }]);
+    } catch (e) {
+      setAsstMsgs((m) => [...m, { role: 'ai', text: 'Error: ' + (e.message || e) }]);
+    } finally { setAsstBusy(false); }
+  };
+
   // Notes brain: reads the WHOLE file (texts + calls + notes) via the same
   // endpoint the message brain uses, so both see everything.
   const runSmartSuggest = async () => {
@@ -314,51 +349,28 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
           );
         })()}
 
-        {/* Smart Suggest (notes brain): reads texts + calls + notes together */}
+        {/* AI Assistant: talk to it. Ask for a read, or tell it what to do. */}
         <div className="border-t border-slate-700/70 px-2 pt-2 bg-slate-800/40">
-          {ai && !ai.error && (
-            <div className="mb-2 space-y-1.5">
-              <div className="flex items-center justify-between px-0.5">
-                <span className="text-[11px] font-bold text-cyan-300 uppercase tracking-wide">Smart Suggest</span>
-                <button type="button" onClick={() => { setAi(null); setAiDismissed({}); }} className="text-slate-500 hover:text-slate-300 text-xs">Clear all</button>
-              </div>
-              {ai.summary && <p className="text-xs text-slate-200 px-2 py-1.5 rounded-lg border border-slate-700/50 bg-slate-800/40">{ai.summary}</p>}
-              {ai.lean && onSetDirection && !aiDismissed.lean && (
-                <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 flex items-center gap-2">
-                  <button type="button" disabled={aiApplied.lean}
-                    onClick={() => { onSetDirection(lead.id, ai.lean); setAiApplied((a) => ({ ...a, lean: true })); }}
-                    className="flex-1 text-left text-xs disabled:opacity-60">
-                    <span className="text-[10px] uppercase tracking-wide text-slate-500 block">Lean</span>
-                    {aiApplied.lean ? '✓ Set: ' : 'Set lean: '}<span className="text-cyan-300 font-medium">{LEAN_LABEL[ai.lean] || ai.lean}</span>
-                  </button>
-                  <button type="button" onClick={() => setAiDismissed((d) => ({ ...d, lean: true }))} title="Dismiss" className="flex-shrink-0 text-slate-500 hover:text-slate-300 text-sm leading-none px-1">×</button>
-                </div>
-              )}
-              {ai.follow_up && onScheduleFollowUp && !aiDismissed.fu && (
-                <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 flex items-center gap-2">
-                  <button type="button" disabled={aiApplied.fu}
-                    onClick={() => { onScheduleFollowUp(lead.id, ai.follow_up.when, ai.follow_up.label); setAiApplied((a) => ({ ...a, fu: true })); }}
-                    className="flex-1 text-left text-xs disabled:opacity-60">
-                    <span className="text-[10px] uppercase tracking-wide text-slate-500 block">Schedule task</span>
-                    {aiApplied.fu ? '✓ Scheduled: ' : ''}<span className="text-cyan-300 font-medium">{ai.follow_up.label} · {whenLabel(ai.follow_up.when)}</span>
-                  </button>
-                  <button type="button" onClick={() => setAiDismissed((d) => ({ ...d, fu: true }))} title="Dismiss" className="flex-shrink-0 text-slate-500 hover:text-slate-300 text-sm leading-none px-1">×</button>
-                </div>
-              )}
+          {asstMsgs.length > 0 && (
+            <div className="mb-2 max-h-44 overflow-y-auto space-y-1.5 pr-1">
+              {asstMsgs.map((m, i) => (
+                <div key={i} className={`text-xs px-2.5 py-1.5 rounded-lg whitespace-pre-wrap ${m.role === 'user' ? 'bg-blue-600/20 text-blue-100 ml-8' : 'bg-slate-800/70 border border-cyan-500/20 text-slate-200 mr-8'}`}>{m.text}</div>
+              ))}
+              {asstBusy && <div className="text-xs text-slate-500 px-2">Thinking…</div>}
             </div>
           )}
-          {ai && ai.error && (
-            <div className="mb-2 text-xs text-rose-300">{ai.error}</div>
-          )}
-          <button
-            type="button"
-            onClick={runSmartSuggest}
-            disabled={aiLoading}
-            className="mb-1 inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-cyan-300 hover:text-cyan-200 disabled:opacity-50"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
-            {aiLoading ? 'Reading the file…' : 'Smart Suggest'}
-          </button>
+          <div className="flex items-center gap-1.5 mb-1">
+            <svg className="w-4 h-4 text-cyan-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
+            <input
+              value={asstInput}
+              onChange={(e) => setAsstInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); askAssistant(); } }}
+              placeholder="Ask, or tell me: set a call in 3 days, what's the next move…"
+              className="flex-1 bg-slate-900/70 border border-slate-700 rounded-md px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500/60"
+            />
+            <button type="button" onClick={() => askAssistant()} disabled={asstBusy || !asstInput.trim()} className="px-2.5 py-1.5 rounded-md bg-cyan-600/30 hover:bg-cyan-600/50 disabled:opacity-40 text-cyan-100 text-xs font-medium">Send</button>
+            <button type="button" onClick={() => askAssistant("What's the smartest next move on this lead, and set the follow-up if one makes sense?")} disabled={asstBusy} title="Get a read + set the follow-up" className="px-2 py-1.5 rounded-md bg-slate-700/60 hover:bg-slate-600 text-slate-300 text-xs">Suggest</button>
+          </div>
         </div>
 
         <div className="border-t border-slate-700/70 p-2 bg-slate-800/40 relative">
@@ -395,10 +407,7 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
                     <input type="date" value={taskDate} onChange={(e) => setTaskDate(e.target.value)} className="bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1.5 text-xs text-slate-200" />
                     <input type="time" value={taskTime} onChange={(e) => setTaskTime(e.target.value)} className="bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1.5 text-xs text-slate-200" />
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    {[['2d', 2], ['4d', 4], ['1wk', 7], ['2wk', 14]].map(([lbl, days]) => (
-                      <button key={lbl} type="button" onClick={() => quickDate(days)} className="px-2 py-1 rounded-md bg-slate-700/60 hover:bg-blue-600/40 text-slate-300 text-[11px]">{lbl}</button>
-                    ))}
+                  <div className="flex items-center">
                     <button type="button" onClick={submitTask} disabled={!taskDate} className="ml-auto px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs font-medium">Set task</button>
                   </div>
                 </div>

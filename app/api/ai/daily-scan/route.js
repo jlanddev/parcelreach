@@ -7,35 +7,51 @@ export async function POST(request) {
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return NextResponse.json({ error: 'AI not configured' }, { status: 500 });
-    const { userId } = await request.json();
+    const { userId, cleanView, leadIds } = await request.json();
 
     const supabase = supabaseAdmin();
     const now = new Date();
     const endToday = new Date(); endToday.setHours(23, 59, 59, 999);
 
+    // In Clean View, only consider the pushed leads (the client sends their ids,
+    // or we fall back to the clean_view flag). Otherwise scan the whole board.
+    let scopeIds = null;
+    if (cleanView) {
+      if (Array.isArray(leadIds) && leadIds.length) scopeIds = leadIds;
+      else {
+        const { data: cv } = await supabase.from('leads').select('id').eq('clean_view', true);
+        scopeIds = (cv || []).map((l) => l.id);
+      }
+      if (scopeIds.length === 0) scopeIds = ['00000000-0000-0000-0000-000000000000']; // none -> empty scan
+    }
+
     // Their pending tasks due through today (with the lead attached).
-    const { data: tasks } = await supabase
+    let taskQ = supabase
       .from('scheduled_tasks')
       .select('id, lead_id, title, task_type, due_at, priority')
       .eq('status', 'pending')
       .lte('due_at', endToday.toISOString())
       .order('due_at', { ascending: true })
       .limit(60);
-    const myTasks = (tasks || []).filter((t) => !userId || true); // assigned filter applied client-side already; include all due
+    if (scopeIds) taskQ = taskQ.in('lead_id', scopeIds);
+    const { data: tasks } = await taskQ;
+    const myTasks = tasks || [];
 
-    const leadIds = [...new Set((myTasks).map((t) => t.lead_id).filter(Boolean))];
+    const taskLeadIds = [...new Set((myTasks).map((t) => t.lead_id).filter(Boolean))];
     let leadsById = {};
-    if (leadIds.length) {
-      const { data: leads } = await supabase.from('leads').select('id, full_name, name, pipeline_status, status, offer_amount, last_activity_at, property_county, county, acres, acreage').in('id', leadIds);
+    if (taskLeadIds.length) {
+      const { data: leads } = await supabase.from('leads').select('id, full_name, name, pipeline_status, status, offer_amount, last_activity_at, property_county, county, acres, acreage').in('id', taskLeadIds);
       leadsById = Object.fromEntries((leads || []).map((l) => [l.id, l]));
     }
 
     // Leads that have gone quiet: pending offer / negotiating with no activity in 3+ days.
-    const { data: warm } = await supabase
+    let warmQ = supabase
       .from('leads')
       .select('id, full_name, name, pipeline_status, status, offer_amount, last_activity_at, property_county, county')
       .in('pipeline_status', ['OFFER_SENT', 'NEGOTIATING', 'APPT_SET_FOR_JORDAN', 'AGREEMENT_SENT'])
       .limit(80);
+    if (scopeIds) warmQ = warmQ.in('id', scopeIds);
+    const { data: warm } = await warmQ;
     const stale = (warm || []).filter((l) => {
       const t = l.last_activity_at ? new Date(l.last_activity_at).getTime() : 0;
       return t && (now.getTime() - t) > 3 * 24 * 3600 * 1000;

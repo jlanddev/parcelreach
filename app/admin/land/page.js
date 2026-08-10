@@ -1062,7 +1062,10 @@ export default function LandLeadsAdminPage() {
   const runDailyScan = async () => {
     setScanLoading(true); setDailyScan(null);
     try {
-      const res = await fetch('/api/ai/daily-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: currentUserId }) });
+      // Scope the scan to exactly what's on screen: in Clean View, only the
+      // pushed leads; otherwise the whole board.
+      const viewLeadIds = allLeads.map((l) => l.id);
+      const res = await fetch('/api/ai/daily-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: currentUserId, cleanView: cleanViewActive, leadIds: cleanViewActive ? viewLeadIds : null }) });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Scan failed');
       setDailyScan(data);
@@ -4175,8 +4178,11 @@ export default function LandLeadsAdminPage() {
       {(() => {
         const now = Date.now();
         const endToday = new Date(); endToday.setHours(23, 59, 59, 999);
+        // Scope to the current view: in Clean View only pushed leads' tasks show
+        // (allLeads is already clean-view-filtered), otherwise the whole board.
+        const viewLeadIds = new Set(allLeads.map((l) => l.id));
         const due = scheduledTasks
-          .filter((t) => t.status === 'pending' && t.assigned_to === currentUserId && new Date(t.due_at).getTime() <= endToday.getTime())
+          .filter((t) => t.status === 'pending' && t.assigned_to === currentUserId && viewLeadIds.has(t.lead_id) && new Date(t.due_at).getTime() <= endToday.getTime())
           .sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
         const overdueCount = due.filter((t) => new Date(t.due_at).getTime() < now - 12 * 3600 * 1000).length;
         return (
