@@ -136,6 +136,20 @@ export async function POST(request) {
         .in('task_type', ['follow_up', 'callback'])
         .then(() => {}, () => {});
 
+      // A reply also PAUSES any active drip: no reason to keep auto-texting
+      // someone who is talking to us. The rep reads it and decides whether to
+      // work it live or put them back in a drip.
+      try {
+        const { data: paused } = await supabase.from('campaign_enrollments')
+          .update({ status: 'stopped', stopped_reason: 'reply' })
+          .in('lead_id', dupIds).eq('status', 'active').select('id');
+        const ids = (paused || []).map((e) => e.id);
+        if (ids.length) {
+          await supabase.from('campaign_queue').update({ status: 'cancelled', processed_at: new Date().toISOString() })
+            .in('enrollment_id', ids).eq('status', 'pending');
+        }
+      } catch { /* campaigns not migrated yet */ }
+
       // Notify on an inbound text: the lead's owner (or the acquisition manager
       // if unowned) PLUS all admins, so the admin sees every inbound for oversight.
       try {

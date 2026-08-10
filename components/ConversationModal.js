@@ -25,7 +25,7 @@ function dateLabel(input) {
  * right/blue, chronological. Composer sends via Project Blue with optimistic
  * bubbles + retry on failure. Live inbound arrives over Supabase Realtime.
  */
-export default function ConversationModal({ lead, currentUserId, currentUserName, onClose, onActivity, onCall, onOpenLead, onSetDirection, onScheduleFollowUp }) {
+export default function ConversationModal({ lead, currentUserId, currentUserName, onClose, onActivity, onCall, onOpenLead, onSetDirection, onScheduleFollowUp, initialDraft }) {
   const phone = lead?.phone || lead?.owner_phone || '';
   const name = lead?.owner_name || lead?.name || lead?.full_name || 'Lead';
 
@@ -72,7 +72,7 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
   const [optimistic, setOptimistic] = useState([]); // local-only bubbles
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState(initialDraft || '');
   const [sending, setSending] = useState(false);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);

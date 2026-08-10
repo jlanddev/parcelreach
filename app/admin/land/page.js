@@ -279,6 +279,22 @@ export default function LandLeadsAdminPage() {
   const [contactRefresh, setContactRefresh] = useState(0); // bump to reload contactMeta
   const [notesByLead, setNotesByLead] = useState({}); // leadId -> recent conversation notes
   const [notesModalLead, setNotesModalLead] = useState(null); // open notes thread
+  const [notesPostCall, setNotesPostCall] = useState(false); // opened right after a call -> prompt the assistant
+  const [prefillDraft, setPrefillDraft] = useState(''); // seed the text composer (e.g. after a no-answer call)
+
+  // The text we drop into the composer when a call goes unanswered. References
+  // our offer if one is out, otherwise just a friendly "just tried you".
+  const buildNoAnswerText = (l) => {
+    const first = (l?.name || l?.full_name || '').trim().split(' ')[0] || 'there';
+    const sender = (currentUserName || '').trim().split(' ')[0] || 'Anthony';
+    const county = l?.property_county || l?.county || l?.form_data?.county || '';
+    const where = county ? ` in ${county} County` : '';
+    const stage = (l?.pipeline_status || l?.status || '').toUpperCase();
+    const offered = !!l?.offer_amount || ['OFFER_SENT', 'NEGOTIATING', 'OFFER_CURATED'].includes(stage);
+    return offered
+      ? `Hey ${first}, this is ${sender} with Haven Ground. Just tried you to check in on our offer for the land${where}. Give me a shout when you get a sec.`
+      : `Hey ${first}, this is ${sender} with Haven Ground. Just tried giving you a call about the land${where} you wanted us to look at. When is a good time to connect?`;
+  };
   const [frozenBoardLeads, setFrozenBoardLeads] = useState(null); // snapshot so cards don't reshuffle while a modal is open
   const [notesRefresh, setNotesRefresh] = useState(0);
   const [activityLogDate, setActivityLogDate] = useState(() => new Date().toISOString().split('T')[0]);
@@ -984,6 +1000,7 @@ export default function LandLeadsAdminPage() {
         created_by: user?.id || null,
         assigned_to: user?.id || lead?.current_owner_id || null,
         task_type: 'follow_up',
+        source: 'pipeline',
         title: `${label || 'Follow up'}: ${lead?.name || lead?.full_name || 'Lead'}`,
         description: 'Scheduled from Smart Suggest',
         due_at: due.toISOString(),
@@ -1021,6 +1038,7 @@ export default function LandLeadsAdminPage() {
         created_by: user?.id || null,
         assigned_to: owner,
         task_type: taskType,
+        source: 'pipeline',
         title: `${label || 'Call'}: ${lead?.name || lead?.full_name || 'Lead'}`,
         description: 'Assigned from the note screen',
         due_at: due.toISOString(),
@@ -1062,7 +1080,7 @@ export default function LandLeadsAdminPage() {
         const due = new Date(now); due.setDate(due.getDate() + (Number(s.day) || 0));
         if ((Number(s.day) || 0) > 0) due.setHours(10, 0, 0, 0);
         if (s.type === 'call') {
-          await supabase.from('scheduled_tasks').insert({ lead_id: leadId, created_by: user?.id || null, assigned_to: owner, task_type: 'callback', title: `${s.label || 'Call'}: ${lead?.name || lead?.full_name || 'Lead'}`, description: `Campaign: ${camp.name}`, due_at: due.toISOString(), status: 'pending', priority: 'normal' });
+          await supabase.from('scheduled_tasks').insert({ lead_id: leadId, created_by: user?.id || null, assigned_to: owner, task_type: 'callback', source: 'pipeline', title: `${s.label || 'Call'}: ${lead?.name || lead?.full_name || 'Lead'}`, description: `Campaign: ${camp.name}`, due_at: due.toISOString(), status: 'pending', priority: 'normal' });
         } else {
           queueRows.push({ enrollment_id: enrollment.id, lead_id: leadId, campaign_id: camp.id, step_index: i, type: 'text', message: (s.message || '').replace(/\{\{first\}\}/g, first), due_at: due.toISOString(), status: 'pending' });
         }
@@ -4076,7 +4094,8 @@ export default function LandLeadsAdminPage() {
           lead={conversationLead}
           currentUserId={currentUserId}
           currentUserName={currentUserName}
-          onClose={() => setConversationLead(null)}
+          initialDraft={prefillDraft}
+          onClose={() => { setConversationLead(null); setPrefillDraft(''); }}
           onActivity={() => setContactRefresh((t) => t + 1)}
           onCall={(l) => setCallLead(l)}
           onOpenLead={(l) => navigateToLeadCard(l)}
@@ -4094,7 +4113,8 @@ export default function LandLeadsAdminPage() {
           currentUserName={currentUserName}
           roster={noteRoster}
           usersById={usersById}
-          onClose={() => setNotesModalLead(null)}
+          postCall={notesPostCall}
+          onClose={() => { setNotesModalLead(null); setNotesPostCall(false); }}
           onPosted={() => setNotesRefresh((t) => t + 1)}
           onOpenLead={(l) => navigateToLeadCard(l)}
           onSetDirection={(id, val) => setDealDirection(id, val)}
@@ -4110,6 +4130,10 @@ export default function LandLeadsAdminPage() {
           currentUserId={currentUserId}
           onClose={() => setCallLead(null)}
           onLogged={() => setContactRefresh((t) => t + 1)}
+          onEnded={(l, outcome) => {
+            if (outcome === 'spoke') { setNotesPostCall(true); setNotesModalLead(l); }
+            else { setPrefillDraft(buildNoAnswerText(l)); setConversationLead(l); } // no answer -> text screen, pre-filled
+          }}
         />
       )}
       {toast && (
@@ -4224,8 +4248,10 @@ export default function LandLeadsAdminPage() {
         // Scope to the current view: in Clean View only pushed leads' tasks show
         // (allLeads is already clean-view-filtered), otherwise the whole board.
         const viewLeadIds = new Set(allLeads.map((l) => l.id));
+        // Fresh system only: show tasks OUR flows created (source 'pipeline'),
+        // never the old auto-cadence ghosts left in the table.
         const due = scheduledTasks
-          .filter((t) => t.status === 'pending' && t.assigned_to === currentUserId && viewLeadIds.has(t.lead_id) && new Date(t.due_at).getTime() <= endToday.getTime())
+          .filter((t) => t.status === 'pending' && t.source === 'pipeline' && t.assigned_to === currentUserId && viewLeadIds.has(t.lead_id) && new Date(t.due_at).getTime() <= endToday.getTime())
           .sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
         const overdueCount = due.filter((t) => new Date(t.due_at).getTime() < now - 12 * 3600 * 1000).length;
         return (
@@ -4259,24 +4285,24 @@ export default function LandLeadsAdminPage() {
                     {due.map((task) => {
                       const lead = allLeads.find((l) => l.id === task.lead_id);
                       const nm = lead?.full_name || lead?.name || 'Lead';
-                      const overdue = new Date(task.due_at).getTime() < now - 12 * 3600 * 1000;
+                      const overMs = now - new Date(task.due_at).getTime();
+                      const overdue = overMs > 12 * 3600 * 1000;
+                      const overdueDays = Math.floor(overMs / 86400000);
+                      // What to do (title minus the redundant name) and why (description).
+                      const action = (task.title || 'Follow up').replace(new RegExp(nm, 'ig'), '').replace(/^[\s:,-]+|[\s:,-]+$/g, '').trim() || 'Follow up';
+                      const why = task.description && !/^(assigned from|scheduled from|jordan flagged)/i.test(task.description) ? task.description : '';
+                      const whenLabel = overdue ? (overdueDays >= 1 ? `Overdue ${overdueDays} day${overdueDays > 1 ? 's' : ''}` : 'Overdue') : `Due ${new Date(task.due_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
                       return (
                         <div key={task.id} className="flex items-center gap-2 rounded-lg bg-slate-800/60 border border-slate-700/50 px-3 py-2">
                           <div className="min-w-0 flex-1">
-                            <div className="text-sm text-slate-100 truncate">
-                              <button onClick={() => lead && navigateToLeadCard(lead)} className="hover:text-cyan-300 hover:underline font-medium">{nm}</button>
-                              <span className="text-slate-400"> · {task.title?.split(':')[0] || 'Call'}</span>
-                            </div>
-                            <div className={`text-xs ${overdue ? 'text-rose-300' : 'text-slate-500'}`}>{overdue ? 'Overdue · ' : ''}{new Date(task.due_at).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</div>
+                            <button onClick={() => lead && navigateToLeadCard(lead)} className="block text-sm text-slate-100 font-medium truncate hover:text-cyan-300 hover:underline text-left">{nm}</button>
+                            <div className="text-xs text-slate-300 truncate">{action}{why ? ` (${why})` : ''}</div>
+                            <div className={`text-[11px] ${overdue ? 'text-rose-300' : 'text-slate-500'}`}>{whenLabel}</div>
                           </div>
                           {lead && (lead.phone || lead.owner_phone) && (
-                            <button onClick={() => setCallLead(lead)} title="Call" className="px-2.5 py-1.5 rounded-lg bg-green-600/20 hover:bg-green-600/40 text-green-300 text-xs font-medium">Call</button>
+                            <button onClick={() => setCallLead(lead)} title="Call" className="px-3 py-1.5 rounded-lg bg-green-600/20 hover:bg-green-600/40 text-green-300 text-xs font-semibold">Call</button>
                           )}
-                          {lead && (
-                            <button onClick={() => openConversation(lead)} title="Text" className="px-2.5 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 text-xs font-medium">Text</button>
-                          )}
-                          <button onClick={() => snoozeTask(task, 1)} title="Snooze 1 day" className="px-2 py-1.5 rounded-lg bg-slate-700/60 hover:bg-slate-600 text-slate-300 text-xs">+1d</button>
-                          <button onClick={() => completeTaskQuick(task)} title="Clear" className="px-2.5 py-1.5 rounded-lg bg-slate-700/60 hover:bg-green-600/40 text-slate-200 hover:text-green-200 text-xs font-medium">Done</button>
+                          <button onClick={() => completeTaskQuick(task)} title="Mark done and clear" className="px-2.5 py-1.5 rounded-lg bg-slate-700/60 hover:bg-green-600/40 text-slate-200 hover:text-green-200 text-xs font-medium">Done</button>
                         </div>
                       );
                     })}

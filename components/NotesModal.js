@@ -15,7 +15,7 @@ import { playSwoosh } from '@/lib/sound';
  */
 const LEAN_LABEL = { hot: 'Hot', warm: 'Warm', cold: 'Cold', ready: 'Ready' };
 
-export default function NotesModal({ lead, currentUserId, currentUserName, roster = [], usersById = {}, onClose, onPosted, onOpenLead, onSetDirection, onScheduleFollowUp, onAssignTask, onEnrollCampaign, onSetStage }) {
+export default function NotesModal({ lead, currentUserId, currentUserName, roster = [], usersById = {}, onClose, onPosted, onOpenLead, onSetDirection, onScheduleFollowUp, onAssignTask, onEnrollCampaign, onSetStage, postCall }) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState('');
@@ -73,7 +73,9 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
   // AI assistant: talk to it. Ask for a read, or tell it to do something
   // ("set a call in 3 days", "move to Offer Pending"); it acts on the lead.
   const [asstInput, setAsstInput] = useState('');
-  const [asstMsgs, setAsstMsgs] = useState([]); // { role:'user'|'ai', text }
+  const [asstMsgs, setAsstMsgs] = useState(
+    postCall ? [{ role: 'ai', text: 'Call logged. Tell me how it went and what to do next, like "still needs time, put her in the family drip" or "she is ready, move to offer" or "call back Tuesday at 2".' }] : []
+  ); // { role:'user'|'ai', text }
   const [asstBusy, setAsstBusy] = useState(false);
   const askAssistant = async (text) => {
     const instruction = (text ?? asstInput).trim();

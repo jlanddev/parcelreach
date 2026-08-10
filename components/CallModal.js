@@ -16,7 +16,7 @@ const toE164 = (p) => {
  * logs the call to the activities timeline (attributed to the caller) when it
  * ends, so it shows in Last Contacted and the Activity Log.
  */
-export default function CallModal({ lead, currentUserId, onClose, onLogged }) {
+export default function CallModal({ lead, currentUserId, onClose, onLogged, onEnded }) {
   const phone = lead?.phone || lead?.owner_phone || '';
   const name = lead?.full_name || lead?.name || lead?.owner_name || 'Lead';
 
@@ -34,13 +34,16 @@ export default function CallModal({ lead, currentUserId, onClose, onLogged }) {
   const wasAnswered = useRef(false);
   const loggedRef = useRef(false);
 
-  // Call leg ended → freeze the duration and ask the rep how it went.
+  // Call leg ended. Auto-detect the outcome (answered = spoke, else no answer),
+  // log it, and hand off: spoke opens the Claude assistant to route it, no
+  // answer opens the text screen with a contextual message. No button clicking.
   const finishLive = () => {
     if (phase !== 'live') return;
     if (timerRef.current) clearInterval(timerRef.current);
     durRef.current = startRef.current ? Math.floor((Date.now() - startRef.current) / 1000) : 0;
     setStatus('ended');
-    setPhase('wrapup');
+    if (onEnded) logOutcome(wasAnswered.current ? 'spoke' : 'no_answer');
+    else setPhase('wrapup');
   };
 
   // Rep picks the outcome (spoke | voicemail | no_answer) → log it accurately.
@@ -73,7 +76,9 @@ export default function CallModal({ lead, currentUserId, onClose, onLogged }) {
       console.error('[call log]', e);
     }
     onLogged && onLogged();
-    setPhase('done');
+    // Hand off: spoke -> Claude assistant to route; no answer -> text screen.
+    if (onEnded) { onEnded(lead, outcome); onClose && onClose(); }
+    else setPhase('done');
   };
 
   useEffect(() => {
