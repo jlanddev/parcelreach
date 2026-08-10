@@ -55,8 +55,9 @@ async function run(request) {
       await mark(supabase, item.id, 'sent');
       sent++;
     } catch (e) {
-      console.error('[campaign run] item failed', item.id, e?.message);
-      await mark(supabase, item.id, 'failed');
+      // Leave it PENDING so a transient Project Blue error retries next run
+      // instead of permanently dropping the text.
+      console.error('[campaign run] item failed, will retry', item.id, e?.message);
       failed++;
     }
   }

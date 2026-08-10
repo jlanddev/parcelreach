@@ -108,18 +108,53 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
       setError('No phone number on this lead.');
       return;
     }
+    // Our own activities are the reliable record: send-sms logs every outbound,
+    // the webhook logs every inbound. Build the thread from that first, then add
+    // anything extra Project Blue has. This way a slow or partial Project Blue
+    // response can never wipe the thread or drop one side.
+    let local = [];
+    if (lead?.id) {
+      try {
+        const { data: acts } = await supabase
+          .from('activities')
+          .select('id, direction, message_content, outcome, created_at')
+          .eq('lead_id', lead.id).eq('activity_type', 'TEXT')
+          .order('created_at', { ascending: true }).limit(300);
+        local = (acts || []).filter((a) => a.message_content).map((a) => ({
+          message_handle: 'act-' + a.id,
+          content: a.message_content,
+          direction: (a.direction || '').toLowerCase() === 'inbound' ? 'inbound' : 'outbound',
+          sent_at: a.created_at,
+          status: a.outcome,
+        }));
+      } catch { /* fall back to Project Blue only */ }
+    }
+    let pb = [];
+    let pbError = null;
     try {
       const res = await fetch(`/api/pb/messages?phone=${encodeURIComponent(phone)}`);
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to load messages');
-      setMessages(data.messages || []);
-      setError(null);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
+      if (res.ok) pb = data.messages || [];
+      else pbError = data.error || 'Project Blue unavailable';
+    } catch (e) { pbError = e.message; }
+
+    // Merge: keep every local message, add any Project Blue message not already
+    // present (same direction + same text within 3 minutes).
+    const norm = (s) => (s || '').trim();
+    const tsOf = (m) => new Date(m.sent_at || m.created_at || 0).getTime();
+    const merged = [...local];
+    for (const m of pb) {
+      const dir = m.direction === 'outbound' ? 'outbound' : 'inbound';
+      const dup = merged.find((x) => x.direction === dir && norm(x.content) === norm(m.content) && Math.abs(tsOf(x) - tsOf(m)) < 180000);
+      if (!dup) merged.push({ ...m, direction: dir });
     }
-  }, [phone]);
+    merged.sort((a, b) => tsOf(a) - tsOf(b));
+
+    // Never blank the thread on a bad Project Blue response if we have local data.
+    if (merged.length > 0 || !pbError) setMessages(merged);
+    setError(pbError && merged.length === 0 ? pbError : null);
+    setLoading(false);
+  }, [phone, lead?.id]);
 
   useEffect(() => {
     load();
