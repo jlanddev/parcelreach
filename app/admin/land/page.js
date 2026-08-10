@@ -1138,6 +1138,10 @@ export default function LandLeadsAdminPage() {
 
       const now = Date.now();
       const owner = lead?.current_owner_id || acquisitionManagerId || user?.id || null;
+      // Quiet hours (TCPA): only fire an immediate text 10am-8pm Central. Outside
+      // that, the day-0 text stays queued and the scheduler sends it at 10am.
+      const chHour = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: 'numeric', hour12: false, hourCycle: 'h23' }).formatToParts(new Date()).find((p) => p.type === 'hour')?.value ?? 0);
+      const withinQuiet = chHour >= 10 && chHour < 20;
       const queueRows = [];
       // startStep lets you drop a lead in partway through the drip. We rebase the
       // timing so the chosen step fires now and later steps keep their spacing.
@@ -1153,11 +1157,12 @@ export default function LandLeadsAdminPage() {
           if (ce) { const { source, ...ns } = cp; await supabase.from('scheduled_tasks').insert(ns); }
         } else {
           const msg = fillTokens(s.message, lead);
-          if (delayMins <= 0 && lead?.phone) {
-            // Due now: fire the intro text immediately (speed to lead) and mark it sent.
+          if (delayMins <= 0 && lead?.phone && withinQuiet) {
+            // Due now and inside quiet hours: fire the intro text immediately.
             fetch('/api/pb/send-sms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: lead.phone, message: msg, leadId, userId: user?.id }) }).catch(() => {});
             queueRows.push({ enrollment_id: enrollment.id, lead_id: leadId, campaign_id: camp.id, step_index: i, type: 'text', message: msg, due_at: due.toISOString(), status: 'sent', processed_at: new Date().toISOString() });
           } else {
+            // Otherwise queue it; the scheduler sends it in the next quiet-hours window.
             queueRows.push({ enrollment_id: enrollment.id, lead_id: leadId, campaign_id: camp.id, step_index: i, type: 'text', message: msg, due_at: due.toISOString(), status: 'pending' });
           }
         }

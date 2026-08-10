@@ -19,6 +19,17 @@ async function run(request) {
     if (auth !== `Bearer ${secret}` && q !== secret) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
   const supabase = supabaseAdmin();
+
+  // Quiet hours (TCPA): only send 10am to 8pm Central. That window is inside the
+  // legal 8am to 9pm in the recipient's local time across every US timezone, so
+  // no lead is ever texted too early or too late. Outside it, we send nothing;
+  // due texts wait and go out when the window opens.
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: 'numeric', hour12: false, hourCycle: 'h23' }).formatToParts(new Date());
+  const chHour = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
+  if (chHour < 10 || chHour >= 20) {
+    return NextResponse.json({ ok: true, skipped: 'quiet hours (10am-8pm Central only)', hour: chHour, sent: 0 });
+  }
+
   const now = new Date().toISOString();
   const { data: due } = await supabase.from('campaign_queue')
     .select('id, lead_id, enrollment_id, message, type')
