@@ -1036,6 +1036,44 @@ export default function LandLeadsAdminPage() {
     }
   };
 
+  // Enroll a lead into a campaign (drip). Call steps become scheduled tasks
+  // (they show in the tray on their day); text steps queue for the scheduler.
+  const enrollInCampaign = async (leadId, campaignName) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const lead = (allLeadsRef.current || []).find((l) => l.id === leadId);
+      const { data: camp } = await supabase.from('campaigns').select('*').ilike('name', campaignName).eq('active', true).maybeSingle();
+      if (!camp) { showToast(`Campaign "${campaignName}" not found`, 'error'); return; }
+      let enrollment;
+      const { data: enr, error: enrErr } = await supabase.from('campaign_enrollments')
+        .insert({ lead_id: leadId, campaign_id: camp.id, status: 'active', enrolled_by: user?.id || null }).select().maybeSingle();
+      if (enrErr) {
+        const { data: existing } = await supabase.from('campaign_enrollments').select('*').eq('lead_id', leadId).eq('campaign_id', camp.id).maybeSingle();
+        enrollment = existing;
+      } else enrollment = enr;
+      if (!enrollment) throw new Error('Could not enroll');
+
+      const now = new Date();
+      const owner = lead?.current_owner_id || acquisitionManagerId || user?.id || null;
+      const first = (lead?.name || lead?.full_name || '').trim().split(' ')[0] || 'there';
+      const queueRows = [];
+      for (let i = 0; i < (camp.steps || []).length; i++) {
+        const s = camp.steps[i];
+        const due = new Date(now); due.setDate(due.getDate() + (Number(s.day) || 0));
+        if ((Number(s.day) || 0) > 0) due.setHours(10, 0, 0, 0);
+        if (s.type === 'call') {
+          await supabase.from('scheduled_tasks').insert({ lead_id: leadId, created_by: user?.id || null, assigned_to: owner, task_type: 'callback', title: `${s.label || 'Call'}: ${lead?.name || lead?.full_name || 'Lead'}`, description: `Campaign: ${camp.name}`, due_at: due.toISOString(), status: 'pending', priority: 'normal' });
+        } else {
+          queueRows.push({ enrollment_id: enrollment.id, lead_id: leadId, campaign_id: camp.id, step_index: i, type: 'text', message: (s.message || '').replace(/\{\{first\}\}/g, first), due_at: due.toISOString(), status: 'pending' });
+        }
+      }
+      if (queueRows.length) await supabase.from('campaign_queue').insert(queueRows);
+      const { data: freshTasks } = await supabase.from('scheduled_tasks').select('*').eq('status', 'pending').order('due_at', { ascending: true });
+      if (freshTasks) setScheduledTasks(freshTasks);
+      showToast(`Enrolled in ${camp.name}`, 'success', lead?.name || lead?.full_name);
+    } catch (e) { showToast('Enroll failed: ' + (e?.message || e), 'error'); }
+  };
+
   // ---- Daily Action Tray ---------------------------------------------------
   // Today's due calls/tasks for the logged-in person, forced in front of them
   // until cleared, so scheduled follow-ups actually get worked.
@@ -4045,6 +4083,8 @@ export default function LandLeadsAdminPage() {
           onSetDirection={(id, val) => setDealDirection(id, val)}
           onScheduleFollowUp={scheduleSmartFollowUp}
           onAssignTask={assignTask}
+          onEnrollCampaign={enrollInCampaign}
+          onSetStage={(id, stage) => updateLeadStatus(id, stage)}
         />
       )}
       {notesModalLead && (
@@ -4060,6 +4100,8 @@ export default function LandLeadsAdminPage() {
           onSetDirection={(id, val) => setDealDirection(id, val)}
           onScheduleFollowUp={scheduleSmartFollowUp}
           onAssignTask={assignTask}
+          onEnrollCampaign={enrollInCampaign}
+          onSetStage={(id, stage) => updateLeadStatus(id, stage)}
         />
       )}
       {callLead && (

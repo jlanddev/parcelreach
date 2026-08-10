@@ -11,10 +11,12 @@ function stamp(at) {
   const d = new Date(at); if (isNaN(d)) return '';
   return new Intl.DateTimeFormat('en-US', { timeZone: CH, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(d);
 }
-function todayCentral() {
-  const p = new Intl.DateTimeFormat('en-US', { timeZone: CH, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'long' }).formatToParts(new Date());
+function nowCentral() {
+  // Exact current date AND time in Central, so "call back Tuesday at 2" or
+  // "in 3 days" resolve to the right moment.
+  const p = new Intl.DateTimeFormat('en-US', { timeZone: CH, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'long', hour: 'numeric', minute: '2-digit', hour12: true }).formatToParts(new Date());
   const g = (t) => p.find((x) => x.type === t)?.value;
-  return `${g('weekday')} ${g('year')}-${g('month')}-${g('day')}`;
+  return `${g('weekday')} ${g('year')}-${g('month')}-${g('day')} ${g('hour')}:${g('minute')} ${g('dayPeriod')}`;
 }
 
 export async function POST(request) {
@@ -46,24 +48,36 @@ export async function POST(request) {
     const stage = (lead.pipeline_status || lead.status || 'NEW').toUpperCase();
     const offer = lead.offer_amount ? `$${Number(lead.offer_amount).toLocaleString()}` : 'none';
 
-    const system = `You are a sharp acquisitions assistant embedded in a land CRM, helping a rep work ONE seller lead. The rep will either ask you a question (give a tight, useful read) or tell you to do something. You can take ONE action:
-- set_task: schedule a call or follow-up. Fields: in_days (integer from today) OR date ("YYYY-MM-DD"), optional time ("HH:MM", 24h, default 10:00), and a short label (e.g. "Call to follow up on offer").
-- set_lean: set the lead temperature. lean is one of hot, warm, cold, ready.
-If the rep is just asking for advice, take no action.
+    // Active campaigns the assistant can drop the lead into by name.
+    let campaignList = 'none set up yet';
+    try {
+      const { data: camps } = await supabase.from('campaigns').select('name, description').eq('active', true);
+      if (camps?.length) campaignList = camps.map((c) => `"${c.name}"${c.description ? ` (${c.description})` : ''}`).join(', ');
+    } catch { /* table may not exist yet */ }
 
-Read the lead file and the rep's instruction. Reply in 1-3 short sentences, plain and specific, like a helpful teammate. If you scheduled something, say when in plain words.
+    const system = `You are a sharp acquisitions assistant embedded in a land CRM, helping a rep work ONE seller lead. After a call or at any time, the rep types what happened or what they want in plain language (e.g. "still needs time, getting closer to offer", "call her back Tuesday at 2", "put him in the family drip", "she is ready, moving to offer"). You read the lead file, understand it, and either give a short read or take ONE action to route the lead. The overarching goal is always to get the seller back on the phone and move toward a signed contract. Nothing should ever just sit: if there is no clear next move, schedule a follow-up.
+
+ACTIONS (pick at most one):
+- set_task: schedule a call/follow-up. Fields: in_days (int from now) OR date ("YYYY-MM-DD"), optional time ("HH:MM" 24h, default 10:00), short label.
+- enroll_campaign: drop the lead into a nurture drip by name. Field: campaign (must match one of the available campaign names). Use this for "keep them in the drip", "needs time", "talking to family", etc.
+- set_stage: move the pipeline stage. Field: stage, one of NEW, CONTACTING, OFFER_CURATED, APPT_SET_FOR_JORDAN, OFFER_SENT, NEGOTIATING, AGREEMENT_SENT, UNDER_CONTRACT, CLOSED, FOLLOW_UP, LOST, NURTURE. Use when they say things like "moving to offer", "she signed", "not interested" (LOST or NURTURE).
+- set_lean: set temperature. lean one of hot, warm, cold, ready.
+
+AVAILABLE CAMPAIGNS: ${campaignList}.
+
+Reply in 1-3 short sentences, plain and specific, like a helpful teammate. If you scheduled or routed something, say what and when in plain words. If the rep only asked for advice, action null.
 
 Respond with ONLY a JSON object, no prose, no code fences:
-{ "reply": string, "action": null | { "type": "set_task", "in_days"?: int, "date"?: "YYYY-MM-DD", "time"?: "HH:MM", "label": string } | { "type": "set_lean", "lean": "hot"|"warm"|"cold"|"ready" } }
+{ "reply": string, "action": null | {"type":"set_task","in_days"?:int,"date"?:"YYYY-MM-DD","time"?:"HH:MM","label":string} | {"type":"enroll_campaign","campaign":string} | {"type":"set_stage","stage":string} | {"type":"set_lean","lean":"hot"|"warm"|"cold"|"ready"} }
 
-Rules: compute dates from today. Never use em dashes. If the rep says something like "follow up in 3 days", use in_days 3. If they name a weekday or date, resolve it to an absolute date. Only set_task when they ask to schedule/follow up/call, or when giving advice and a follow-up is clearly the move and they asked you to set it.`;
+Rules: resolve all dates/times from the exact current time given below (a weekday or "Tuesday at 2" becomes an absolute date/time; "in 3 days" becomes in_days 3). Never schedule in the past. Never use em dashes. Only enroll_campaign with a name from the available list.`;
 
-    const user = `Today: ${todayCentral()} (Central).
+    const user = `Exact current time (Central): ${nowCentral()}.
 LEAD: ${lead.name || lead.full_name || 'Unknown'} | ${county ? county + ' County' : 'unknown county'}${acres ? `, ${acres} acres` : ''} | stage ${stage} | offer ${offer}
 FILE (oldest first):
 ${record}
 
-REP INSTRUCTION: ${instruction}
+REP TYPED: ${instruction}
 
 Return ONLY the JSON.`;
 

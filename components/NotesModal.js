@@ -15,7 +15,7 @@ import { playSwoosh } from '@/lib/sound';
  */
 const LEAN_LABEL = { hot: 'Hot', warm: 'Warm', cold: 'Cold', ready: 'Ready' };
 
-export default function NotesModal({ lead, currentUserId, currentUserName, roster = [], usersById = {}, onClose, onPosted, onOpenLead, onSetDirection, onScheduleFollowUp, onAssignTask }) {
+export default function NotesModal({ lead, currentUserId, currentUserName, roster = [], usersById = {}, onClose, onPosted, onOpenLead, onSetDirection, onScheduleFollowUp, onAssignTask, onEnrollCampaign, onSetStage }) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState('');
@@ -89,17 +89,37 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Assistant failed');
       let done = '';
+      let logSuffix = '';
       const a = data.action;
       if (a?.type === 'set_task' && onAssignTask) {
         let dueISO;
         if (a.date) dueISO = new Date(`${a.date}T${a.time || '10:00'}:00`).toISOString();
         else { const d = new Date(); d.setDate(d.getDate() + (a.in_days || 2)); const [hh, mm] = (a.time || '10:00').split(':').map(Number); d.setHours(hh || 10, mm || 0, 0, 0); dueISO = d.toISOString(); }
         onAssignTask(lead.id, { assignedTo: undefined, dueISO, label: a.label || 'Call' });
-        done = ' ✓ Task set.';
+        done = ' ✓ Task set.'; logSuffix = `set a follow-up (${a.label || 'Call'})`;
+      } else if (a?.type === 'enroll_campaign' && onEnrollCampaign && a.campaign) {
+        onEnrollCampaign(lead.id, a.campaign);
+        done = ` ✓ In ${a.campaign}.`; logSuffix = `enrolled in campaign "${a.campaign}"`;
+      } else if (a?.type === 'set_stage' && onSetStage && a.stage) {
+        onSetStage(lead.id, a.stage);
+        done = ` ✓ Moved to ${a.stage}.`; logSuffix = `moved to ${a.stage}`;
       } else if (a?.type === 'set_lean' && onSetDirection && a.lean) {
-        onSetDirection(lead.id, a.lean); done = ' ✓ Lean set.';
+        onSetDirection(lead.id, a.lean); done = ' ✓ Lean set.'; logSuffix = `set lean ${a.lean}`;
       }
       setAsstMsgs((m) => [...m, { role: 'ai', text: (data.reply || 'Done.') + done }]);
+
+      // Log what the rep typed as a timestamped note on the lead (with what the
+      // assistant did), so the outcome is on the record.
+      try {
+        await supabase.from('lead_notes').insert({
+          lead_id: lead.id,
+          user_id: currentUserId,
+          content: instruction + (logSuffix ? `\n→ ${logSuffix}` : ''),
+          mentioned_users: [],
+        });
+        load();
+        onPosted && onPosted();
+      } catch { /* non-fatal */ }
     } catch (e) {
       setAsstMsgs((m) => [...m, { role: 'ai', text: 'Error: ' + (e.message || e) }]);
     } finally { setAsstBusy(false); }
