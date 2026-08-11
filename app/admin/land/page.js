@@ -148,9 +148,9 @@ export default function LandLeadsAdminPage() {
       }).catch((e) => console.warn('clean-view notify failed', e?.message));
     }
 
-    // New pushed lead: kick off the New Lead drip (starts with a text) and drop
-    // a speed-to-lead call into the tray so it gets called within minutes. Only
-    // for new-ish leads, so we never drip a lead that's already deep in the pipe.
+    // New pushed lead: drop a speed-to-lead call into the tray so it gets
+    // called within minutes. Only for new-ish leads, so we never nag a lead
+    // that's already deep in the pipe.
     if (on) {
       const lead = rawLeads.find((l) => l.id === leadId);
       const stage = (lead?.pipeline_status || lead?.status || '').toUpperCase();
@@ -4254,13 +4254,14 @@ export default function LandLeadsAdminPage() {
       {(() => {
         const now = Date.now();
         const endToday = new Date(); endToday.setHours(23, 59, 59, 999);
-        // Scope to the current view: in Clean View only pushed leads' tasks show
-        // (allLeads is already clean-view-filtered), otherwise the whole board.
-        const viewLeadIds = new Set(allLeads.map((l) => l.id));
         // Fresh system only: show tasks OUR flows created (source 'pipeline'),
-        // never the old auto-cadence ghosts left in the table.
+        // never the old auto-cadence ghosts left in the table. Admin (Jordan)
+        // sees the whole team's due tasks, his own AND anything he set for
+        // Anthony or that Anthony is working; a rep sees only their own. NOT
+        // scoped to Clean View, so a task never hides just because its lead
+        // isn't a pushed lead.
         const due = scheduledTasks
-          .filter((t) => t.status === 'pending' && t.source === 'pipeline' && t.assigned_to === currentUserId && viewLeadIds.has(t.lead_id) && new Date(t.due_at).getTime() <= endToday.getTime())
+          .filter((t) => t.status === 'pending' && t.source === 'pipeline' && (isAdmin || t.assigned_to === currentUserId) && new Date(t.due_at).getTime() <= endToday.getTime())
           .sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
         const overdueCount = due.filter((t) => new Date(t.due_at).getTime() < now - 12 * 3600 * 1000).length;
         return (
@@ -4292,7 +4293,7 @@ export default function LandLeadsAdminPage() {
                 ) : (
                   <div className="grid gap-1.5 max-h-64 overflow-y-auto">
                     {due.map((task) => {
-                      const lead = allLeads.find((l) => l.id === task.lead_id);
+                      const lead = rawLeads.find((l) => l.id === task.lead_id);
                       const nm = lead?.full_name || lead?.name || 'Lead';
                       const overMs = now - new Date(task.due_at).getTime();
                       const overdue = overMs > 12 * 3600 * 1000;
@@ -4301,10 +4302,15 @@ export default function LandLeadsAdminPage() {
                       const action = (task.title || 'Follow up').replace(new RegExp(nm, 'ig'), '').replace(/^[\s:,-]+|[\s:,-]+$/g, '').trim() || 'Follow up';
                       const why = task.description && !/^(assigned from|scheduled from|jordan flagged)/i.test(task.description) ? task.description : '';
                       const whenLabel = overdue ? (overdueDays >= 1 ? `Overdue ${overdueDays} day${overdueDays > 1 ? 's' : ''}` : 'Overdue') : `Due ${new Date(task.due_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+                      // Whose task it is (only worth showing when it's not yours).
+                      const forWho = task.assigned_to && task.assigned_to !== currentUserId ? (usersById[task.assigned_to]?.split(' ')[0] || null) : null;
                       return (
                         <div key={task.id} className="flex items-center gap-2 rounded-lg bg-slate-800/60 border border-slate-700/50 px-3 py-2">
                           <div className="min-w-0 flex-1">
-                            <button onClick={() => lead && navigateToLeadCard(lead)} className="block text-sm text-slate-100 font-medium truncate hover:text-cyan-300 hover:underline text-left">{nm}</button>
+                            <div className="flex items-center gap-2">
+                              <button onClick={() => lead && navigateToLeadCard(lead)} className="text-sm text-slate-100 font-medium truncate hover:text-cyan-300 hover:underline text-left">{nm}</button>
+                              {forWho && <span className="flex-shrink-0 px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-200 text-[10px] font-semibold">for {forWho}</span>}
+                            </div>
                             <div className="text-xs text-slate-300 truncate">{action}{why ? ` (${why})` : ''}</div>
                             <div className={`text-[11px] ${overdue ? 'text-rose-300' : 'text-slate-500'}`}>{whenLabel}</div>
                           </div>

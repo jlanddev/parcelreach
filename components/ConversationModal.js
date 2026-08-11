@@ -8,6 +8,17 @@ import { OFFER_DIRECTIONS, GENERAL_DIRECTIONS } from '@/lib/followups';
 
 const LEAN_LABEL = Object.fromEntries([...OFFER_DIRECTIONS, ...GENERAL_DIRECTIONS].map((d) => [d.value, d.label]));
 
+// Force a timestamp to UTC. Supabase can hand back naive timestamps (no zone),
+// which new Date() then reads as LOCAL time, shifting a message by the whole
+// timezone offset (e.g. 5h on Central). That both showed the wrong time and let
+// the same message slip past the de-duper. If there's no zone marker, it's a UTC
+// value stored naive, so stamp it as UTC.
+function toUtcIso(s) {
+  if (!s || typeof s !== 'string') return s;
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(s)) return s; // already zoned
+  return s.replace(' ', 'T') + 'Z';
+}
+
 // Short date for a message: "Today", "Yesterday", or "Mon Jun 29".
 function dateLabel(input) {
   const d = new Date(input);
@@ -124,7 +135,7 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
           message_handle: 'act-' + a.id,
           content: a.message_content,
           direction: (a.direction || '').toLowerCase() === 'inbound' ? 'inbound' : 'outbound',
-          sent_at: a.created_at,
+          sent_at: toUtcIso(a.created_at),
           status: a.outcome,
         }));
       } catch { /* fall back to Project Blue only */ }
@@ -145,8 +156,12 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
     const merged = [...local];
     for (const m of pb) {
       const dir = m.direction === 'outbound' ? 'outbound' : 'inbound';
-      const dup = merged.find((x) => x.direction === dir && norm(x.content) === norm(m.content) && Math.abs(tsOf(x) - tsOf(m)) < 180000);
-      if (!dup) merged.push({ ...m, direction: dir });
+      const at = toUtcIso(m.sent_at || m.created_at);
+      // Same text, same direction, close in time = the same message from both
+      // sources. Widened to 90 min so a small clock/zone skew between our log
+      // and Project Blue can never split one message into two bubbles.
+      const dup = merged.find((x) => x.direction === dir && norm(x.content) === norm(m.content) && Math.abs(tsOf(x) - new Date(at).getTime()) < 5400000);
+      if (!dup) merged.push({ ...m, direction: dir, sent_at: at });
     }
     merged.sort((a, b) => tsOf(a) - tsOf(b));
 
