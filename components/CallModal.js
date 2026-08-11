@@ -34,17 +34,63 @@ export default function CallModal({ lead, currentUserId, onClose, onLogged, onEn
   const durRef = useRef(0);
   const wasAnswered = useRef(false);
   const loggedRef = useRef(false);
+  const attemptRef = useRef(0);       // dial attempts (double-dial: 2 before giving up)
+  const doneRef = useRef(false);      // terminal: already routed to spoke / no-answer
+  const legHandledRef = useRef(false); // this dial leg's end already processed
+  const redialTimerRef = useRef(null);
+  const [attempt, setAttempt] = useState(1);
 
-  // Call leg ended. Auto-detect the outcome (answered = spoke, else no answer),
-  // log it, and hand off: spoke opens the Claude assistant to route it, no
-  // answer opens the text screen with a contextual message. No button clicking.
-  const finishLive = () => {
-    if (phase !== 'live') return;
+  // Place one call leg on the existing device. Called once per dial attempt.
+  const connectCall = async () => {
+    if (doneRef.current) return;
+    attemptRef.current += 1;
+    setAttempt(attemptRef.current);
+    wasAnswered.current = false;
+    legHandledRef.current = false;
+    setStatus('connecting');
+    try {
+      const num = toE164(phone);
+      const call = await deviceRef.current.connect({ params: { To: num, to: num, phone: num, PhoneNumber: num, number: num, Called: num } });
+      callRef.current = call;
+      call.on('ringing', () => setStatus('ringing'));
+      call.on('accept', () => {
+        setStatus('in-call');
+        wasAnswered.current = true;
+        startRef.current = Date.now();
+        timerRef.current = setInterval(() => setSeconds(Math.floor((Date.now() - startRef.current) / 1000)), 1000);
+      });
+      call.on('disconnect', () => onLegEnded());
+      call.on('cancel', () => onLegEnded());
+      call.on('reject', () => onLegEnded());
+      call.on('error', (e) => { setError(e?.message || 'Call error'); setStatus('error'); });
+    } catch (e) { setError(e.message); setStatus('error'); }
+  };
+
+  // A call leg ended. Answered = spoke. No answer = double-dial: try a second
+  // time, and only after the second miss hand off to the text screen (with the
+  // reason we're reaching out). No button clicking.
+  const onLegEnded = () => {
+    if (doneRef.current || legHandledRef.current) return;
+    legHandledRef.current = true;
     if (timerRef.current) clearInterval(timerRef.current);
-    durRef.current = startRef.current ? Math.floor((Date.now() - startRef.current) / 1000) : 0;
+    if (wasAnswered.current) {
+      doneRef.current = true;
+      durRef.current = startRef.current ? Math.floor((Date.now() - startRef.current) / 1000) : 0;
+      setStatus('ended');
+      if (onEnded) logOutcome('spoke'); else setPhase('wrapup');
+      return;
+    }
+    // No answer on this leg. One more dial before we give up.
+    if (attemptRef.current < 2) {
+      setStatus('redialing');
+      redialTimerRef.current = setTimeout(() => { connectCall(); }, 2000);
+      return;
+    }
+    // Second miss: route to the text screen.
+    doneRef.current = true;
+    durRef.current = 0;
     setStatus('ended');
-    if (onEnded) logOutcome(wasAnswered.current ? 'spoke' : 'no_answer');
-    else setPhase('wrapup');
+    if (onEnded) logOutcome('no_answer'); else setPhase('wrapup');
   };
 
   // Rep picks the outcome (spoke | voicemail | no_answer) → log it accurately.
@@ -97,28 +143,8 @@ export default function CallModal({ lead, currentUserId, onClose, onLogged, onEn
 
         const { Device } = await import('@twilio/voice-sdk');
         if (cancelled) return;
-        const device = new Device(data.token, { codecPreferences: ['opus', 'pcmu'] });
-        deviceRef.current = device;
-
-        // Project Blue's TwiML app reads one of these; send the common names so
-        // whichever it expects gets the number to dial.
-        const num = toE164(phone);
-        const call = await device.connect({ params: { To: num, to: num, phone: num, PhoneNumber: num, number: num, Called: num } });
-        callRef.current = call;
-        call.on('ringing', () => setStatus('ringing'));
-        call.on('accept', () => {
-          setStatus('in-call');
-          wasAnswered.current = true;
-          startRef.current = Date.now();
-          timerRef.current = setInterval(() => setSeconds(Math.floor((Date.now() - startRef.current) / 1000)), 1000);
-        });
-        call.on('disconnect', () => finishLive());
-        call.on('cancel', () => finishLive());
-        call.on('reject', () => finishLive());
-        call.on('error', (e) => {
-          setError(e?.message || 'Call error');
-          setStatus('error');
-        });
+        deviceRef.current = new Device(data.token, { codecPreferences: ['opus', 'pcmu'] });
+        connectCall(); // first dial; onLegEnded handles the second and the hand-off
       } catch (e) {
         if (!cancelled) {
           setError(e.message);
@@ -129,14 +155,19 @@ export default function CallModal({ lead, currentUserId, onClose, onLogged, onEn
     return () => {
       cancelled = true;
       if (timerRef.current) clearInterval(timerRef.current);
+      if (redialTimerRef.current) clearTimeout(redialTimerRef.current);
       try { callRef.current?.disconnect(); } catch {}
       try { deviceRef.current?.destroy(); } catch {}
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Manual hang up: stop any pending redial and end now. If they'd answered it
+  // logs as spoke; if not, we're done dialing, so route to the text screen.
   const hangup = () => {
+    attemptRef.current = 2;
+    if (redialTimerRef.current) clearTimeout(redialTimerRef.current);
     try { callRef.current?.disconnect(); } catch {}
-    finishLive();
+    onLegEnded();
   };
   const toggleMute = () => {
     const m = !muted;
@@ -146,9 +177,10 @@ export default function CallModal({ lead, currentUserId, onClose, onLogged, onEn
 
   const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   const statusText = {
-    connecting: 'Connecting…',
-    ringing: 'Ringing…',
+    connecting: attempt > 1 ? 'Dialing again (2 of 2)…' : 'Connecting…',
+    ringing: attempt > 1 ? 'Ringing again (2 of 2)…' : 'Ringing…',
     'in-call': fmt(seconds),
+    redialing: 'No answer. Dialing again…',
     ended: 'Call ended',
     error: 'Could not connect',
   }[status];
