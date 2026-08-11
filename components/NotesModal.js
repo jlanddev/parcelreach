@@ -494,7 +494,28 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
             </div>
           )}
 
-          <div className="flex items-end gap-2">
+          {/* THE NOTE: the main event. Write the full story here; Clean up
+              polishes your own words (grammar + flow, invents nothing). */}
+          <div className="flex items-center justify-between mb-1.5 px-0.5">
+            <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400">The note</span>
+            <button type="button" onClick={cleanupNote} disabled={!draft.trim() || cleaning} title="Clean up your note: grammar and flow, in your voice, adds nothing" className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-200 text-xs font-semibold disabled:opacity-40">
+              {cleaning ? (
+                <><svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" /></svg>Cleaning…</>
+              ) : (
+                <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>Clean up</>
+              )}
+            </button>
+          </div>
+          <textarea
+            ref={taRef}
+            value={draft}
+            onChange={onChange}
+            onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); post(); } }}
+            rows={expanded ? 8 : 5}
+            placeholder="Write the whole story here: what happened, what they want, next step. Use @ to tag a teammate. ⌘+Enter to post."
+            className="w-full resize-none max-h-72 bg-slate-900/70 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500/60"
+          />
+          <div className="flex items-center gap-2 mt-2">
             <input ref={fileRef} type="file" multiple className="hidden" onChange={(e) => { uploadFiles(e.target.files); e.target.value = ''; }} />
             <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading} title="Attach a file" className="p-2 rounded-lg bg-slate-700/60 hover:bg-slate-600 text-slate-300 disabled:opacity-50">
               {uploading ? (
@@ -503,24 +524,8 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
               )}
             </button>
-            <textarea
-              ref={taRef}
-              value={draft}
-              onChange={onChange}
-              onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); post(); } }}
-              rows={expanded ? 4 : 2}
-              placeholder="Add a note… use @ to tag a teammate (⌘+Enter to send)"
-              className="flex-1 resize-none max-h-48 bg-slate-900/70 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500/60"
-            />
-            <button type="button" onClick={cleanupNote} disabled={!draft.trim() || cleaning} title="Clean up this note (grammar and flow, in your voice)" className="p-2 rounded-lg bg-slate-700/60 hover:bg-cyan-600/40 text-cyan-300 disabled:opacity-40" >
-              {cleaning ? (
-                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" /></svg>
-              ) : (
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
-              )}
-            </button>
-            <button onClick={post} disabled={(!draft.trim() && draftFiles.length === 0) || posting} className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm font-medium">
-              Post
+            <button onClick={post} disabled={(!draft.trim() && draftFiles.length === 0) || posting} className="ml-auto px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm font-semibold">
+              Post note
             </button>
           </div>
         </div>

@@ -15,7 +15,6 @@ import FollowUpsBell from '@/components/FollowUpsBell';
 import DealStrip from '@/components/DealStrip';
 import MondayPushButton from '@/components/MondayPushButton';
 import OmSearch from '@/components/OmSearch';
-import CampaignsTab from '@/components/CampaignsTab';
 import { timeAgo, channelLabel } from '@/lib/format';
 import { playDing } from '@/lib/sound';
 import { DIRECTIONS, OFFER_DIRECTIONS, GENERAL_DIRECTIONS, FOLLOWUP_BUCKETS, FOLLOWUP_KEYS, LOST_REASONS, formatOffer, mergeScript, firstTouch, touchForStep } from '@/lib/followups';
@@ -158,7 +157,6 @@ export default function LandLeadsAdminPage() {
       const isNewish = !stage || ['NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(stage);
       if (isNewish) {
         const leadName = lead?.full_name || lead?.name || 'Lead';
-        enrollInCampaign(leadId, 'New Lead, No Contact');
         try {
           const { data: { user } } = await supabase.auth.getUser();
           const owner = acquisitionManagerId || lead?.current_owner_id || user?.id || null;
@@ -332,24 +330,8 @@ export default function LandLeadsAdminPage() {
       .replace(/\{\{\s*sender\s*\}\}/gi, sender);
   };
 
-  // Campaign list (for the Add to Campaign picker) and which campaign each lead
-  // is actively in (for the card badge).
-  const [campaignsList, setCampaignsList] = useState([]);
-  const [enrollmentsByLead, setEnrollmentsByLead] = useState({});
-  useEffect(() => {
-    if (!currentUserRole) return;
-    (async () => {
-      try {
-        const { data: camps } = await supabase.from('campaigns').select('id, name').eq('active', true).order('name');
-        setCampaignsList(camps || []);
-        const byId = Object.fromEntries((camps || []).map((c) => [c.id, c.name]));
-        const { data: enrs } = await supabase.from('campaign_enrollments').select('lead_id, campaign_id').eq('status', 'active');
-        const map = {};
-        for (const e of enrs || []) map[e.lead_id] = byId[e.campaign_id] || 'Campaign';
-        setEnrollmentsByLead(map);
-      } catch { /* campaigns not migrated */ }
-    })();
-  }, [currentUserRole]);
+  // Campaigns/drip removed. Inert state kept so nothing that still reads it breaks.
+  const [enrollmentsByLead] = useState({});
   const [frozenBoardLeads, setFrozenBoardLeads] = useState(null); // snapshot so cards don't reshuffle while a modal is open
   const [notesRefresh, setNotesRefresh] = useState(0);
   const [activityLogDate, setActivityLogDate] = useState(() => new Date().toISOString().split('T')[0]);
@@ -1119,61 +1101,6 @@ export default function LandLeadsAdminPage() {
     }
   };
 
-  // Enroll a lead into a campaign (drip). Call steps become scheduled tasks
-  // (they show in the tray on their day); text steps queue for the scheduler.
-  const enrollInCampaign = async (leadId, campaignName, startStep = 0) => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      const lead = (allLeadsRef.current || []).find((l) => l.id === leadId) || (rawLeads.find((l) => l.id === leadId));
-      const { data: camp } = await supabase.from('campaigns').select('*').ilike('name', campaignName).eq('active', true).maybeSingle();
-      if (!camp) { showToast(`Campaign "${campaignName}" not found`, 'error'); return; }
-      let enrollment;
-      const { data: enr, error: enrErr } = await supabase.from('campaign_enrollments')
-        .insert({ lead_id: leadId, campaign_id: camp.id, status: 'active', enrolled_by: user?.id || null }).select().maybeSingle();
-      if (enrErr) {
-        const { data: existing } = await supabase.from('campaign_enrollments').select('*').eq('lead_id', leadId).eq('campaign_id', camp.id).maybeSingle();
-        enrollment = existing;
-      } else enrollment = enr;
-      if (!enrollment) throw new Error('Could not enroll');
-
-      const now = Date.now();
-      const owner = lead?.current_owner_id || acquisitionManagerId || user?.id || null;
-      // Quiet hours (TCPA): only fire an immediate text 10am-8pm Central. Outside
-      // that, the day-0 text stays queued and the scheduler sends it at 10am.
-      const chHour = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: 'numeric', hour12: false, hourCycle: 'h23' }).formatToParts(new Date()).find((p) => p.type === 'hour')?.value ?? 0);
-      const withinQuiet = chHour >= 10 && chHour < 20;
-      const queueRows = [];
-      // startStep lets you drop a lead in partway through the drip. We rebase the
-      // timing so the chosen step fires now and later steps keep their spacing.
-      const baseDelay = startStep > 0 && camp.steps?.[startStep] ? (Number.isFinite(camp.steps[startStep].delayMins) ? camp.steps[startStep].delayMins : (Number(camp.steps[startStep].day) || 0) * 1440) : 0;
-      for (let i = startStep; i < (camp.steps || []).length; i++) {
-        const s = camp.steps[i];
-        const rawDelay = Number.isFinite(s.delayMins) ? s.delayMins : (Number(s.day) || 0) * 1440;
-        const delayMins = Math.max(0, rawDelay - baseDelay);
-        const due = new Date(now + delayMins * 60000);
-        if (s.type === 'call') {
-          const cp = { lead_id: leadId, created_by: user?.id || null, assigned_to: owner, task_type: 'callback', source: 'pipeline', title: `${s.label || 'Call'}: ${lead?.name || lead?.full_name || 'Lead'}`, description: `Campaign: ${camp.name}`, due_at: due.toISOString(), status: 'pending', priority: 'normal' };
-          let { error: ce } = await supabase.from('scheduled_tasks').insert(cp);
-          if (ce) { const { source, ...ns } = cp; await supabase.from('scheduled_tasks').insert(ns); }
-        } else {
-          const msg = fillTokens(s.message, lead);
-          if (delayMins <= 0 && lead?.phone && withinQuiet) {
-            // Due now and inside quiet hours: fire the intro text immediately.
-            fetch('/api/pb/send-sms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: lead.phone, message: msg, leadId, userId: user?.id }) }).catch(() => {});
-            queueRows.push({ enrollment_id: enrollment.id, lead_id: leadId, campaign_id: camp.id, step_index: i, type: 'text', message: msg, due_at: due.toISOString(), status: 'sent', processed_at: new Date().toISOString() });
-          } else {
-            // Otherwise queue it; the scheduler sends it in the next quiet-hours window.
-            queueRows.push({ enrollment_id: enrollment.id, lead_id: leadId, campaign_id: camp.id, step_index: i, type: 'text', message: msg, due_at: due.toISOString(), status: 'pending' });
-          }
-        }
-      }
-      if (queueRows.length) await supabase.from('campaign_queue').insert(queueRows);
-      const { data: freshTasks } = await supabase.from('scheduled_tasks').select('*').eq('status', 'pending').order('due_at', { ascending: true });
-      if (freshTasks) setScheduledTasks(freshTasks);
-      setEnrollmentsByLead((prev) => ({ ...prev, [leadId]: camp.name }));
-      showToast(`Enrolled in ${camp.name}`, 'success', lead?.name || lead?.full_name);
-    } catch (e) { showToast('Enroll failed: ' + (e?.message || e), 'error'); }
-  };
 
   // ---- Daily Action Tray ---------------------------------------------------
   // Today's due calls/tasks for the logged-in person, forced in front of them
@@ -4143,26 +4070,6 @@ export default function LandLeadsAdminPage() {
                       </div>
                     )}
 
-                    {/* Campaign: show the active one, or drop the lead into one. */}
-                    <div className="mt-2" onClick={(e) => e.stopPropagation()}>
-                      {enrollmentsByLead[lead.id] ? (
-                        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-purple-600/15 border border-purple-500/30 text-purple-200 text-xs">
-                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                          In campaign: <span className="font-semibold">{enrollmentsByLead[lead.id]}</span>
-                        </div>
-                      ) : (
-                        <select
-                          value=""
-                          onChange={(e) => { if (e.target.value) enrollInCampaign(lead.id, e.target.value); }}
-                          className="w-full px-3 py-1.5 rounded-lg bg-slate-700/50 hover:bg-slate-600/50 border border-transparent text-slate-300 text-xs font-medium cursor-pointer"
-                          title="Add this lead to a campaign"
-                        >
-                          <option value="">+ Add to Campaign…</option>
-                          {campaignsList.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
-                        </select>
-                      )}
-                    </div>
-
                     {/* Archive / Delete */}
                     <div className="mt-2 flex gap-2">
                       <button
@@ -4205,7 +4112,6 @@ export default function LandLeadsAdminPage() {
           onSetDirection={(id, val) => setDealDirection(id, val)}
           onScheduleFollowUp={scheduleSmartFollowUp}
           onAssignTask={assignTask}
-          onEnrollCampaign={enrollInCampaign}
           onSetStage={(id, stage) => updateLeadStatus(id, stage)}
         />
       )}
@@ -4223,7 +4129,6 @@ export default function LandLeadsAdminPage() {
           onSetDirection={(id, val) => setDealDirection(id, val)}
           onScheduleFollowUp={scheduleSmartFollowUp}
           onAssignTask={assignTask}
-          onEnrollCampaign={enrollInCampaign}
           onSetStage={(id, stage) => updateLeadStatus(id, stage)}
         />
       )}
@@ -4454,7 +4359,7 @@ export default function LandLeadsAdminPage() {
             // with arrow chevrons between them to visualize lead flow.
             const PIPELINE_TABS = ['ppc-inflow', 'offer-curated', 'appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'];
             const allTabs = isAdmin
-              ? ['shared-calendar', 'activity-log', ...PIPELINE_TABS, 'follow-up', 'lost', 'campaigns', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search']
+              ? ['shared-calendar', 'activity-log', ...PIPELINE_TABS, 'follow-up', 'lost', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search']
               : ['shared-calendar', ...PIPELINE_TABS, 'follow-up', 'lost', 'subdivision-inflow', 'all-leads'];
             return allTabs.map((tab, i) => {
               const prevTab = allTabs[i - 1];
@@ -6589,13 +6494,6 @@ export default function LandLeadsAdminPage() {
 
         {/* EXPORT CSV TAB */}
         {activeTab === 'om-search' && <OmSearch />}
-        {activeTab === 'campaigns' && (
-          <CampaignsTab
-            onToast={showToast}
-            onEnroll={enrollInCampaign}
-            leads={allLeads.map((l) => ({ id: l.id, name: l.full_name || l.name || 'Lead', phone: l.phone }))}
-          />
-        )}
 
         {activeTab === 'export' && (
           <div className="max-w-2xl mx-auto space-y-6">
