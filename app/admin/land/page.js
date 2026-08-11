@@ -4267,7 +4267,15 @@ export default function LandLeadsAdminPage() {
             && (isAdmin || t.assigned_to === currentUserId)
             && new Date(t.due_at).getTime() <= endToday.getTime()
             && (t.source === 'pipeline' || new Date(t.created_at || 0).getTime() >= FRESH_SINCE))
-          .sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+          // New-lead "call ASAP" tasks (priority high) pin to the very top,
+          // newest first, so a fresh lead is always the first thing you see.
+          // Everything else falls in by due time.
+          .sort((a, b) => {
+            const hi = (t) => (t.priority === 'high' ? 0 : 1);
+            if (hi(a) !== hi(b)) return hi(a) - hi(b);
+            if (hi(a) === 0) return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+            return new Date(a.due_at) - new Date(b.due_at);
+          });
         const overdueCount = due.filter((t) => new Date(t.due_at).getTime() < now - 12 * 3600 * 1000).length;
         return (
           <div className="bg-slate-900 border-b border-slate-700/70">
