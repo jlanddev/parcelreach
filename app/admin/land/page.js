@@ -4254,14 +4254,19 @@ export default function LandLeadsAdminPage() {
       {(() => {
         const now = Date.now();
         const endToday = new Date(); endToday.setHours(23, 59, 59, 999);
-        // Fresh system only: show tasks OUR flows created (source 'pipeline'),
-        // never the old auto-cadence ghosts left in the table. Admin (Jordan)
-        // sees the whole team's due tasks, his own AND anything he set for
-        // Anthony or that Anthony is working; a rep sees only their own. NOT
-        // scoped to Clean View, so a task never hides just because its lead
-        // isn't a pushed lead.
+        // Fresh system only: show tasks OUR flows created, never the old
+        // auto-cadence ghosts. We gate on recency (created since the follow-up
+        // system launched) OR source='pipeline', so it works whether or not the
+        // `source` column was ever migrated. Admin (Jordan) sees the whole
+        // team's due tasks, his own AND anything he set for Anthony or that
+        // Anthony is working; a rep sees only their own. NOT scoped to Clean
+        // View, so a task never hides just because its lead isn't pushed.
+        const FRESH_SINCE = new Date('2026-08-08T00:00:00Z').getTime();
         const due = scheduledTasks
-          .filter((t) => t.status === 'pending' && t.source === 'pipeline' && (isAdmin || t.assigned_to === currentUserId) && new Date(t.due_at).getTime() <= endToday.getTime())
+          .filter((t) => t.status === 'pending'
+            && (isAdmin || t.assigned_to === currentUserId)
+            && new Date(t.due_at).getTime() <= endToday.getTime()
+            && (t.source === 'pipeline' || new Date(t.created_at || 0).getTime() >= FRESH_SINCE))
           .sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
         const overdueCount = due.filter((t) => new Date(t.due_at).getTime() < now - 12 * 3600 * 1000).length;
         return (
