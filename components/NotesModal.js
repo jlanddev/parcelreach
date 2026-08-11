@@ -34,6 +34,7 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
   const [taskDate, setTaskDate] = useState('');
   const [taskTime, setTaskTime] = useState('10:00');
   const [taskLabel, setTaskLabel] = useState('Call');
+  const [taskWhy, setTaskWhy] = useState('');
   const taRef = useRef(null);
   const scrollRef = useRef(null);
   const fileRef = useRef(null);
@@ -65,7 +66,8 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
   const submitTask = () => {
     if (!onAssignTask || !taskDate) return;
     const dueISO = new Date(`${taskDate}T${taskTime || '10:00'}:00`).toISOString();
-    onAssignTask(lead.id, { assignedTo: taskAssignee || undefined, dueISO, label: taskLabel || 'Call' });
+    onAssignTask(lead.id, { assignedTo: taskAssignee || undefined, dueISO, label: taskLabel || 'Call', why: taskWhy.trim() || undefined });
+    setTaskWhy('');
     setTaskOpen(false); setTaskDate('');
   };
   const quickDate = (days) => { const d = new Date(); d.setDate(d.getDate() + days); setTaskDate(d.toISOString().slice(0, 10)); };
@@ -138,7 +140,7 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
       let dueISO;
       if (a.date) dueISO = new Date(`${a.date}T${a.time || '10:00'}:00`).toISOString();
       else { const d = new Date(); d.setDate(d.getDate() + (a.in_days ?? 2)); const [hh, mm] = (a.time || '10:00').split(':').map(Number); d.setHours(hh || 10, mm || 0, 0, 0); dueISO = d.toISOString(); }
-      onAssignTask(lead.id, { assignedTo: undefined, dueISO, label: a.label || 'Call' });
+      onAssignTask(lead.id, { assignedTo: undefined, dueISO, label: a.label || 'Call', why: a.why || a.reason || (pending.isSuggest ? undefined : pending.instruction) });
       logSuffix = actionSummary(a);
     } else if (a.type === 'enroll_campaign' && onEnrollCampaign && a.campaign) { onEnrollCampaign(lead.id, a.campaign); logSuffix = `Enrolled in "${a.campaign}"`; }
     else if (a.type === 'set_stage' && onSetStage && a.stage) { onSetStage(lead.id, a.stage); logSuffix = `Moved to ${a.stage}`; }
@@ -470,6 +472,7 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
                       {roster.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
                     </select>
                     <input value={taskLabel} onChange={(e) => setTaskLabel(e.target.value)} placeholder="Call" className="col-span-2 bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1.5 text-xs text-slate-200" />
+                    <input value={taskWhy} onChange={(e) => setTaskWhy(e.target.value)} placeholder="Objective: why are we calling? (e.g. offer is out, close her)" className="col-span-2 bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1.5 text-xs text-slate-200" />
                     <input type="date" value={taskDate} onChange={(e) => setTaskDate(e.target.value)} className="bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1.5 text-xs text-slate-200" />
                     <input type="time" value={taskTime} onChange={(e) => setTaskTime(e.target.value)} className="bg-slate-900/70 border border-slate-700 rounded-md px-2 py-1.5 text-xs text-slate-200" />
                   </div>

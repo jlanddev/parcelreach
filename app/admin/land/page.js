@@ -1060,7 +1060,7 @@ export default function LandLeadsAdminPage() {
   // Assign a deliberate task on a lead (who + when), the canonical next-touch.
   // Supersedes any existing pending follow-up/callback so a lead never carries
   // two conflicting next-touches. assignedTo defaults to the lead's owner.
-  const assignTask = async (leadId, { assignedTo, dueISO, label, taskType = 'callback' } = {}) => {
+  const assignTask = async (leadId, { assignedTo, dueISO, label, taskType = 'callback', why } = {}) => {
     const due = dueISO ? new Date(dueISO) : null;
     if (!due || isNaN(due.getTime())) { showToast('Pick a date and time for the task', 'error'); return; }
     try {
@@ -1082,7 +1082,7 @@ export default function LandLeadsAdminPage() {
         task_type: taskType,
         source: 'pipeline',
         title: `${label || 'Call'}: ${lead?.name || lead?.full_name || 'Lead'}`,
-        description: 'Assigned from the note screen',
+        description: (why && String(why).trim()) || 'Assigned from the note screen',
         due_at: due.toISOString(),
         status: 'pending',
         priority: 'normal',
