@@ -7,7 +7,7 @@ import { pushLeadToBoard } from '@/lib/monday';
 // and the parcel map image.
 export async function POST(request) {
   try {
-    const { leadId, boardId, summary, coordinates } = await request.json();
+    const { leadId, boardId, summary, coordinates, forceNew } = await request.json();
     if (!leadId || !boardId) {
       return NextResponse.json({ error: 'Missing leadId or boardId' }, { status: 400 });
     }
@@ -38,20 +38,21 @@ export async function POST(request) {
     // of creating a new one. Source of truth is the durable table; fall back to
     // the lead's jsonb mirror.
     let existingItemId = null;
+    let priorMapUploaded = false;
     try {
       const { data: prior } = await supabase
         .from('partner_pushes')
-        .select('item_id')
+        .select('item_id, map_uploaded')
         .eq('lead_id', leadId).eq('board_id', String(boardId))
         .maybeSingle();
-      if (prior?.item_id) existingItemId = String(prior.item_id);
+      if (prior?.item_id) { existingItemId = String(prior.item_id); priorMapUploaded = !!prior.map_uploaded; }
     } catch { /* table may not exist; jsonb fallback below */ }
     if (!existingItemId && Array.isArray(lead.partner_pushes)) {
       const mirror = lead.partner_pushes.find((p) => String(p.board_id) === String(boardId));
-      if (mirror?.item_id) existingItemId = String(mirror.item_id);
+      if (mirror?.item_id) { existingItemId = String(mirror.item_id); priorMapUploaded = !!mirror.map_uploaded; }
     }
 
-    const result = await pushLeadToBoard(boardId, lead, { existingItemId });
+    const result = await pushLeadToBoard(boardId, lead, { existingItemId, priorMapUploaded, forceNew: !!forceNew });
 
     // Record this push. The durable, append-only partner_pushes TABLE is the
     // source of truth (one row per lead+board, upserted on re-push) so the
@@ -60,6 +61,9 @@ export async function POST(request) {
     // The exact note this partner received, so the card can show what went to
     // whom (partners are not connected, so notes can differ per partner).
     const noteSent = typeof summary === 'string' ? summary : (lead.partner_summary || '');
+    // Sticky: once a map has reached this board it stays "uploaded", so a later
+    // text-only update never re-triggers the map on the next push.
+    const mapUploadedEver = priorMapUploaded || !!result.mapUploaded;
     const entry = {
       board_id: String(boardId),
       board_name: result.board,
@@ -67,7 +71,7 @@ export async function POST(request) {
       pushed_at: pushedAt,
       note: noteSent || null,
       tagged: result.tagged || null,
-      map_uploaded: !!result.mapUploaded,
+      map_uploaded: mapUploadedEver,
       tag_in_bubble: !!result.tagInBubble,
       notified: result.notified || 0,
       warnings: result.warnings || [],
@@ -83,7 +87,7 @@ export async function POST(request) {
           item_id: String(result.itemId),
           note: noteSent || null,
           tagged: result.tagged || null,
-          map_uploaded: !!result.mapUploaded,
+          map_uploaded: mapUploadedEver,
           tag_in_bubble: !!result.tagInBubble,
           notified: result.notified || 0,
           warnings: result.warnings || [],
