@@ -14,6 +14,7 @@ import NotificationBell from '@/components/NotificationBell';
 import FollowUpsBell from '@/components/FollowUpsBell';
 import DealStrip from '@/components/DealStrip';
 import MondayPushButton from '@/components/MondayPushButton';
+import OfferModal from '@/components/OfferModal';
 import OmSearch from '@/components/OmSearch';
 import { timeAgo, channelLabel } from '@/lib/format';
 import { playDing } from '@/lib/sound';
@@ -1622,6 +1623,9 @@ export default function LandLeadsAdminPage() {
       // activities table may not exist yet
     }
   };
+
+  // The lead whose "Produce Offer PDF" screen is open (null = closed).
+  const [offerModalLead, setOfferModalLead] = useState(null);
 
   // Upload a property map screenshot to the lead-maps bucket and flag the lead as mapped.
   const [mapUploading, setMapUploading] = useState(false);
@@ -3679,6 +3683,7 @@ export default function LandLeadsAdminPage() {
                         onSnooze={snoozeFollowUp}
                         onRevive={reviveFollowUp}
                         onMarkLost={markLost}
+                        onProduceOffer={(l) => setOfferModalLead(l)}
                       />
 
                       {/* Owner Name & Time */}
@@ -4036,6 +4041,19 @@ export default function LandLeadsAdminPage() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
+                          setOfferModalLead(lead);
+                        }}
+                        title="Produce an offer PDF for this lead"
+                        className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-1.5"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        Offer PDF
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
                           openLeadDetails(lead);
                         }}
                         className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold rounded-lg transition-colors"
@@ -4143,6 +4161,18 @@ export default function LandLeadsAdminPage() {
             else { setPrefillDraft(buildNoAnswerText(l)); setConversationLead(l); } // no answer -> text screen, pre-filled
           }}
           onOpenNotes={(l) => setNotesModalLead(l)}
+        />
+      )}
+      {offerModalLead && (
+        <OfferModal
+          lead={offerModalLead}
+          showToast={showToast}
+          onClose={() => setOfferModalLead(null)}
+          onSaved={(updated) => {
+            setRawLeads((prev) => prev.map((l) => (l.id === updated.id ? { ...l, ...updated } : l)));
+            setOfferModalLead((prev) => (prev && prev.id === updated.id ? { ...prev, ...updated } : prev));
+            if (selectedLead && selectedLead.id === updated.id) setSelectedLead((prev) => ({ ...prev, ...updated }));
+          }}
         />
       )}
       {toast && (
