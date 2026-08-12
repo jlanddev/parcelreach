@@ -3,6 +3,7 @@
 import { useState, useMemo, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { resolveOffer } from '@/lib/offerTemplate';
+import ImageCropper from '@/components/ImageCropper';
 
 // The "Produce Offer PDF" screen. Opens from a lead card, pre-fills every field
 // from what we know about the lead (parcel, sellers on deed, acreage, our offer),
@@ -67,6 +68,7 @@ export default function OfferModal({ lead, onClose, onSaved, showToast }) {
   const [uploading, setUploading] = useState(false);
   const [genMap, setGenMap] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [cropUrl, setCropUrl] = useState(null);
   const fileRef = useRef(null);
 
   const set = (k, v) => setTerms((p) => ({ ...p, [k]: v }));
@@ -150,6 +152,28 @@ export default function OfferModal({ lead, onClose, onSaved, showToast }) {
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  // Save a cropped map (blob from ImageCropper) as a new image and select it.
+  const handleCropped = async (blob) => {
+    setCropUrl(null);
+    setUploading(true);
+    try {
+      const path = `${lead.id}/${Date.now()}-crop.png`;
+      const { error } = await supabase.storage.from('lead-maps').upload(path, blob, { cacheControl: '3600', upsert: true, contentType: 'image/png' });
+      if (error) throw error;
+      const { data } = supabase.storage.from('lead-maps').getPublicUrl(path);
+      const entry = { id: path, url: data?.publicUrl, label: 'Cropped map', kind: 'crop' };
+      const next = [...maps.filter((m) => m.id !== 'current'), entry];
+      setMaps((prev) => [...prev.filter((m) => m.id !== 'current'), entry]);
+      set('offerMapUrl', entry.url);
+      await saveMapsToLead(next, entry.url);
+      showToast?.('Cropped map added and selected', 'success');
+    } catch (err) {
+      showToast?.('Crop save failed: ' + err.message, 'error');
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -305,7 +329,10 @@ export default function OfferModal({ lead, onClose, onSaved, showToast }) {
                   return (
                     <div key={m.id} className={`relative rounded-lg overflow-hidden border-2 cursor-pointer ${selected ? 'border-emerald-500' : 'border-slate-700'}`} onClick={() => set('offerMapUrl', m.url)}>
                       <img src={m.url} alt={m.label} className="w-full h-24 object-cover" />
-                      <div className="px-2 py-1 text-[11px] text-slate-300 bg-slate-900/80 truncate">{m.label}</div>
+                      <div className="flex items-center justify-between px-2 py-1 bg-slate-900/80">
+                        <span className="text-[11px] text-slate-300 truncate">{m.label}</span>
+                        <button onClick={(e) => { e.stopPropagation(); setCropUrl(m.url); }} className="text-[10px] font-semibold text-emerald-300 hover:text-emerald-200 shrink-0 ml-1">Crop</button>
+                      </div>
                       {selected && <div className="absolute top-1 left-1 bg-emerald-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">ON PDF</div>}
                       {m.id !== 'current' && (
                         <button onClick={(e) => { e.stopPropagation(); removeMap(m.id); }} className="absolute top-1 right-1 bg-black/70 hover:bg-red-600 text-white text-xs w-5 h-5 rounded-full leading-none">×</button>
@@ -348,6 +375,10 @@ export default function OfferModal({ lead, onClose, onSaved, showToast }) {
           </button>
         </div>
       </div>
+
+      {cropUrl && (
+        <ImageCropper url={cropUrl} onCancel={() => setCropUrl(null)} onApply={handleCropped} />
+      )}
     </div>
   );
 }
