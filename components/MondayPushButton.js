@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
+import { supabase } from '@/lib/supabase';
 
 // Cache the partner board list across all cards. Only cache a NON-EMPTY result,
 // so a failed/empty fetch retries on the next open instead of sticking.
@@ -34,6 +35,42 @@ export default function MondayPushButton({ lead, onToast }) {
 
   const [summary, setSummary] = useState(lead.partner_summary || '');
   const [coords, setCoords] = useState(lead.partner_coordinates || '');
+
+  // Extra files (a new map, a survey, any doc) to push onto the partner's item.
+  // These attach on both a first push and a follow-up update, so you can send an
+  // updated map or a document to a partner anytime.
+  const [attachments, setAttachments] = useState([]); // { name, url }
+  const [uploadingFiles, setUploadingFiles] = useState(false);
+  const fileRef = useRef(null);
+
+  // "Push as a new lead": recreate a fresh item on the partner board instead of
+  // updating the prior one. For when the partner deleted the lead, or you just
+  // want a clean push (map + columns + note all fresh).
+  const [forceNew, setForceNew] = useState(false);
+
+  const handleAttach = async (fileList) => {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    setUploadingFiles(true);
+    try {
+      const added = [];
+      for (const file of files) {
+        const safe = file.name.replace(/[^\w.\-]+/g, '_');
+        const path = `${lead.id}/attach/${Date.now()}-${safe}`;
+        const { error } = await supabase.storage.from('lead-maps').upload(path, file, { cacheControl: '3600', upsert: true });
+        if (error) throw error;
+        const { data } = supabase.storage.from('lead-maps').getPublicUrl(path);
+        added.push({ name: file.name, url: data?.publicUrl });
+      }
+      setAttachments((prev) => [...prev, ...added]);
+    } catch (e) {
+      onToast && onToast('Attach failed: ' + (e?.message || e), 'error');
+    } finally {
+      setUploadingFiles(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+  const removeAttachment = (url) => setAttachments((prev) => prev.filter((a) => a.url !== url));
 
   // Partners this lead has already been sent to (from the lead, plus any sent now).
   const [sent, setSent] = useState(Array.isArray(lead.partner_pushes) ? lead.partner_pushes : []);
@@ -110,7 +147,7 @@ export default function MondayPushButton({ lead, onToast }) {
         const res = await fetch('/api/monday/push', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ leadId: lead.id, boardId: board.id, summary: summary.trim(), coordinates: coords.trim() }),
+          body: JSON.stringify({ leadId: lead.id, boardId: board.id, summary: summary.trim(), coordinates: coords.trim(), attachments, forceNew }),
         });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.error || 'Push failed');
@@ -124,10 +161,13 @@ export default function MondayPushButton({ lead, onToast }) {
     }
     if (latestPushes) setSent(latestPushes);
     setSelectedBoards(new Set());
+    setAttachments([]);
+    setForceNew(false);
     setPushingMany(false);
+    const attachNote = attachments.length ? ` (+${attachments.length} file${attachments.length > 1 ? 's' : ''})` : '';
     const okBits = [];
-    if (newNames.length) okBits.push(`Sent to ${newNames.join(', ')} with the map`);
-    if (updatedNames.length) okBits.push(`Posted an update to ${updatedNames.join(', ')} (no map, already had the lead)`);
+    if (newNames.length) okBits.push(`${forceNew ? 'Pushed as new to' : 'Sent to'} ${newNames.join(', ')} with the map${attachNote}`);
+    if (updatedNames.length) okBits.push(`Posted an update to ${updatedNames.join(', ')}${attachNote}`);
     if (okBits.length && !failNames.length) onToast && onToast(okBits.join('. '), 'success');
     else if (okBits.length && failNames.length) onToast && onToast(`${okBits.join('. ')}. Failed: ${failNames.join(', ')}`, 'error');
     else onToast && onToast(`Push failed: ${failNames.join(', ')}`, 'error');
@@ -227,11 +267,16 @@ export default function MondayPushButton({ lead, onToast }) {
                           {checked && <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
                         </span>
                         {b.name}
-                        {sentIds.has(String(b.id)) && <span className="text-[9px] opacity-70">update, no map</span>}
+                        {sentIds.has(String(b.id)) && <span className="text-[9px] opacity-70">update</span>}
                       </button>
                     );
                   })}
                 </div>
+                {/* Reset: push as a brand-new lead (recreate on the partner board). */}
+                <label className="mt-2 flex items-start gap-2 text-[11px] text-slate-300 cursor-pointer">
+                  <input type="checkbox" checked={forceNew} onChange={(e) => setForceNew(e.target.checked)} className="mt-0.5 w-3.5 h-3.5 accent-indigo-500" />
+                  <span>Push as a <b className="text-indigo-300">new lead</b> (recreate a fresh item with the map. Use if the partner deleted it, or you want a clean re-push.)</span>
+                </label>
               </div>
 
               {/* Note editor */}
@@ -279,6 +324,35 @@ export default function MondayPushButton({ lead, onToast }) {
                   placeholder="e.g. 30.2672, -97.7431"
                   className="w-full bg-slate-900/70 border border-slate-700 rounded-md px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500/60"
                 />
+              </div>
+
+              {/* Attachments: push a new map or any document to the partner's item. */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5 gap-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Attachments (map, docs)</span>
+                  <button
+                    type="button"
+                    onClick={() => fileRef.current?.click()}
+                    disabled={uploadingFiles}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-slate-700/70 hover:bg-slate-600 disabled:opacity-50 text-slate-200 text-[11px] font-semibold"
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+                    {uploadingFiles ? 'Uploading…' : 'Attach file(s)'}
+                  </button>
+                  <input ref={fileRef} type="file" accept="image/*,application/pdf" multiple className="hidden" onChange={(e) => handleAttach(e.target.files)} />
+                </div>
+                {attachments.length === 0 ? (
+                  <p className="text-[11px] text-slate-500">Attach a new map or a document to send to the partner. Works on a first push or an update.</p>
+                ) : (
+                  <div className="space-y-1">
+                    {attachments.map((a) => (
+                      <div key={a.url} className="flex items-center justify-between gap-2 bg-slate-900/60 border border-slate-700 rounded-md px-2.5 py-1.5">
+                        <span className="text-[11px] text-slate-200 truncate">{a.name}</span>
+                        <button type="button" onClick={() => removeAttachment(a.url)} className="text-slate-400 hover:text-red-400 text-xs flex-shrink-0">Remove</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 

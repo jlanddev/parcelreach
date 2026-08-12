@@ -7,7 +7,7 @@ import { pushLeadToBoard } from '@/lib/monday';
 // and the parcel map image.
 export async function POST(request) {
   try {
-    const { leadId, boardId, summary, coordinates, forceNew } = await request.json();
+    const { leadId, boardId, summary, coordinates, forceNew, attachments } = await request.json();
     if (!leadId || !boardId) {
       return NextResponse.json({ error: 'Missing leadId or boardId' }, { status: 400 });
     }
@@ -52,7 +52,10 @@ export async function POST(request) {
       if (mirror?.item_id) { existingItemId = String(mirror.item_id); priorMapUploaded = !!mirror.map_uploaded; }
     }
 
-    const result = await pushLeadToBoard(boardId, lead, { existingItemId, priorMapUploaded, forceNew: !!forceNew });
+    const cleanAttachments = Array.isArray(attachments)
+      ? attachments.filter((a) => a && a.url).map((a) => ({ url: String(a.url), filename: a.name || a.filename || 'attachment' }))
+      : [];
+    const result = await pushLeadToBoard(boardId, lead, { existingItemId, priorMapUploaded, forceNew: !!forceNew, attachments: cleanAttachments });
 
     // Record this push. The durable, append-only partner_pushes TABLE is the
     // source of truth (one row per lead+board, upserted on re-push) so the
