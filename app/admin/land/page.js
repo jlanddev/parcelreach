@@ -1627,40 +1627,62 @@ export default function LandLeadsAdminPage() {
   // The lead whose "Produce Offer PDF" screen is open (null = closed).
   const [offerModalLead, setOfferModalLead] = useState(null);
 
-  // Upload a property map screenshot to the lead-maps bucket and flag the lead as mapped.
+  // Append map entries to a lead's lead_maps array and keep map_image_url pointed
+  // at the chosen/newest one (so the Mapped badge + offer default keep working).
+  // Legacy leads with only map_image_url get it seeded into the array first.
+  const appendLeadMaps = async (leadId, entries, newestUrl) => {
+    const lead = rawLeads.find(l => l.id === leadId);
+    let base = Array.isArray(lead?.lead_maps) ? [...lead.lead_maps] : [];
+    if (!base.length && lead?.map_image_url) base = [{ id: 'legacy', url: lead.map_image_url, label: 'Current map', kind: 'aerial' }];
+    const next = [...base, ...entries];
+    const patch = { lead_maps: next, map_uploaded: true };
+    if (newestUrl) patch.map_image_url = newestUrl;
+    const { error } = await supabase.from('leads').update(patch).eq('id', leadId);
+    if (error) throw error;
+    setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...patch } : l));
+    if (selectedLead && selectedLead.id === leadId) setSelectedLead(prev => ({ ...prev, ...patch }));
+  };
+
+  // Choose which map is the primary (the one on the badge + default offer map).
+  const setPrimaryMap = async (leadId, url) => {
+    const patch = { map_image_url: url, map_uploaded: true };
+    await supabase.from('leads').update(patch).eq('id', leadId);
+    setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...patch } : l));
+    if (selectedLead && selectedLead.id === leadId) setSelectedLead(prev => ({ ...prev, ...patch }));
+  };
+
+  // Remove one map from the gallery. If it was primary, promote the first left.
+  const deleteLeadMap = async (leadId, url) => {
+    const lead = rawLeads.find(l => l.id === leadId);
+    let base = Array.isArray(lead?.lead_maps) ? [...lead.lead_maps] : [];
+    if (!base.length && lead?.map_image_url) base = [{ id: 'legacy', url: lead.map_image_url, label: 'Current map', kind: 'aerial' }];
+    const next = base.filter(m => m.url !== url);
+    const patch = { lead_maps: next };
+    if (lead?.map_image_url === url) { patch.map_image_url = next[0]?.url || null; patch.map_uploaded = next.length > 0; }
+    await supabase.from('leads').update(patch).eq('id', leadId);
+    setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...patch } : l));
+    if (selectedLead && selectedLead.id === leadId) setSelectedLead(prev => ({ ...prev, ...patch }));
+  };
+
+  // Upload one or more property map screenshots; each is appended to the gallery.
   const [mapUploading, setMapUploading] = useState(false);
-  const handleMapUpload = async (leadId, file) => {
-    if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      showToast('File must be an image', 'error');
-      return;
-    }
+  const handleMapUpload = async (leadId, fileList) => {
+    const files = Array.from(fileList || []).filter(Boolean);
+    if (!files.length) return;
+    if (files.some(f => !f.type.startsWith('image/'))) { showToast('Files must be images', 'error'); return; }
     setMapUploading(true);
     try {
-      const ext = file.name.split('.').pop() || 'png';
-      const path = `${leadId}/${Date.now()}.${ext}`;
-      const { error: uploadErr } = await supabase
-        .storage
-        .from('lead-maps')
-        .upload(path, file, { cacheControl: '3600', upsert: true });
-      if (uploadErr) throw uploadErr;
-
-      const { data: urlData } = supabase.storage.from('lead-maps').getPublicUrl(path);
-      const publicUrl = urlData?.publicUrl;
-
-      const { error: updateErr } = await supabase
-        .from('leads')
-        .update({ map_uploaded: true, map_image_url: publicUrl })
-        .eq('id', leadId);
-      if (updateErr) throw updateErr;
-
-      setRawLeads(prev => prev.map(l =>
-        l.id === leadId ? { ...l, map_uploaded: true, map_image_url: publicUrl } : l
-      ));
-      if (selectedLead && selectedLead.id === leadId) {
-        setSelectedLead(prev => ({ ...prev, map_uploaded: true, map_image_url: publicUrl }));
+      const added = [];
+      for (const file of files) {
+        const ext = file.name.split('.').pop() || 'png';
+        const path = `${leadId}/${Date.now()}-${Math.round(Math.random() * 1e4)}.${ext}`;
+        const { error: uploadErr } = await supabase.storage.from('lead-maps').upload(path, file, { cacheControl: '3600', upsert: true });
+        if (uploadErr) throw uploadErr;
+        const { data: urlData } = supabase.storage.from('lead-maps').getPublicUrl(path);
+        added.push({ id: path, url: urlData?.publicUrl, label: file.name.replace(/\.[^.]+$/, '').slice(0, 40), kind: 'upload' });
       }
-      showToast('Map uploaded', 'success');
+      await appendLeadMaps(leadId, added, added[added.length - 1].url);
+      showToast(`Uploaded ${added.length} map${added.length > 1 ? 's' : ''}`, 'success');
     } catch (err) {
       showToast('Upload failed: ' + err.message, 'error');
     } finally {
@@ -1681,8 +1703,7 @@ export default function LandLeadsAdminPage() {
       });
       const d = await res.json();
       if (!res.ok || !d.ok) throw new Error(d.error || 'Could not generate map');
-      setRawLeads(prev => prev.map(l => (l.id === lead.id ? { ...l, map_uploaded: true, map_image_url: d.url } : l)));
-      if (selectedLead && selectedLead.id === lead.id) setSelectedLead(prev => ({ ...prev, map_uploaded: true, map_image_url: d.url }));
+      await appendLeadMaps(lead.id, [{ id: d.url, url: d.url, label: 'Parcel aerial', kind: 'aerial' }], d.url);
       showToast('Map generated and saved', 'success');
     } catch (err) {
       showToast(err.message, 'error');
@@ -7148,11 +7169,30 @@ export default function LandLeadsAdminPage() {
                     </span>
                   )}
                 </div>
-                {selectedLead.map_image_url && (
-                  <a href={selectedLead.map_image_url} target="_blank" rel="noreferrer" className="block mb-3">
-                    <img src={selectedLead.map_image_url} alt="Property map" className="w-full max-h-64 object-contain rounded-lg border border-slate-700" />
-                  </a>
-                )}
+                {(() => {
+                  const maps = Array.isArray(selectedLead.lead_maps) && selectedLead.lead_maps.length
+                    ? selectedLead.lead_maps
+                    : (selectedLead.map_image_url ? [{ id: 'current', url: selectedLead.map_image_url, label: 'Current map' }] : []);
+                  if (!maps.length) return null;
+                  return (
+                    <div className="grid grid-cols-2 gap-2 mb-3">
+                      {maps.map((m) => {
+                        const primary = selectedLead.map_image_url === m.url;
+                        return (
+                          <div key={m.id || m.url} className={`relative rounded-lg overflow-hidden border-2 ${primary ? 'border-emerald-500' : 'border-slate-700'}`}>
+                            <a href={m.url} target="_blank" rel="noreferrer"><img src={m.url} alt={m.label || 'map'} className="w-full h-28 object-cover" /></a>
+                            <div className="flex items-center justify-between px-2 py-1 bg-slate-900/80">
+                              <button type="button" onClick={() => setPrimaryMap(selectedLead.id, m.url)} className={`text-[10px] font-semibold ${primary ? 'text-emerald-400' : 'text-slate-400 hover:text-white'}`}>
+                                {primary ? '✓ Primary' : 'Set primary'}
+                              </button>
+                              <button type="button" onClick={() => deleteLeadMap(selectedLead.id, m.url)} className="text-[10px] text-slate-500 hover:text-red-400">Delete</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
                 {/* Auto-generate the parcel map from the APN (no manual screenshot). */}
                 <button
                   type="button"
@@ -7169,10 +7209,10 @@ export default function LandLeadsAdminPage() {
                   <input
                     type="file"
                     accept="image/*"
+                    multiple
                     disabled={mapUploading}
                     onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) handleMapUpload(selectedLead.id, file);
+                      if (e.target.files?.length) handleMapUpload(selectedLead.id, e.target.files);
                       e.target.value = '';
                     }}
                     className="block w-full text-sm text-slate-400 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:font-semibold hover:file:bg-blue-700 file:cursor-pointer disabled:opacity-50"
