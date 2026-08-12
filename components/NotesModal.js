@@ -187,7 +187,7 @@ export default function NotesModal({ lead, currentUserId, currentUserName, roste
     if (!lead?.id) return;
     const { data } = await supabase
       .from('lead_notes')
-      .select('id, lead_id, content, created_at, user_id, mentioned_users')
+      .select('id, lead_id, content, created_at, user_id, mentioned_users, attachments')
       .eq('lead_id', lead.id)
       .order('created_at', { ascending: true });
     setNotes(data || []);
