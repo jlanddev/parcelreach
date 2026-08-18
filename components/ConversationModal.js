@@ -79,6 +79,17 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
       : ['first', 'checkin', 'offer'];
   const orderedSuggestions = order.map((k) => ({ key: k, ...suggestions[k] }));
 
+  // Editable templates (from the message_templates table) supersede the built-in
+  // set above. Bodies use merge tokens filled per-lead here.
+  const tokenMap = {
+    name: firstName,
+    rep: repName || 'the team',
+    county: countyPhrase,
+    size: sizePhrase, // may include a trailing space, e.g. "20-acre "
+  };
+  const fillTemplate = (body) => String(body || '').replace(/\{(name|rep|county|size)\}/g, (_, k) => tokenMap[k] ?? '');
+  const templateCat = isOnMarket ? 'on_market' : 'inbound';
+
   const [messages, setMessages] = useState([]);
   const [optimistic, setOptimistic] = useState([]); // local-only bubbles
   const [loading, setLoading] = useState(true);
@@ -91,6 +102,49 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
   const [aiApplied, setAiApplied] = useState({});
   const [aiDismissed, setAiDismissed] = useState({}); // per-box dismiss (lean/fu/draft)
   const scrollRef = useRef(null);
+
+  // Editable message templates. Loaded once; when present they replace the
+  // built-in suggestions. Falls back to the built-ins if the table is empty or
+  // missing (pre-migration), so the panel always shows something.
+  const [templates, setTemplates] = useState(null);
+  const [editingTpl, setEditingTpl] = useState(null); // the template being edited/added
+  const [tplBusy, setTplBusy] = useState(false);
+  const loadTemplates = useCallback(async () => {
+    const { data, error } = await supabase.from('message_templates').select('*').order('sort_order', { ascending: true });
+    if (!error) setTemplates(data || []);
+  }, []);
+  useEffect(() => { loadTemplates(); }, [loadTemplates]);
+
+  const dbSuggestions = (templates || [])
+    .filter((t) => t.category === templateCat || t.category === 'any')
+    .map((t) => ({ key: t.id, label: t.label, text: fillTemplate(t.body), tpl: t }));
+  const finalSuggestions = dbSuggestions.length ? dbSuggestions : orderedSuggestions;
+
+  const saveTemplate = async () => {
+    const t = editingTpl;
+    if (!t || !t.label?.trim() || !t.body?.trim()) return;
+    setTplBusy(true);
+    try {
+      const row = { label: t.label.trim(), body: t.body.trim(), category: t.category || 'any', sort_order: t.sort_order ?? 100 };
+      if (t.id) await supabase.from('message_templates').update(row).eq('id', t.id);
+      else await supabase.from('message_templates').insert(row);
+      setEditingTpl(null);
+      await loadTemplates();
+    } catch (e) {
+      alert('Could not save template: ' + (e?.message || e));
+    } finally { setTplBusy(false); }
+  };
+  const deleteTemplate = async (id) => {
+    if (!id) { setEditingTpl(null); return; }
+    setTplBusy(true);
+    try { await supabase.from('message_templates').delete().eq('id', id); setEditingTpl(null); await loadTemplates(); }
+    catch (e) { alert('Could not delete: ' + (e?.message || e)); }
+    finally { setTplBusy(false); }
+  };
+  const startAddTemplate = () => {
+    const maxOrder = (templates || []).reduce((m, t) => Math.max(m, t.sort_order || 0), 0);
+    setEditingTpl({ label: '', body: '', category: templateCat, sort_order: maxOrder + 10 });
+  };
 
   const runSmartSuggest = async () => {
     setAiLoading(true);
@@ -355,19 +409,70 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
                 <span>Suggested messages</span>
                 <button type="button" onClick={() => setSuggestOpen(false)} className="text-slate-500 hover:text-slate-300 normal-case">Close</button>
               </div>
-              <div className="max-h-64 overflow-y-auto">
-                {orderedSuggestions.map((s, i) => (
-                  <button
-                    key={s.key}
-                    type="button"
-                    onClick={() => { setDraft(s.text); setSuggestOpen(false); }}
-                    className="block w-full text-left px-3 py-2.5 hover:bg-blue-600/20 border-b border-slate-700/50 last:border-0"
+              {editingTpl ? (
+                /* Template editor: add or edit a canned message. */
+                <div className="p-3 space-y-2">
+                  <input
+                    value={editingTpl.label}
+                    onChange={(e) => setEditingTpl((t) => ({ ...t, label: e.target.value }))}
+                    placeholder="Label (e.g. First touch)"
+                    className="w-full bg-slate-900/70 border border-slate-700 rounded-md px-2.5 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                  />
+                  <select
+                    value={editingTpl.category}
+                    onChange={(e) => setEditingTpl((t) => ({ ...t, category: e.target.value }))}
+                    className="w-full bg-slate-900/70 border border-slate-700 rounded-md px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
                   >
-                    <div className="text-[11px] font-semibold text-purple-300 mb-0.5">{s.label}{i === 0 ? ' · suggested' : ''}</div>
-                    <div className="text-xs text-slate-300 line-clamp-3">{s.text}</div>
+                    <option value="inbound">Inbound / PPC leads</option>
+                    <option value="on_market">On-market (agent) leads</option>
+                    <option value="any">Any lead</option>
+                  </select>
+                  <textarea
+                    value={editingTpl.body}
+                    onChange={(e) => setEditingTpl((t) => ({ ...t, body: e.target.value }))}
+                    rows={4}
+                    placeholder="Message body. Use tokens below."
+                    className="w-full resize-none bg-slate-900/70 border border-slate-700 rounded-md px-2.5 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                  />
+                  <div className="text-[10px] text-slate-500">Tokens: <span className="text-slate-300">{'{name}'} {'{rep}'} {'{county}'} {'{size}'}</span> · Preview: <span className="text-slate-400 italic">{fillTemplate(editingTpl.body) || '…'}</span></div>
+                  <div className="flex items-center gap-2 pt-0.5">
+                    <button type="button" disabled={tplBusy} onClick={saveTemplate} className="px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold">{tplBusy ? 'Saving…' : 'Save'}</button>
+                    <button type="button" onClick={() => setEditingTpl(null)} className="px-3 py-1.5 rounded-md bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold">Cancel</button>
+                    {editingTpl.id && <button type="button" disabled={tplBusy} onClick={() => deleteTemplate(editingTpl.id)} className="ml-auto px-3 py-1.5 rounded-md bg-red-600/20 hover:bg-red-600/40 text-red-300 text-xs font-semibold">Delete</button>}
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="max-h-64 overflow-y-auto">
+                    {finalSuggestions.map((s, i) => (
+                      <div key={s.key} className="flex items-stretch border-b border-slate-700/50 last:border-0 hover:bg-blue-600/10">
+                        <button
+                          type="button"
+                          onClick={() => { setDraft(s.text); setSuggestOpen(false); }}
+                          className="flex-1 text-left px-3 py-2.5"
+                        >
+                          <div className="text-[11px] font-semibold text-purple-300 mb-0.5">{s.label}{i === 0 ? ' · suggested' : ''}</div>
+                          <div className="text-xs text-slate-300 line-clamp-3">{s.text}</div>
+                        </button>
+                        {s.tpl && (
+                          <button
+                            type="button"
+                            onClick={() => setEditingTpl({ ...s.tpl })}
+                            title="Edit this message"
+                            className="px-3 flex items-center text-slate-500 hover:text-white"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <button type="button" onClick={startAddTemplate} className="w-full px-3 py-2 border-t border-slate-700 text-xs font-semibold text-blue-300 hover:bg-blue-600/10 flex items-center justify-center gap-1.5">
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                    Add message
                   </button>
-                ))}
-              </div>
+                </>
+              )}
             </div>
           )}
           {/* Smart Suggest result: three independent boxes. Dismissing or
