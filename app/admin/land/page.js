@@ -2158,11 +2158,16 @@ export default function LandLeadsAdminPage() {
   // Restore a lead from archive
   const restoreLead = async (leadId) => {
     try {
-      const lead = allLeads.find(l => l.id === leadId);
+      const lead = allLeads.find(l => l.id === leadId) || rawLeads.find(l => l.id === leadId);
       const leadName = lead?.full_name || lead?.name || 'Lead';
-      await supabase.from('leads').update({ status: 'new' }).eq('id', leadId);
-      setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'new' } : l));
-      showToast('Restored', 'success', leadName);
+      const patch = { status: 'new' };
+      // A lead archived via the status dropdown carries pipeline_status ARCHIVED.
+      // If we only reset `status`, that stale ARCHIVED keeps it out of every tab
+      // (it lands in the phantom all-leads bucket and vanishes), so reset it too.
+      if ((lead?.pipeline_status || '').toUpperCase() === 'ARCHIVED') patch.pipeline_status = 'NEW';
+      await supabase.from('leads').update(patch).eq('id', leadId);
+      setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...patch } : l));
+      showToast('Restored to New', 'success', leadName);
     } catch (err) {
       showToast('Error: ' + err.message, 'error');
     }
