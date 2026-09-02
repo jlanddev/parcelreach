@@ -827,6 +827,8 @@ export default function LandLeadsAdminPage() {
     CLOSED: { label: 'Closed', color: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50' },
     DEAD: { label: 'Dead', color: 'bg-slate-500/20 text-slate-400 border-slate-500/50' },
     NURTURE: { label: 'Nurture', color: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/50' },
+    WE_PASSED: { label: 'We Passed', color: 'bg-slate-500/20 text-slate-400 border-slate-500/50' },
+    DEAD: { label: 'Dead', color: 'bg-slate-500/20 text-slate-400 border-slate-500/50' },
     FOLLOW_UP: { label: 'Follow-Up', color: 'bg-rose-500/20 text-rose-400 border-rose-500/50' },
     LOST: { label: 'Lost', color: 'bg-zinc-500/20 text-zinc-400 border-zinc-500/50' },
     ARCHIVED: { label: 'Archived', color: 'bg-zinc-500/20 text-zinc-400 border-zinc-500/50' }
@@ -1626,6 +1628,26 @@ export default function LandLeadsAdminPage() {
 
   // The lead whose "Produce Offer PDF" screen is open (null = closed).
   const [offerModalLead, setOfferModalLead] = useState(null);
+
+  // Status filter for the All Leads table ('all' or a canonical status).
+  const [allLeadsFilter, setAllLeadsFilter] = useState('all');
+
+  // Put a lead back into the PPC Inflow board (used to pull leads out of terminal
+  // buckets like We Passed / Nurture / Dead that otherwise can't be re-staged).
+  const moveToInflow = async (leadId) => {
+    try {
+      const lead = allLeads.find(l => l.id === leadId) || rawLeads.find(l => l.id === leadId);
+      const leadName = lead?.full_name || lead?.name || 'Lead';
+      const patch = { status: 'new', pipeline_status: 'NEW' };
+      const { error } = await supabase.from('leads').update(patch).eq('id', leadId);
+      if (error) throw error;
+      setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...patch } : l));
+      if (selectedLead && selectedLead.id === leadId) setSelectedLead(prev => ({ ...prev, ...patch }));
+      showToast('Moved back to Inflow', 'success', leadName);
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error');
+    }
+  };
 
   // Append map entries to a lead's lead_maps array and keep map_image_url pointed
   // at the chosen/newest one (so the Mapped badge + offer default keep working).
@@ -5803,9 +5825,28 @@ export default function LandLeadsAdminPage() {
         {/* ALL LEADS TAB */}
         {activeTab === 'all-leads' && (
           <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
-            <div className="p-4 border-b border-slate-700/50">
-              <h3 className="text-xl font-bold">All Leads</h3>
-              <p className="text-sm text-slate-400 mt-1">{allLeads.filter(l => l.status !== 'archived').length} active leads ({allLeads.length} total)</p>
+            <div className="p-4 border-b border-slate-700/50 flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <h3 className="text-xl font-bold">All Leads</h3>
+                <p className="text-sm text-slate-400 mt-1">{allLeads.filter(l => l.status !== 'archived' && (allLeadsFilter === 'all' || getSmartStatus(l) === allLeadsFilter)).length} shown ({allLeads.length} total)</p>
+              </div>
+              <select
+                value={allLeadsFilter}
+                onChange={(e) => setAllLeadsFilter(e.target.value)}
+                className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+              >
+                <option value="all">All statuses</option>
+                <option value="NEW">New</option>
+                <option value="CONTACTING">In Contact</option>
+                <option value="OFFER_SENT">Offer Sent</option>
+                <option value="NEGOTIATING">Negotiating</option>
+                <option value="FOLLOW_UP">Follow-Up</option>
+                <option value="WE_PASSED">We Passed</option>
+                <option value="NURTURE">Nurture</option>
+                <option value="LOST">Lost</option>
+                <option value="DEAD">Dead</option>
+                <option value="CLOSED">Closed</option>
+              </select>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -5821,7 +5862,7 @@ export default function LandLeadsAdminPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-700/50">
-                  {allLeads.filter(l => l.status !== 'archived').map((lead) => {
+                  {allLeads.filter(l => l.status !== 'archived').filter(l => allLeadsFilter === 'all' || getSmartStatus(l) === allLeadsFilter).map((lead) => {
                     return (
                       <tr key={lead.id} id={`lead-card-${lead.id}`} className={`hover:bg-slate-700/30 ${highlightLeadId === lead.id ? 'ring-2 ring-inset ring-blue-400/70 bg-blue-500/10' : ''}`}>
                         <td className="px-6 py-4 text-sm">
@@ -5845,15 +5886,20 @@ export default function LandLeadsAdminPage() {
                         </td>
                         <td className="px-6 py-4 text-sm">{lead.acres || lead.acreage || '-'}</td>
                         <td className="px-6 py-4">
-                          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                            lead.status === 'assigned' ? 'bg-green-500/20 text-green-400' :
-                            lead.status === 'new' ? 'bg-blue-500/20 text-blue-400' :
-                            'bg-slate-500/20 text-slate-400'
-                          }`}>
-                            {lead.status || 'new'}
+                          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${STATUS_CONFIG[getSmartStatus(lead)]?.color || 'bg-slate-500/20 text-slate-400'}`}>
+                            {STATUS_CONFIG[getSmartStatus(lead)]?.label || getSmartStatus(lead)}
                           </span>
                         </td>
                         <td className="px-6 py-4 text-right space-x-2">
+                          {!['NEW', 'CONTACTING'].includes(getSmartStatus(lead)) && (
+                            <button
+                              onClick={() => moveToInflow(lead.id)}
+                              title="Move this lead back to the PPC Inflow board"
+                              className="px-3 py-1.5 bg-blue-600/80 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm font-medium"
+                            >
+                              → Inflow
+                            </button>
+                          )}
                           <button
                             onClick={() => openLeadDetails(lead)}
                             className="px-3 py-1.5 bg-slate-700 text-white rounded-lg hover:bg-slate-600 transition-colors text-sm font-medium"
