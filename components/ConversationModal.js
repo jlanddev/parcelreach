@@ -185,13 +185,23 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
           .select('id, direction, message_content, outcome, created_at')
           .eq('lead_id', lead.id).eq('activity_type', 'TEXT')
           .order('created_at', { ascending: true }).limit(300);
-        local = (acts || []).filter((a) => a.message_content).map((a) => ({
+        const mapped = (acts || []).filter((a) => a.message_content).map((a) => ({
           message_handle: 'act-' + a.id,
           content: a.message_content,
           direction: (a.direction || '').toLowerCase() === 'inbound' ? 'inbound' : 'outbound',
           sent_at: toUtcIso(a.created_at),
           status: a.outcome,
         }));
+        // Collapse duplicate activity rows for the same message (e.g. our own
+        // send plus Project Blue's outbound webhook logging the same text). Same
+        // direction + same text within 5 min = one bubble.
+        const seen = [];
+        for (const m of mapped) {
+          const t = new Date(m.sent_at).getTime();
+          const dup = seen.find((x) => x.direction === m.direction && (x.content || '').trim() === (m.content || '').trim() && Math.abs(new Date(x.sent_at).getTime() - t) < 300000);
+          if (!dup) seen.push(m);
+        }
+        local = seen;
       } catch { /* fall back to Project Blue only */ }
     }
     let pb = [];

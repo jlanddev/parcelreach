@@ -39,8 +39,26 @@ export async function POST(request) {
           message_content: message,
           created_at: new Date().toISOString(),
         };
-        const { error } = await supabase.from('activities').insert({ ...row, read_at: new Date().toISOString() });
-        if (error) await supabase.from('activities').insert(row);
+        // Idempotency: Project Blue's outbound webhook can fire and log this same
+        // text before we get here (the webhook races our own insert). If a
+        // matching outbound row already exists in the last few minutes, don't add
+        // a second one, just make sure it's marked read. This is the mirror of
+        // the webhook's own claim-a-null-guid-row dedup, covering the reverse
+        // ordering.
+        const sinceIso = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+        const { data: dupe } = await supabase
+          .from('activities')
+          .select('id')
+          .eq('lead_id', leadId).eq('activity_type', 'TEXT').eq('direction', 'OUTBOUND')
+          .eq('message_content', message)
+          .gte('created_at', sinceIso)
+          .limit(1);
+        if (dupe && dupe.length) {
+          await supabase.from('activities').update({ read_at: new Date().toISOString() }).eq('id', dupe[0].id).then(() => {}, () => {});
+        } else {
+          const { error } = await supabase.from('activities').insert({ ...row, read_at: new Date().toISOString() });
+          if (error) await supabase.from('activities').insert(row);
+        }
         const nowIso = new Date().toISOString();
         const lp = {
           last_activity_at: nowIso,
