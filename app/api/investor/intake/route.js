@@ -67,6 +67,8 @@ export async function POST(request) {
       full_name: name,
       email: email || 'N/A',
       phone: phone || 'N/A',
+      address: 'Investor inquiry (no property)',
+      city: 'N/A',
       source: 'go-west-lands',
       status: scheduled ? 'appt_set_for_jordan' : 'new',
       pipeline_status: scheduled ? 'APPT_SET_FOR_JORDAN' : 'NEW',
@@ -88,6 +90,7 @@ export async function POST(request) {
       // Some databases may not have pipeline_status; retry without it.
       const { data: lead2, error: err2 } = await sb.from('leads').insert([{
         name, full_name: name, email: email || 'N/A', phone: phone || 'N/A',
+        address: 'Investor inquiry (no property)', city: 'N/A',
         source: 'go-west-lands', status: scheduled ? 'appt_set_for_jordan' : 'new',
         form_data: {
           origin: 'go_west_lands', investor: true, has_50k: has50k, why,
