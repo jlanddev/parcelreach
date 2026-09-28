@@ -4443,8 +4443,8 @@ export default function LandLeadsAdminPage() {
             // with arrow chevrons between them to visualize lead flow.
             const PIPELINE_TABS = ['ppc-inflow', 'offer-curated', 'appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'];
             const allTabs = isAdmin
-              ? ['shared-calendar', 'activity-log', ...PIPELINE_TABS, 'follow-up', 'lost', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search']
-              : ['shared-calendar', ...PIPELINE_TABS, 'follow-up', 'lost', 'subdivision-inflow', 'all-leads'];
+              ? ['shared-calendar', 'activity-log', ...PIPELINE_TABS, 'follow-up', 'lost', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search', 'investors']
+              : ['shared-calendar', ...PIPELINE_TABS, 'follow-up', 'lost', 'subdivision-inflow', 'all-leads', 'investors'];
             return allTabs.map((tab, i) => {
               const prevTab = allTabs[i - 1];
               const showChevron = PIPELINE_TABS.includes(tab) && PIPELINE_TABS.includes(prevTab);
@@ -4488,7 +4488,7 @@ export default function LandLeadsAdminPage() {
                   <path d="M11 7h2v10h-2zm4 4h2v6h-2zM7 9h2v8H7zm12-7H5c-1.1 0-2 .9-2 2v18l4-4h13c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
                 </svg>
               )}
-              {tab === 'om-search' ? 'OM Search' : tab === 'campaigns' ? 'Campaigns' : tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'offer-curated' ? 'Offer Curated' : tab === 'appointment-set' ? 'Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Agreement Sent' : tab === 'signed-contract' ? 'Signed Contract' : tab === 'closed-deal' ? 'Closed Deal' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab.replace('-', ' ')}
+              {tab === 'om-search' ? 'OM Search' : tab === 'campaigns' ? 'Campaigns' : tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'offer-curated' ? 'Offer Curated' : tab === 'appointment-set' ? 'Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Agreement Sent' : tab === 'signed-contract' ? 'Signed Contract' : tab === 'closed-deal' ? 'Closed Deal' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab === 'investors' ? 'Investors' : tab.replace('-', ' ')}
               {tab === 'unassigned' && ` (${unassignedLeads.length})`}
               {tab === 'ppc-inflow' && ` (${allLeads.filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })()).length})`}
               {tab === 'offer-curated' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'OFFER_CURATED').length})`}
@@ -4501,6 +4501,7 @@ export default function LandLeadsAdminPage() {
               {tab === 'lost' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'LOST').length})`}
               {tab === 'subdivision-inflow' && ` (${allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived').length})`}
               {tab === 'archive' && ` (${allLeads.filter(l => l.status === 'archived').length})`}
+              {tab === 'investors' && ` (${allLeads.filter(l => l.source === 'go-west-lands').length})`}
                   </button>
                 </div>
               );
@@ -7055,6 +7056,93 @@ export default function LandLeadsAdminPage() {
             )}
           </div>
         )}
+
+        {/* INVESTORS TAB (Go West Lands investor applications) */}
+        {activeTab === 'investors' && (() => {
+          const investorLeads = allLeads
+            .filter(l => l.source === 'go-west-lands')
+            .sort((a, b) => {
+              const at = a.form_data?.appointment_at ? new Date(a.form_data.appointment_at).getTime() : Infinity;
+              const bt = b.form_data?.appointment_at ? new Date(b.form_data.appointment_at).getTime() : Infinity;
+              return at - bt;
+            });
+          const fmtAppt = (l) => {
+            if (l.form_data?.appointment_label) return l.form_data.appointment_label;
+            if (l.form_data?.appointment_at) {
+              try {
+                return new Date(l.form_data.appointment_at).toLocaleString('en-US', {
+                  weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago'
+                }) + ' CT';
+              } catch { return l.form_data.appointment_at; }
+            }
+            return null;
+          };
+          const now = Date.now();
+          return (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold">Investors</h2>
+                  <p className="text-slate-400 text-sm">Go West Lands investor applications with scheduled appointments.</p>
+                </div>
+                <span className="text-slate-400 text-sm">{investorLeads.length} total</span>
+              </div>
+
+              {investorLeads.length === 0 ? (
+                <div className="bg-slate-800/40 border border-slate-700/50 rounded-xl p-10 text-center">
+                  <p className="text-slate-300 font-medium">No investor applications yet.</p>
+                  <p className="text-slate-500 text-sm mt-1">Submissions from the Go West Lands landing page will appear here.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {investorLeads.map((l) => {
+                    const appt = fmtAppt(l);
+                    const apptTs = l.form_data?.appointment_at ? new Date(l.form_data.appointment_at).getTime() : null;
+                    const isPast = apptTs != null && apptTs < now;
+                    const has50k = (l.form_data?.has_50k || '').toLowerCase() === 'yes';
+                    return (
+                      <button
+                        key={l.id}
+                        onClick={() => openLeadDetails(l)}
+                        className="text-left bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 hover:border-blue-500/50 rounded-xl p-5 transition"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="font-semibold text-white truncate">{l.name || l.full_name || 'Unnamed investor'}</div>
+                            <div className="text-sm text-slate-400 truncate">{l.email || 'no email'}</div>
+                            <div className="text-sm text-slate-400">{l.phone || 'no phone'}</div>
+                          </div>
+                          <span className={`flex-shrink-0 text-xs font-semibold px-2 py-1 rounded-full ${has50k ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-300'}`}>
+                            {has50k ? '$50k+ ready' : 'Under $50k'}
+                          </span>
+                        </div>
+
+                        {appt && (
+                          <div className={`mt-3 flex items-center gap-2 text-sm font-medium rounded-lg px-3 py-2 ${isPast ? 'bg-slate-700/40 text-slate-400' : 'bg-blue-500/15 text-blue-300'}`}>
+                            <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                            {appt}{isPast && <span className="text-xs">(past)</span>}
+                          </div>
+                        )}
+
+                        {l.form_data?.why && (
+                          <div className="mt-3">
+                            <div className="text-xs uppercase tracking-wide text-slate-500 mb-1">Why they want to meet</div>
+                            <p className="text-sm text-slate-300 line-clamp-3">{l.form_data.why}</p>
+                          </div>
+                        )}
+
+                        <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
+                          <span>{l.form_data?.source_label || 'Go West Lands'}</span>
+                          <span>{l.created_at ? new Date(l.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
       </div>
 
