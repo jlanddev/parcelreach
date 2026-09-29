@@ -111,6 +111,10 @@ Rules:
       form_data: {
         origin: 'screenshot_upload',
         namesOnDeed: clean(fields.name_on_title),
+        // The lead detail reads form_data.acres; the card reads form_data.acreage.
+        // Keep the raw value (which may be a range like "5 - 20") in both.
+        acres: acresRaw,
+        acreage: acresRaw,
         acresRange: acresRaw,
         streetAddress: address,
         city, county, state, zip,
@@ -128,7 +132,16 @@ Rules:
       lead = retry.data;
     }
 
-    return NextResponse.json({ ok: true, lead: { id: lead.id, name, county, state, acres: acresRaw }, fields });
+    return NextResponse.json({
+      ok: true,
+      lead: {
+        id: lead.id, name,
+        phone: payload.phone, email: payload.email,
+        address, city, county, state, zip, acres: acresRaw,
+        name_on_title: clean(fields.name_on_title),
+      },
+      fields,
+    });
   } catch (err) {
     console.error('[from-screenshot]', err);
     return NextResponse.json({ ok: false, error: err.message || 'Failed to process screenshot' }, { status: 500 });

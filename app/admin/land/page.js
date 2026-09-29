@@ -1424,6 +1424,7 @@ export default function LandLeadsAdminPage() {
         const json = await res.json();
         if (json.ok) {
           setShotResults((prev) => [{ ok: true, ...json.lead, thumb }, ...prev]);
+          showToast('Lead added to PPC Inflow', 'success', json.lead.name);
         } else {
           setShotResults((prev) => [{ ok: false, error: json.error || 'Failed', thumb }, ...prev]);
         }
@@ -6179,15 +6180,26 @@ export default function LandLeadsAdminPage() {
               {shotResults.length > 0 && (
                 <div className="mt-4 space-y-2">
                   {shotResults.map((r, i) => (
-                    <div key={i} className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${r.ok ? 'border-emerald-600/40 bg-emerald-600/10' : 'border-red-600/40 bg-red-600/10'}`}>
-                      {r.thumb && <img src={r.thumb} alt="" className="w-10 h-10 object-cover rounded border border-slate-700 flex-shrink-0" />}
+                    <div key={i} className={`flex items-start gap-3 rounded-lg border px-3 py-3 ${r.ok ? 'border-emerald-600/40 bg-emerald-600/10' : 'border-red-600/40 bg-red-600/10'}`}>
+                      {r.thumb && <img src={r.thumb} alt="" className="w-12 h-12 object-cover rounded border border-slate-700 flex-shrink-0" />}
                       {r.ok ? (
-                        <div className="min-w-0">
-                          <div className="text-sm text-white font-medium truncate">{r.name} <span className="text-emerald-400">&rarr; added to PPC Inflow</span></div>
-                          <div className="text-xs text-slate-400 truncate">{[r.county && `${r.county} County`, r.state, r.acres && `${r.acres} ac`].filter(Boolean).join(' · ')}</div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <svg className="w-4 h-4 text-emerald-400 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>
+                            <span className="text-sm text-white font-semibold">{r.name}</span>
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-emerald-300 bg-emerald-500/15 px-2 py-0.5 rounded">Added to PPC Inflow</span>
+                          </div>
+                          <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                            {r.phone && r.phone !== 'N/A' && <div><span className="text-slate-500">Phone:</span> <span className="text-slate-200">{r.phone}</span></div>}
+                            {r.email && r.email !== 'N/A' && <div className="truncate"><span className="text-slate-500">Email:</span> <span className="text-slate-200">{r.email}</span></div>}
+                            {r.address && <div className="col-span-2 truncate"><span className="text-slate-500">Address:</span> <span className="text-slate-200">{[r.address, r.city, r.state].filter(Boolean).join(', ')}</span></div>}
+                            {r.county && <div><span className="text-slate-500">County:</span> <span className="text-slate-200">{r.county}</span></div>}
+                            {r.acres && <div><span className="text-slate-500">Acres:</span> <span className="text-slate-200">{r.acres}</span></div>}
+                            {r.name_on_title && <div className="col-span-2"><span className="text-slate-500">Name on title:</span> <span className="text-slate-200">{r.name_on_title}</span></div>}
+                          </div>
                         </div>
                       ) : (
-                        <div className="text-sm text-red-300 min-w-0 truncate">Could not add: {r.error}</div>
+                        <div className="text-sm text-red-300 min-w-0 flex-1">Could not add: {r.error}</div>
                       )}
                     </div>
                   ))}
