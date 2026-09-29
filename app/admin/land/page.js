@@ -5932,7 +5932,7 @@ export default function LandLeadsAdminPage() {
                           {new Date(lead.created_at).toLocaleDateString()}
                         </td>
                         <td className="px-6 py-4">
-                          <div className="font-medium">{lead.full_name || lead.name}{lead.map_uploaded && <MappedBadge />}</div>
+                          <div className="font-medium">{lead.full_name || lead.name}{lead.map_uploaded ? <MappedBadge /> : <NotMappedBadge />}</div>
                           <div className="text-sm text-slate-400">{lead.email}</div>
                         </td>
                         <td className="px-6 py-4">
@@ -6026,7 +6026,7 @@ export default function LandLeadsAdminPage() {
                       <div className="flex-1">
                         <h4 className="text-lg font-semibold text-white inline-flex items-center gap-2">
                           {lead.full_name || lead.name}
-                          {lead.map_uploaded && <MappedBadge />}
+                          {lead.map_uploaded ? <MappedBadge /> : <NotMappedBadge />}
                           <TeammateBadge lead={lead} />
                         </h4>
                         <div className="mt-2 grid grid-cols-4 gap-4 text-sm">
@@ -6115,7 +6115,7 @@ export default function LandLeadsAdminPage() {
                             {new Date(lead.created_at).toLocaleDateString()}
                           </td>
                           <td className="px-6 py-4">
-                            <div className="font-medium text-white inline-flex items-center gap-2">{lead.full_name || lead.name}{lead.map_uploaded && <MappedBadge />}<TeammateBadge lead={lead} /></div>
+                            <div className="font-medium text-white inline-flex items-center gap-2">{lead.full_name || lead.name}{lead.map_uploaded ? <MappedBadge /> : <NotMappedBadge />}<TeammateBadge lead={lead} /></div>
                             <div className="text-sm text-slate-500">{lead.email}</div>
                           </td>
                           <td className="px-6 py-4">
