@@ -21,27 +21,32 @@ body {
   animation: slide-in-right 0.3s ease-out;
 }
 
-/* "Not Mapped" hologram badge: red glow with a moving iridescent sheen */
-@keyframes holo-sheen {
-  0%   { background-position: -150% 0; }
-  100% { background-position: 250% 0; }
-}
-@keyframes holo-pulse {
-  0%, 100% { box-shadow: 0 0 6px rgba(244,63,94,0.45), 0 0 2px rgba(244,63,94,0.6) inset; }
-  50%      { box-shadow: 0 0 14px rgba(244,63,94,0.75), 0 0 3px rgba(244,63,94,0.8) inset; }
-}
+/* "Not Mapped" hologram badge. GPU-only animation: the sheen is a transform
+   sweep on a pseudo-element (composited, no per-frame repaint) and the glow is
+   static, so it stays smooth even with many cards on screen. */
 .holo-notmapped {
   position: relative;
+  overflow: hidden;
   color: #ffe4e6;
-  background:
-    linear-gradient(115deg, rgba(255,255,255,0) 30%, rgba(255,255,255,0.45) 50%, rgba(255,255,255,0) 70%),
-    linear-gradient(90deg, #9f1239, #e11d48, #fb7185, #e11d48, #9f1239);
-  background-size: 220% 100%, 100% 100%;
-  background-repeat: no-repeat;
+  background: linear-gradient(90deg, #9f1239, #e11d48, #fb7185, #e11d48, #9f1239);
   border: 1px solid rgba(253,164,175,0.7);
-  animation: holo-sheen 3.2s linear infinite, holo-pulse 2.2s ease-in-out infinite;
+  box-shadow: 0 0 10px rgba(244,63,94,0.5);
   text-shadow: 0 0 6px rgba(255,120,140,0.7);
 }
+.holo-notmapped::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0;
+  width: 55%; height: 100%;
+  background: linear-gradient(115deg, transparent 0%, rgba(255,255,255,0.55) 50%, transparent 100%);
+  transform: translateX(-180%);
+  animation: holo-sheen 3.2s linear infinite;
+  will-change: transform;
+  pointer-events: none;
+}
+@keyframes holo-sheen {
+  to { transform: translateX(340%); }
+}
 @media (prefers-reduced-motion: reduce) {
-  .holo-notmapped { animation: holo-pulse 2.2s ease-in-out infinite; background-position: 0 0; }
+  .holo-notmapped::before { display: none; }
 }
