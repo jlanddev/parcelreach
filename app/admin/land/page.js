@@ -1390,6 +1390,59 @@ export default function LandLeadsAdminPage() {
   const [creatingLead, setCreatingLead] = useState(false);
   const [locatingParcel, setLocatingParcel] = useState(false);
 
+  // Screenshot -> Lead states
+  const [shotBusy, setShotBusy] = useState(false);
+  const [shotProgress, setShotProgress] = useState({ done: 0, total: 0 });
+  const [shotResults, setShotResults] = useState([]); // {ok, name, county, state, acres, error, thumb}
+  const [shotDragOver, setShotDragOver] = useState(false);
+
+  const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+
+  // Process one or more lead screenshots: extract fields with AI and create a
+  // PPC-inflow lead for each. Runs sequentially so the results list fills in order.
+  const processLeadScreenshots = async (files) => {
+    const imgs = Array.from(files || []).filter((f) => f.type && f.type.startsWith('image/'));
+    if (!imgs.length) return;
+    setShotBusy(true);
+    setShotProgress({ done: 0, total: imgs.length });
+    for (let i = 0; i < imgs.length; i++) {
+      const file = imgs[i];
+      let thumb = null;
+      try {
+        const dataUrl = await fileToDataUrl(file);
+        thumb = dataUrl;
+        const res = await fetch('/api/lead/from-screenshot', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: dataUrl }),
+        });
+        const json = await res.json();
+        if (json.ok) {
+          setShotResults((prev) => [{ ok: true, ...json.lead, thumb }, ...prev]);
+        } else {
+          setShotResults((prev) => [{ ok: false, error: json.error || 'Failed', thumb }, ...prev]);
+        }
+      } catch (e) {
+        setShotResults((prev) => [{ ok: false, error: e.message || 'Failed', thumb }, ...prev]);
+      }
+      setShotProgress((p) => ({ ...p, done: p.done + 1 }));
+    }
+    setShotBusy(false);
+    fetchAllData(); // refresh so new leads show in PPC Inflow
+  };
+
+  const onShotPaste = (e) => {
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    const files = [];
+    for (const it of items) { if (it.type && it.type.startsWith('image/')) { const f = it.getAsFile(); if (f) files.push(f); } }
+    if (files.length) { e.preventDefault(); processLeadScreenshots(files); }
+  };
+
   // Admin access control
   useEffect(() => {
     const checkAdminAccess = async () => {
@@ -6095,7 +6148,57 @@ export default function LandLeadsAdminPage() {
 
         {/* CREATE LEAD TAB */}
         {activeTab === 'create-lead' && (
-          <div className="grid grid-cols-2 gap-6">
+          <div className="space-y-6">
+            {/* Screenshot -> Lead (drop lead screenshots, auto-create PPC leads) */}
+            <div
+              onPaste={onShotPaste}
+              onDragOver={(e) => { e.preventDefault(); setShotDragOver(true); }}
+              onDragLeave={() => setShotDragOver(false)}
+              onDrop={(e) => { e.preventDefault(); setShotDragOver(false); processLeadScreenshots(e.dataTransfer.files); }}
+              className={`rounded-xl border p-5 transition-colors ${shotDragOver ? 'border-blue-500 bg-blue-500/10' : 'border-slate-700/50 bg-slate-800/50'}`}
+            >
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div>
+                  <h3 className="text-xl font-bold flex items-center gap-2">
+                    <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5V19a2 2 0 002 2h14a2 2 0 002-2v-2.5M7 9l5-5 5 5M12 4v12"/></svg>
+                    Paste or upload lead screenshots
+                  </h3>
+                  <p className="text-sm text-slate-400 mt-1">Drop or paste one or more lead screenshots. Each is read automatically and added to PPC Inflow.</p>
+                </div>
+                <label className={`px-4 py-2 rounded-lg font-semibold cursor-pointer transition-colors ${shotBusy ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-500'}`}>
+                  {shotBusy ? `Reading ${shotProgress.done}/${shotProgress.total}...` : 'Choose screenshots'}
+                  <input type="file" accept="image/*" multiple disabled={shotBusy} className="hidden"
+                    onChange={(e) => { processLeadScreenshots(e.target.files); e.target.value = ''; }} />
+                </label>
+              </div>
+
+              <div className={`mt-4 rounded-lg border-2 border-dashed ${shotDragOver ? 'border-blue-500' : 'border-slate-700'} px-4 py-6 text-center text-sm text-slate-400`}>
+                Drag screenshots here, click to paste (Cmd/Ctrl+V), or use the button above.
+              </div>
+
+              {shotResults.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  {shotResults.map((r, i) => (
+                    <div key={i} className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${r.ok ? 'border-emerald-600/40 bg-emerald-600/10' : 'border-red-600/40 bg-red-600/10'}`}>
+                      {r.thumb && <img src={r.thumb} alt="" className="w-10 h-10 object-cover rounded border border-slate-700 flex-shrink-0" />}
+                      {r.ok ? (
+                        <div className="min-w-0">
+                          <div className="text-sm text-white font-medium truncate">{r.name} <span className="text-emerald-400">&rarr; added to PPC Inflow</span></div>
+                          <div className="text-xs text-slate-400 truncate">{[r.county && `${r.county} County`, r.state, r.acres && `${r.acres} ac`].filter(Boolean).join(' · ')}</div>
+                        </div>
+                      ) : (
+                        <div className="text-sm text-red-300 min-w-0 truncate">Could not add: {r.error}</div>
+                      )}
+                    </div>
+                  ))}
+                  <button onClick={() => setShotResults([])} className="text-xs text-slate-500 hover:text-slate-300 mt-1">Clear list</button>
+                </div>
+              )}
+            </div>
+
+            <div className="text-center text-xs uppercase tracking-widest text-slate-600">or enter a lead manually</div>
+
+            <div className="grid grid-cols-2 gap-6">
             {/* Left: Map */}
             <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
               <div className="p-4 border-b border-slate-700/50">
@@ -6431,6 +6534,7 @@ export default function LandLeadsAdminPage() {
                 )}
               </div>
             </div>
+          </div>
           </div>
         )}
 
