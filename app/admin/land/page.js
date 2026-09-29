@@ -221,6 +221,14 @@ export default function LandLeadsAdminPage() {
     </span>
   );
 
+  // Red "hologram" pill shown at the top of a lead card when NO map is attached.
+  const NotMappedBadge = () => (
+    <span className="holo-notmapped inline-flex items-center gap-1 ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide">
+      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7M4 4l16 16" /></svg>
+      Not Mapped
+    </span>
+  );
+
   // HAMMERING pill, shown when hammer_mode is on. Click to toggle off.
   const HammerBadge = ({ lead }) => {
     if (!lead?.hammer_mode) return null;
@@ -3646,7 +3654,7 @@ export default function LandLeadsAdminPage() {
                       {/* Tags row (interest/status signals) at the top of the card */}
                       <div className="flex items-center gap-1.5 flex-wrap mb-3">
                         <FreshBadge lead={lead} />
-                        {lead.map_uploaded && <MappedBadge />}
+                        {lead.map_uploaded ? <MappedBadge /> : <NotMappedBadge />}
                         <HammerBadge lead={lead} />
                         <TeammateBadge lead={lead} />
                       </div>
@@ -4644,7 +4652,7 @@ export default function LandLeadsAdminPage() {
                               className="w-full flex items-center justify-between bg-slate-800/40 hover:bg-slate-800/80 rounded-lg p-2 text-left transition-colors"
                             >
                               <div>
-                                <div className="font-medium text-white text-sm">{lead.full_name || lead.name}{lead.map_uploaded && <MappedBadge />}</div>
+                                <div className="font-medium text-white text-sm">{lead.full_name || lead.name}{lead.map_uploaded ? <MappedBadge /> : <NotMappedBadge />}</div>
                                 <div className="text-xs text-slate-400">{lead.phone || 'No phone'} · {lead.property_county || lead.county || '?'}, {lead.property_state || lead.state || '?'}</div>
                               </div>
                               <div className="text-xs text-green-300 font-semibold">{when}</div>
@@ -4817,7 +4825,7 @@ export default function LandLeadsAdminPage() {
                               <span className="font-semibold text-white truncate inline-flex items-center gap-2">
                                 {leadName}
                                 {lead && <FreshBadge lead={lead} />}
-                                {lead?.map_uploaded && <MappedBadge />}
+                                {lead && (lead.map_uploaded ? <MappedBadge /> : <NotMappedBadge />)}
                                 {lead && <HammerBadge lead={lead} />}
                                 {lead && <TeammateBadge lead={lead} />}
                               </span>

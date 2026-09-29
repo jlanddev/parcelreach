@@ -20,3 +20,28 @@ body {
 .animate-slide-in-right {
   animation: slide-in-right 0.3s ease-out;
 }
+
+/* "Not Mapped" hologram badge: red glow with a moving iridescent sheen */
+@keyframes holo-sheen {
+  0%   { background-position: -150% 0; }
+  100% { background-position: 250% 0; }
+}
+@keyframes holo-pulse {
+  0%, 100% { box-shadow: 0 0 6px rgba(244,63,94,0.45), 0 0 2px rgba(244,63,94,0.6) inset; }
+  50%      { box-shadow: 0 0 14px rgba(244,63,94,0.75), 0 0 3px rgba(244,63,94,0.8) inset; }
+}
+.holo-notmapped {
+  position: relative;
+  color: #ffe4e6;
+  background:
+    linear-gradient(115deg, rgba(255,255,255,0) 30%, rgba(255,255,255,0.45) 50%, rgba(255,255,255,0) 70%),
+    linear-gradient(90deg, #9f1239, #e11d48, #fb7185, #e11d48, #9f1239);
+  background-size: 220% 100%, 100% 100%;
+  background-repeat: no-repeat;
+  border: 1px solid rgba(253,164,175,0.7);
+  animation: holo-sheen 3.2s linear infinite, holo-pulse 2.2s ease-in-out infinite;
+  text-shadow: 0 0 6px rgba(255,120,140,0.7);
+}
+@media (prefers-reduced-motion: reduce) {
+  .holo-notmapped { animation: holo-pulse 2.2s ease-in-out infinite; background-position: 0 0; }
+}
