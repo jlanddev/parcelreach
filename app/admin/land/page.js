@@ -637,10 +637,18 @@ export default function LandLeadsAdminPage() {
   const TAB_KEYS = ['ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent', 'campaigns', 'follow-up', 'lost'];
   const [tabSeen, setTabSeen] = useState(() => {
     if (typeof window === 'undefined') return {};
-    try { const raw = localStorage.getItem('pr_tab_seen'); if (raw) return JSON.parse(raw); } catch {}
-    const now = Date.now(); const init = {};
-    TAB_KEYS.forEach(t => { init[t] = now; });
-    try { localStorage.setItem('pr_tab_seen', JSON.stringify(init)); } catch {}
+    const VER = 'v2';
+    try {
+      const raw = localStorage.getItem('pr_tab_seen');
+      const ver = localStorage.getItem('pr_tab_seen_ver');
+      if (raw && ver === VER) return JSON.parse(raw);
+    } catch {}
+    // Fresh load or upgrade: seed to 48h ago so recent activity (incl. anything
+    // buried overnight) shows as "new" right away instead of being hidden.
+    const seed = Date.now() - 48 * 3600 * 1000;
+    const init = {};
+    TAB_KEYS.forEach(t => { init[t] = seed; });
+    try { localStorage.setItem('pr_tab_seen', JSON.stringify(init)); localStorage.setItem('pr_tab_seen_ver', VER); } catch {}
     return init;
   });
   const markTabSeen = (tab) => setTabSeen(prev => {
@@ -683,14 +691,11 @@ export default function LandLeadsAdminPage() {
     const act = l.last_activity_at ? parseTs(l.last_activity_at).getTime() : 0;
     const newest = Math.max(created, contact, act);
     if (newest <= seen) return null;
-    // A fresh inbound reply is always called out as its own thing, any tab.
+    // High-signal only: a fresh inbound reply, a brand-new lead, or a stage move.
+    // (Our own outbound texts / generic updates are NOT notifications.)
     if (contact > seen && l.last_contact_dir === 'inbound') return { kind: 'New message', ts: contact, color: 'text-cyan-300', dot: 'bg-cyan-400' };
-    // Non-inflow pipeline tabs: label by the stage the lead is in.
     if (STAGE_EVENT[tab]) return { ...STAGE_EVENT[tab], ts: newest };
-    // PPC Inflow / default.
     if (created > seen) return { kind: 'New lead', ts: created, color: 'text-emerald-300', dot: 'bg-emerald-400' };
-    if (contact > seen && l.last_contact_dir === 'outbound') return { kind: 'We reached out', ts: contact, color: 'text-slate-300', dot: 'bg-slate-400' };
-    if (act > seen) return { kind: 'Updated', ts: act, color: 'text-amber-300', dot: 'bg-amber-400' };
     return null;
   };
   // Why a lead needs a touch right now (or null). Order 0 = most urgent.
