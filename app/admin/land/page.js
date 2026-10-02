@@ -693,6 +693,39 @@ export default function LandLeadsAdminPage() {
     if (act > seen) return { kind: 'Updated', ts: act, color: 'text-amber-300', dot: 'bg-amber-400' };
     return null;
   };
+  // Why a lead needs a touch right now (or null). Order 0 = most urgent.
+  // Ignores how long ago it happened, so a message buried from days ago still
+  // surfaces until it's answered. Terminal/archived leads are excluded.
+  const needsTouchInfo = (l) => {
+    const s = _up(l);
+    if (['LOST', 'CLOSED', 'DEAD', 'WE_PASSED', 'NURTURE'].includes(s)) return null;
+    if ((l.status || '').toLowerCase() === 'archived') return null;
+    const DAY = 86400000;
+    const now = Date.now();
+    const contact = l.last_contact_at ? parseTs(l.last_contact_at).getTime() : null;
+    const dir = l.last_contact_dir;
+    if (contact && dir === 'inbound') {
+      const days = Math.floor((now - contact) / DAY);
+      return { order: 0, color: 'red', reason: days >= 1 ? `They replied ${days}d ago, owe a response` : 'They replied, owe a response', ts: contact };
+    }
+    if (!contact) {
+      const age = l.created_at ? Math.floor((now - parseTs(l.created_at).getTime()) / DAY) : 0;
+      if (age >= 1) return { order: 1, color: 'red', reason: `Uncontacted ${age}d`, ts: l.created_at ? parseTs(l.created_at).getTime() : 0 };
+      return null;
+    }
+    if (contact && dir === 'outbound') {
+      const days = Math.floor((now - contact) / DAY);
+      if (days >= 3) return { order: 2, color: days >= 7 ? 'red' : 'amber', reason: `No reply in ${days}d`, ts: contact };
+    }
+    return null;
+  };
+  const needsTouchLeads = () => {
+    const out = [];
+    for (const l of (allLeads || [])) { const info = needsTouchInfo(l); if (info) out.push({ lead: l, ...info }); }
+    out.sort((a, b) => a.order - b.order || a.ts - b.ts); // most urgent group, then oldest first
+    return out;
+  };
+
   const tabEventsFor = (tab) => {
     const seen = tabSeen[tab];
     if (seen == null) return [];
@@ -4556,14 +4589,15 @@ export default function LandLeadsAdminPage() {
           {(() => {
             // Four left-to-right pipeline stages up front; everything else lives in
             // the "More" overflow menu so the board stays clean.
-            const MAIN_TABS = ['ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent', 'campaigns'];
+            const MAIN_TABS = ['needs-touch', 'ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent', 'campaigns'];
             const hasOffer = (l) => l.offer_amount != null && Number(l.offer_amount) !== 0;
             const overflow = isAdmin
               ? ['shared-calendar', 'follow-up', 'lost', 'activity-log', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search', 'investors']
               : ['shared-calendar', 'follow-up', 'lost', 'subdivision-inflow', 'all-leads', 'investors'];
             const up = (l) => (l.pipeline_status || l.status || '').toUpperCase();
-            const labelFor = (tab) => tab === 'ppc-inflow' ? 'PPC Inflow' : tab === 'appointment-set' ? 'Mapped & Appointment Set' : tab === 'offer-curated' ? 'Offer Curated' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Signed Contracts' : tab === 'om-search' ? 'OM Search' : tab === 'campaigns' ? 'Follow-Up Campaigns' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab === 'investors' ? 'Investors' : tab === 'organizations' ? 'Organizations' : tab === 'unassigned' ? 'Unassigned' : tab === 'create-lead' ? 'Create Lead' : tab === 'all-leads' ? 'All Leads' : tab.replace('-', ' ');
+            const labelFor = (tab) => tab === 'needs-touch' ? 'Needs a Touch' : tab === 'ppc-inflow' ? 'PPC Inflow' : tab === 'appointment-set' ? 'Mapped & Appointment Set' : tab === 'offer-curated' ? 'Offer Curated' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Signed Contracts' : tab === 'om-search' ? 'OM Search' : tab === 'campaigns' ? 'Follow-Up Campaigns' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab === 'investors' ? 'Investors' : tab === 'organizations' ? 'Organizations' : tab === 'unassigned' ? 'Unassigned' : tab === 'create-lead' ? 'Create Lead' : tab === 'all-leads' ? 'All Leads' : tab.replace('-', ' ');
             const countFor = (tab) => {
+              if (tab === 'needs-touch') { const n = needsTouchLeads().length; return n ? ` (${n})` : ''; }
               if (tab === 'unassigned') return ` (${unassignedLeads.length})`;
               if (tab === 'ppc-inflow') return ` (${allLeads.filter(l => ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(up(l)) && l.status !== 'archived').length})`;
               if (tab === 'appointment-set') return ` (${(scheduledTasks || []).filter(t => t.task_type === 'meeting').length})`;
@@ -4593,17 +4627,22 @@ export default function LandLeadsAdminPage() {
             return (
               <>
                 <div className="flex items-center gap-2 overflow-x-auto flex-1 min-w-0">
-                {MAIN_TABS.map((tab, i) => (
-                  <div key={tab} className="flex items-center flex-shrink-0">
-                    {i > 0 && tab !== 'campaigns' && (
-                      <svg className="w-4 h-4 text-slate-600 mx-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
-                      </svg>
-                    )}
-                    {tab === 'campaigns' && <span className="w-px h-6 bg-slate-700 mx-2 flex-shrink-0" />}
-                    {tabBtn(tab, activeTab === tab)}
-                  </div>
-                ))}
+                {MAIN_TABS.map((tab, i) => {
+                  const PIPELINE = ['ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent'];
+                  const chevron = PIPELINE.includes(tab) && PIPELINE.includes(MAIN_TABS[i - 1]);
+                  const divider = tab === 'ppc-inflow' || tab === 'campaigns';
+                  return (
+                    <div key={tab} className="flex items-center flex-shrink-0">
+                      {divider && <span className="w-px h-6 bg-slate-700 mx-2 flex-shrink-0" />}
+                      {chevron && (
+                        <svg className="w-4 h-4 text-slate-600 mx-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
+                        </svg>
+                      )}
+                      {tabBtn(tab, activeTab === tab)}
+                    </div>
+                  );
+                })}
                 </div>
                 <div className="relative flex-shrink-0 ml-1">
                   <button
@@ -4663,6 +4702,43 @@ export default function LandLeadsAdminPage() {
                   </button>
                 ))}
               </div>
+            </div>
+          );
+        })()}
+
+        {/* NEEDS A TOUCH, the daily call sheet of overdue leads */}
+        {activeTab === 'needs-touch' && (() => {
+          const list = needsTouchLeads();
+          return (
+            <div className="space-y-5">
+              <div className="bg-gradient-to-br from-red-500/10 to-rose-600/5 border border-red-500/40 rounded-xl p-6">
+                <h2 className="text-2xl font-bold text-red-300">Needs a Touch</h2>
+                <p className="text-slate-400 text-sm mt-1">Your call sheet, most urgent first. People who replied and are waiting on us rise to the top, then uncontacted leads, then anyone we have not heard back from. Work it top to bottom.</p>
+              </div>
+              {list.length === 0 ? (
+                <div className="text-center py-16 text-slate-400">
+                  <p className="text-lg text-slate-200 font-medium">All caught up.</p>
+                  <p className="text-sm mt-1">Nobody is overdue for a touch right now.</p>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {list.slice(0, cardLimit).map(({ lead, reason, color }) => (
+                      <div key={lead.id}>
+                        <div className={`flex items-center gap-2 mb-1.5 text-xs font-semibold ${color === 'red' ? 'text-red-300' : 'text-amber-300'}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${color === 'red' ? 'bg-red-400' : 'bg-amber-400'}`} />{reason}
+                        </div>
+                        {renderLeadCard(lead)}
+                      </div>
+                    ))}
+                  </div>
+                  {list.length > cardLimit && (
+                    <div className="text-center mt-5">
+                      <button onClick={() => setCardLimit(c => c + 60)} className="px-5 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 text-sm font-semibold">Show more ({list.length - cardLimit} more)</button>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           );
         })()}
