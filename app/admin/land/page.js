@@ -90,14 +90,45 @@ export default function LandLeadsAdminPage() {
   const cleanViewActive = isAcquisitionManager ? true : cleanViewPref;
   const setCleanView = (next) => {
     setCleanViewPref(next);
+    if (next) setCleanView2Pref(false); // the two views are mutually exclusive
     if (typeof window !== 'undefined') {
       sessionStorage.setItem('pr_clean_view', next ? '1' : '0');
+      if (next) sessionStorage.setItem('pr_clean_view_2', '0');
       const url = new URL(window.location.href);
       url.searchParams.set('cleanview', next ? '1' : '0');
+      if (next) url.searchParams.set('cleanview2', '0');
       window.history.replaceState({}, '', url);
     }
   };
   const toggleCleanView = () => setCleanView(!cleanViewPref);
+
+  // ---- Clean View 2 -------------------------------------------------------
+  // A second, independent curated set, used to migrate the board onto a clean
+  // slate: new leads (incl. website submissions, via the column default) land in
+  // Clean View 2 automatically, and old leads are transferred in by hand. Toggled
+  // like Clean View and mutually exclusive with it.
+  const [cleanView2Pref, setCleanView2Pref] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const param = new URLSearchParams(window.location.search).get('cleanview2');
+    if (param === '1') setCleanView2Pref(true);
+    else if (param === '0') setCleanView2Pref(false);
+    else setCleanView2Pref(sessionStorage.getItem('pr_clean_view_2') === '1');
+  }, []);
+  const cleanView2Active = cleanView2Pref;
+  const setCleanView2 = (next) => {
+    setCleanView2Pref(next);
+    if (next) setCleanViewPref(false); // mutually exclusive with Clean View
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('pr_clean_view_2', next ? '1' : '0');
+      if (next) sessionStorage.setItem('pr_clean_view', '0');
+      const url = new URL(window.location.href);
+      url.searchParams.set('cleanview2', next ? '1' : '0');
+      if (next) url.searchParams.set('cleanview', '0');
+      window.history.replaceState({}, '', url);
+    }
+  };
+  const toggleCleanView2 = () => setCleanView2(!cleanView2Pref);
   // Open the OTHER view in a fresh tab so both can sit side by side.
   const openViewInNewTab = (clean) => {
     if (typeof window === 'undefined') return;
@@ -109,8 +140,10 @@ export default function LandLeadsAdminPage() {
   // subset only; otherwise it is the full raw set. Renaming the raw state to
   // rawLeads and deriving allLeads here means all ~100 read sites filter at once.
   const allLeads = useMemo(
-    () => (cleanViewActive ? rawLeads.filter((l) => l.clean_view) : rawLeads),
-    [cleanViewActive, rawLeads]
+    () => (cleanView2Active ? rawLeads.filter((l) => l.clean_view_2)
+          : cleanViewActive ? rawLeads.filter((l) => l.clean_view)
+          : rawLeads),
+    [cleanView2Active, cleanViewActive, rawLeads]
   );
   // Push a lead into (or pull it out of) Clean View. Admin-only curation.
   // clean_view_at stamps when it was pushed, so Clean View can sort newest-first.
@@ -168,6 +201,20 @@ export default function LandLeadsAdminPage() {
         } catch { /* non-fatal */ }
       }
     }
+  };
+
+  // Transfer a lead into (or out of) Clean View 2.
+  const setLeadCleanView2 = async (leadId, on) => {
+    const at = on ? new Date().toISOString() : null;
+    setRawLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, clean_view_2: on, clean_view_2_at: at } : l)));
+    setSelectedLead((prev) => (prev && prev.id === leadId ? { ...prev, clean_view_2: on, clean_view_2_at: at } : prev));
+    const { error } = await supabase.from('leads').update({ clean_view_2: on, clean_view_2_at: at }).eq('id', leadId);
+    if (error) {
+      setRawLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, clean_view_2: !on } : l)));
+      showToast('Could not update Clean View 2', 'error');
+      return;
+    }
+    showToast(on ? 'Transferred to Clean View 2' : 'Removed from Clean View 2', 'success');
   };
 
   // Live board. A realtime feed on the leads table so a lead pushed to Clean
@@ -4183,14 +4230,22 @@ export default function LandLeadsAdminPage() {
 
                     {/* Clean View push (admin only) */}
                     {isAdmin && (
-                      <div className="mt-2">
+                      <div className="mt-2 flex gap-2">
                         <button
                           onClick={(e) => { e.stopPropagation(); setLeadCleanView(lead.id, !lead.clean_view); }}
-                          className={`w-full px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1.5 ${lead.clean_view ? 'bg-teal-600/25 text-teal-300 hover:bg-teal-600/40 border border-teal-500/40' : 'bg-slate-700/50 hover:bg-slate-600/50 text-slate-300 border border-transparent'}`}
+                          className={`flex-1 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1.5 ${lead.clean_view ? 'bg-teal-600/25 text-teal-300 hover:bg-teal-600/40 border border-teal-500/40' : 'bg-slate-700/50 hover:bg-slate-600/50 text-slate-300 border border-transparent'}`}
                           title={lead.clean_view ? 'In Clean View. Click to remove.' : 'Push this lead into Clean View'}
                         >
                           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={lead.clean_view ? 'M5 13l4 4L19 7' : 'M12 4v16m8-8H4'} /></svg>
-                          {lead.clean_view ? 'In Clean View' : 'Push to Clean View'}
+                          {lead.clean_view ? 'In Clean View' : 'Clean View'}
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setLeadCleanView2(lead.id, !lead.clean_view_2); }}
+                          className={`flex-1 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1.5 ${lead.clean_view_2 ? 'bg-indigo-600/25 text-indigo-300 hover:bg-indigo-600/40 border border-indigo-500/40' : 'bg-slate-700/50 hover:bg-slate-600/50 text-slate-300 border border-transparent'}`}
+                          title={lead.clean_view_2 ? 'In Clean View 2. Click to remove.' : 'Transfer this lead into Clean View 2'}
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={lead.clean_view_2 ? 'M5 13l4 4L19 7' : 'M12 4v16m8-8H4'} /></svg>
+                          {lead.clean_view_2 ? 'In View 2' : 'View 2'}
                         </button>
                       </div>
                     )}
@@ -4503,6 +4558,13 @@ export default function LandLeadsAdminPage() {
             title={cleanViewActive ? 'Switch back to the full board' : 'Switch to your curated Clean View'}
           >
             {cleanViewActive ? 'Clean View: ON' : 'Clean View: OFF'}
+          </button>
+          <button
+            onClick={toggleCleanView2}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${cleanView2Active ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+            title={cleanView2Active ? 'Switch back to the full board' : 'Switch to Clean View 2 (new leads + anything you transfer in)'}
+          >
+            {cleanView2Active ? 'Clean View 2: ON' : 'Clean View 2: OFF'}
           </button>
         </div>
       )}
