@@ -109,10 +109,32 @@ export default function LandLeadsAdminPage() {
   // The list every tab/count/board reads from. In Clean View it is the pushed
   // subset only; otherwise it is the full raw set. Renaming the raw state to
   // rawLeads and deriving allLeads here means all ~100 read sites filter at once.
-  const allLeads = useMemo(
-    () => (cleanViewActive ? rawLeads.filter((l) => l.clean_view) : rawLeads),
-    [cleanViewActive, rawLeads]
-  );
+  const allLeads = useMemo(() => {
+    const base = cleanViewActive ? rawLeads.filter((l) => l.clean_view) : rawLeads;
+    // Collapse duplicate lead records for the same person (same phone) to ONE,
+    // keeping the furthest-along stage, so someone who filled out multiple forms
+    // shows as a single card/count/notification. Archived and lost copies never
+    // win over an active record.
+    const rank = (l) => {
+      if ((l.status || '').toLowerCase() === 'archived') return -2;
+      const s = (l.pipeline_status || l.status || '').toUpperCase();
+      if (s === 'LOST') return -1;
+      if (['CLOSED', 'UNDER_CONTRACT', 'AGREEMENT_SENT'].includes(s)) return 5;
+      if (['OFFER_SENT', 'NEGOTIATING'].includes(s)) return 4;
+      if (l.offer_amount != null && Number(l.offer_amount) !== 0) return 3;
+      if (s === 'APPT_SET_FOR_JORDAN') return 2;
+      return 1;
+    };
+    const best = new Map();
+    for (const l of base) {
+      const k = (l.phone || '').replace(/\D/g, '').slice(-10) || `id:${l.id}`;
+      const cur = best.get(k);
+      if (!cur) { best.set(k, l); continue; }
+      const cmp = rank(l) - rank(cur) || (new Date(l.last_activity_at || l.created_at) - new Date(cur.last_activity_at || cur.created_at));
+      if (cmp > 0) best.set(k, l);
+    }
+    return Array.from(best.values());
+  }, [cleanViewActive, rawLeads]);
   // Push a lead into (or pull it out of) Clean View. Admin-only curation.
   // clean_view_at stamps when it was pushed, so Clean View can sort newest-first.
   const setLeadCleanView = async (leadId, on) => {
