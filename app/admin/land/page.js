@@ -4594,7 +4594,7 @@ export default function LandLeadsAdminPage() {
           {(() => {
             // Four left-to-right pipeline stages up front; everything else lives in
             // the "More" overflow menu so the board stays clean.
-            const MAIN_TABS = ['needs-touch', 'ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent', 'campaigns'];
+            const MAIN_TABS = ['ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent', 'campaigns'];
             const hasOffer = (l) => l.offer_amount != null && Number(l.offer_amount) !== 0;
             const overflow = isAdmin
               ? ['shared-calendar', 'follow-up', 'lost', 'activity-log', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search', 'investors']
@@ -4635,7 +4635,7 @@ export default function LandLeadsAdminPage() {
                 {MAIN_TABS.map((tab, i) => {
                   const PIPELINE = ['ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent'];
                   const chevron = PIPELINE.includes(tab) && PIPELINE.includes(MAIN_TABS[i - 1]);
-                  const divider = tab === 'ppc-inflow' || tab === 'campaigns';
+                  const divider = tab === 'campaigns';
                   return (
                     <div key={tab} className="flex items-center flex-shrink-0">
                       {divider && <span className="w-px h-6 bg-slate-700 mx-2 flex-shrink-0" />}
