@@ -728,17 +728,15 @@ export default function LandLeadsAdminPage() {
     'follow-up': { kind: 'Moved to follow-up', color: 'text-rose-300', dot: 'bg-rose-400' },
     'lost': { kind: 'Marked lost', color: 'text-zinc-300', dot: 'bg-zinc-400' },
   };
-  const eventKind = (l, seen, tab) => {
+  const eventKind = (l, seen) => {
     const created = l.created_at ? parseTs(l.created_at).getTime() : 0;
     const contact = l.last_contact_at ? parseTs(l.last_contact_at).getTime() : 0;
-    const act = l.last_activity_at ? parseTs(l.last_activity_at).getTime() : 0;
-    const newest = Math.max(created, contact, act);
-    if (newest <= seen) return null;
-    // High-signal only: a fresh inbound reply, a brand-new lead, or a stage move.
-    // (Our own outbound texts / generic updates are NOT notifications.)
+    // Only two notifications, and both CLEAR the moment we act:
+    //  - a reply we haven't answered yet (last contact is inbound), and
+    //  - a brand-new lead we haven't reached out to yet (no contact at all).
+    // Once we text back / reach out, last_contact flips to outbound and both go away.
     if (contact > seen && l.last_contact_dir === 'inbound') return { kind: 'New message', ts: contact, color: 'text-cyan-300', dot: 'bg-cyan-400' };
-    if (STAGE_EVENT[tab]) return { ...STAGE_EVENT[tab], ts: newest };
-    if (created > seen) return { kind: 'New lead', ts: created, color: 'text-emerald-300', dot: 'bg-emerald-400' };
+    if (created > seen && !l.last_contact_at) return { kind: 'New lead', ts: created, color: 'text-emerald-300', dot: 'bg-emerald-400' };
     return null;
   };
   // Why a lead needs a touch right now (or null). Order 0 = most urgent.
