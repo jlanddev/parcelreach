@@ -15,6 +15,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   const [counts, setCounts] = useState({}); // campaignId -> { active, pending }
   const [openCampaign, setOpenCampaign] = useState(null); // campaign being viewed in detail
   const [enrolledIds, setEnrolledIds] = useState(new Set());
+  const [enrollByCampaign, setEnrollByCampaign] = useState({}); // campaignId -> Set(leadId)
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -23,19 +24,22 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   const [enrollSearch, setEnrollSearch] = useState('');
   const [enrollSel, setEnrollSel] = useState(() => new Set());
   const [preview, setPreview] = useState(null);
+  const [testPhone, setTestPhone] = useState('');
 
   const say = (msg, kind = 'success') => { setToast({ msg, kind }); setTimeout(() => setToast(null), 2800); };
 
   const load = async () => {
     const { data: camps } = await supabase.from('campaigns').select('*').order('created_at', { ascending: true });
     setCampaigns(camps || []);
-    const { data: enr } = await supabase.from('campaign_enrollments').select('campaign_id, status');
+    const { data: enr } = await supabase.from('campaign_enrollments').select('lead_id, campaign_id, status');
     const { data: q } = await supabase.from('campaign_queue').select('campaign_id, status');
     const c = {};
+    const byCamp = {};
     (camps || []).forEach(cp => { c[cp.id] = { active: 0, pending: 0 }; });
-    (enr || []).forEach(e => { if (e.status === 'active' && c[e.campaign_id]) c[e.campaign_id].active += 1; });
+    (enr || []).forEach(e => { if (e.status === 'active' && c[e.campaign_id]) { c[e.campaign_id].active += 1; (byCamp[e.campaign_id] = byCamp[e.campaign_id] || new Set()).add(e.lead_id); } });
     (q || []).forEach(x => { if (x.status === 'pending' && c[x.campaign_id]) c[x.campaign_id].pending += 1; });
     setCounts(c);
+    setEnrollByCampaign(byCamp);
   };
   useEffect(() => { load(); }, []);
 
@@ -105,6 +109,17 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     } catch (e) { say('Scan failed: ' + e.message, 'error'); }
     setBusy(false);
   };
+  const sendTest = async () => {
+    if (!testPhone.trim()) { say('Enter a phone number', 'error'); return; }
+    setBusy(true);
+    try {
+      const res = await fetch('/api/campaigns/test-send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: testPhone.trim(), message: 'Test from ParcelReach campaigns, this is Jordan. Reply STOP to opt out.' }) });
+      const j = await res.json();
+      if (!j.ok) throw new Error(j.error || 'failed');
+      say('Test text sent, check that phone');
+    } catch (e) { say('Test failed: ' + e.message, 'error'); }
+    setBusy(false);
+  };
   const runPreview = async () => {
     setBusy(true);
     try {
@@ -121,6 +136,15 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     return `${steps.length} steps · ${t} text${t === 1 ? '' : 's'}, ${c} call${c === 1 ? '' : 's'} · over ${Math.max(...steps.map(s => Number(s.day) || 0))} days`;
   };
 
+  // Needs-attention count for a campaign: due calls + leads who replied and owe us.
+  const campaignNotif = (cp) => {
+    const set = enrollByCampaign[cp.id] || new Set();
+    if (!set.size) return 0;
+    const replies = leads.filter(l => set.has(l.id) && l.last_contact_dir === 'inbound').length;
+    const calls = (scheduledTasks || []).filter(t => t.status === 'pending' && (t.source === 'campaign' || /^campaign:/i.test(t.description || '')) && set.has(t.lead_id) && new Date(t.due_at) <= new Date()).length;
+    return replies + calls;
+  };
+
   const enrollList = useMemo(() => {
     const q = enrollSearch.trim().toLowerCase();
     return leads.filter(l => {
@@ -134,6 +158,10 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   const enrolledLeads = openCampaign ? leads.filter(l => enrolledIds.has(l.id)).sort((a, b) => new Date(b.last_activity_at || b.created_at) - new Date(a.last_activity_at || a.created_at)) : [];
   const campaignCalls = openCampaign ? (scheduledTasks || []).filter(t => t.status === 'pending' && (t.source === 'campaign' || /^campaign:/i.test(t.description || '')) && enrolledIds.has(t.lead_id)).sort((a, b) => new Date(a.due_at) - new Date(b.due_at)) : [];
   const repliesWaiting = enrolledLeads.filter(l => l.last_contact_dir === 'inbound').length;
+  const detailItems = openCampaign ? [
+    ...enrolledLeads.filter(l => l.last_contact_dir === 'inbound').map(l => ({ kind: 'message', lead: l, ts: l.last_contact_at, text: l.last_contact_preview })),
+    ...campaignCalls.map(t => ({ kind: 'call', lead: leadsById[t.lead_id], ts: t.due_at, overdue: new Date(t.due_at) < new Date() })),
+  ].filter(it => it.lead).sort((a, b) => new Date(b.ts || 0) - new Date(a.ts || 0)) : [];
   const fmtWhen = (iso) => { const d = new Date(iso); const today = new Date().toDateString() === d.toDateString(); return (today ? 'Today' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })) + ' ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
 
   const detailView = openCampaign ? (
@@ -163,6 +191,27 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
         </div>
       </div>
 
+      {/* Needs attention (new messages + due calls), like the inflow panel */}
+      {detailItems.length > 0 && (
+        <div className="bg-slate-800/60 border border-slate-700 rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 border-b border-slate-700/70 bg-slate-800 flex items-center gap-2 text-sm font-semibold text-white">
+            <span className="inline-flex items-center justify-center min-w-[20px] h-[20px] px-1 rounded-full bg-red-500 text-white text-[11px] font-bold">{detailItems.length}</span>
+            Needs attention in this campaign
+          </div>
+          <div className="max-h-56 overflow-y-auto divide-y divide-slate-700/50">
+            {detailItems.map((it, i) => (
+              <button key={i} onClick={() => onOpenLead && onOpenLead(it.lead)} className="w-full text-left px-4 py-2.5 hover:bg-slate-700/40 flex items-center gap-3">
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${it.kind === 'call' ? 'bg-amber-400' : 'bg-cyan-400'}`} />
+                <span className={`text-xs font-semibold uppercase tracking-wide flex-shrink-0 ${it.kind === 'call' ? 'text-amber-300' : 'text-cyan-300'}`}>{it.kind === 'call' ? 'Call' : 'New message'}</span>
+                <span className="text-sm text-white truncate">{it.lead.full_name || it.lead.name || 'Lead'}</span>
+                {it.kind === 'message' && it.text && <span className="text-xs text-slate-400 truncate hidden md:inline">“{it.text}”</span>}
+                <span className="ml-auto text-xs text-slate-500 flex-shrink-0">{it.kind === 'call' ? (it.overdue ? 'Overdue' : 'Due') + ' ' + fmtWhen(it.ts) : (it.ts ? fmtWhen(it.ts) : '')}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Sequence */}
       <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-5">
         <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400 mb-3">Message &amp; follow-up sequence</h3>
@@ -176,31 +225,6 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
           ))}
         </div>
       </div>
-
-      {/* Calls to make */}
-      {campaignCalls.length > 0 && (
-        <div className="bg-amber-500/5 border border-amber-500/40 rounded-xl p-5">
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-amber-300 mb-3 flex items-center gap-2">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11 11 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
-            Calls to make
-          </h3>
-          <div className="space-y-2">
-            {campaignCalls.map(t => {
-              const lead = leadsById[t.lead_id];
-              const overdue = new Date(t.due_at) < new Date();
-              return (
-                <div key={t.id} className="flex items-center justify-between gap-3 bg-slate-800/60 border border-slate-700/50 rounded-lg px-3 py-2">
-                  <div className="min-w-0">
-                    <div className="text-sm text-white truncate">Follow-up call: <span className="font-semibold">{lead?.full_name || lead?.name || 'Lead'}</span></div>
-                    <div className="text-xs text-slate-400 truncate">{openCampaign.name} · <span className={overdue ? 'text-amber-300' : ''}>{overdue ? 'Overdue' : 'Due'} {fmtWhen(t.due_at)}</span></div>
-                  </div>
-                  <button onClick={() => lead && onOpenLead && onOpenLead(lead)} className="flex-shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white">Open &amp; call</button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       {/* Enrolled leads */}
       <div>
@@ -237,7 +261,12 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
 
       {/* Live/dry-run banner */}
       <div className="bg-amber-500/10 border border-amber-500/40 rounded-xl px-4 py-3 text-sm text-amber-200">
-        <span className="font-semibold">Sending is in safe mode (dry-run).</span> No real texts go out until <code className="text-amber-100">CAMPAIGNS_LIVE=true</code> is set in Netlify. Use <span className="font-semibold">Preview sends</span> to see exactly what would go, then flip it live when you are ready. Quiet hours (10am-8pm Central), one text per lead per day, opt-out, and auto-stop on reply are always enforced.
+        <p><span className="font-semibold">Sending is in safe mode (dry-run).</span> No automated texts go out until <code className="text-amber-100">CAMPAIGNS_LIVE=true</code> is set in Netlify. Use <span className="font-semibold">Preview sends</span> to see exactly what would go. Quiet hours (10am-8pm Central), one text per lead per day, opt-out, and auto-stop on reply are always enforced.</p>
+        <div className="mt-2 flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-amber-100/80">Test sending works, text your own phone:</span>
+          <input value={testPhone} onChange={e => setTestPhone(e.target.value)} placeholder="(555) 555-5555" className="bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1 text-white text-sm w-40" />
+          <button onClick={sendTest} disabled={busy} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white disabled:opacity-50">Send test text</button>
+        </div>
       </div>
 
       {campaigns === null ? (
@@ -253,6 +282,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
                   <div className="flex items-center gap-2">
                     <h3 className="text-lg font-bold text-white hover:text-rose-200">{cp.name}</h3>
                     <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full ${cp.active ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-600/40 text-slate-400'}`}>{cp.active ? 'Active' : 'Paused'}</span>
+                    {campaignNotif(cp) > 0 && <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[11px] font-bold">{campaignNotif(cp)}</span>}
                   </div>
                   {cp.description && <p className="text-sm text-slate-400 mt-1">{cp.description}</p>}
                   <p className="text-xs text-slate-500 mt-2">{stepSummary(cp.steps)}</p>
@@ -310,7 +340,10 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
                     <button onClick={() => setEditing({ ...editing, steps: editing.steps.filter((_, j) => j !== i) })} className="text-slate-500 hover:text-red-300 mt-4">✕</button>
                   </div>
                 ))}
-                <button onClick={() => setEditing({ ...editing, steps: [...editing.steps, BLANK_STEP()] })} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">+ Add step</button>
+                <div className="flex gap-2">
+                  <button onClick={() => setEditing({ ...editing, steps: [...editing.steps, BLANK_STEP()] })} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">+ Add step</button>
+                  <button onClick={() => { const maxDay = Math.max(0, ...editing.steps.map(s => Number(s.day) || 0)); const d = maxDay + 30; setEditing({ ...editing, steps: [...editing.steps, { day: d, type: 'text', message: 'Hi {{first}}, just checking in. Still happy to help with your land whenever the timing is right, no rush at all.', label: '' }, { day: d, type: 'call', label: 'Monthly check-in call', message: '' }] }); }} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/40">+ Monthly touch (warm text + call)</button>
+                </div>
               </div>
             </div>
             <div className="p-4 border-t border-slate-700 flex justify-end gap-2">
