@@ -626,6 +626,8 @@ export default function LandLeadsAdminPage() {
   const [recentActivity, setRecentActivity] = useState([]); // Live activity feed
   const [selectedCalendarDay, setSelectedCalendarDay] = useState(null); // For calendar day click
   const [rundownVisibleCount, setRundownVisibleCount] = useState(20);
+  // Render cards in pages so a big tab (600+ leads) doesn't lag the board.
+  const [cardLimit, setCardLimit] = useState(60);
   const [ppcSearch, setPpcSearch] = useState('');
   const [pipelineSearch, setPipelineSearch] = useState('');
   const [pipelineMapped, setPipelineMapped] = useState(false);
@@ -634,6 +636,9 @@ export default function LandLeadsAdminPage() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; });
   const [calSelectedDay, setCalSelectedDay] = useState(() => new Date().toDateString());
+  // Reset the render cap whenever the tab or filters change, so each view starts
+  // light and only grows when you ask for more.
+  useEffect(() => { setCardLimit(60); }, [activeTab, ppcSearch, pipelineSearch, pipelineMapped, pipelineSort]);
   // Clean View defaults to "newest pushed first"; exiting restores last-activity.
   useEffect(() => {
     setPipelineSort(cleanViewActive ? 'cleanview_desc' : 'activity_desc');
@@ -5466,8 +5471,8 @@ export default function LandLeadsAdminPage() {
             </div>
 
             {/* PPC Leads Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-              {stableOrder(
+            {(() => {
+              const ordered = stableOrder(
                 boardLeads
                   /* PPC Inflow is the unified working tab: it now includes subdivision /
                      OM-Search inflow-stage leads too (they also remain in the Subdivision
@@ -5484,8 +5489,22 @@ export default function LandLeadsAdminPage() {
                   return pipelineSort.endsWith('asc') ? av - bv : bv - av;
                 },
                 `ppc:${pipelineSort}:${pipelineMapped}:${ppcSearch.trim()}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`
-              ).map((lead) => renderLeadCard(lead))}
-            </div>
+              );
+              return (
+                <>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {ordered.slice(0, cardLimit).map((lead) => renderLeadCard(lead))}
+                  </div>
+                  {ordered.length > cardLimit && (
+                    <div className="text-center mt-5">
+                      <button onClick={() => setCardLimit(c => c + 60)} className="px-5 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 text-sm font-semibold">
+                        Show more ({ordered.length - cardLimit} more)
+                      </button>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
 
             {allLeads.filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(s) && l.status !== 'archived'; })()).length === 0 && (
               <div className="text-center py-12 text-slate-400">
@@ -5772,9 +5791,18 @@ export default function LandLeadsAdminPage() {
                   <p className="text-sm mt-1">{bucketAll.length === 0 ? `Leads land here when their status moves into ${cfg.statuses.join(' / ')}.` : 'Try clearing the search or the Mapped filter.'}</p>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {leadsInBucket.map((lead) => renderLeadCard(lead))}
-                </div>
+                <>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {leadsInBucket.slice(0, cardLimit).map((lead) => renderLeadCard(lead))}
+                  </div>
+                  {leadsInBucket.length > cardLimit && (
+                    <div className="text-center mt-5">
+                      <button onClick={() => setCardLimit(c => c + 60)} className="px-5 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 text-sm font-semibold">
+                        Show more ({leadsInBucket.length - cardLimit} more)
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           );
@@ -5976,7 +6004,7 @@ export default function LandLeadsAdminPage() {
                   return pipelineSort.endsWith('asc') ? av - bv : bv - av;
                 },
                 `subdiv:${pipelineSort}:${pipelineMapped}:${subdivSearch.trim()}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`
-              ).map((lead) => renderLeadCard(lead))}
+              ).slice(0, cardLimit).map((lead) => renderLeadCard(lead))}
             </div>
 
             {boardLeads.filter(isSubdivisionInflow).length === 0 && (
@@ -6775,9 +6803,16 @@ export default function LandLeadsAdminPage() {
               {cards.length === 0 ? (
                 <div className="text-center py-16 text-slate-500"><p className="text-lg">No leads match.</p></div>
               ) : (
-                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {cards.map((lead) => renderLeadCard(lead))}
-                </div>
+                <>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {cards.slice(0, cardLimit).map((lead) => renderLeadCard(lead))}
+                  </div>
+                  {cards.length > cardLimit && (
+                    <div className="text-center mt-5">
+                      <button onClick={() => setCardLimit(c => c + 60)} className="px-5 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 text-sm font-semibold">Show more ({cards.length - cardLimit} more)</button>
+                    </div>
+                  )}
+                </>
               )}
 
               {/* Send tracking */}
