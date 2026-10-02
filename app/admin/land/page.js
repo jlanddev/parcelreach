@@ -16,6 +16,7 @@ import DealStrip from '@/components/DealStrip';
 import MondayPushButton from '@/components/MondayPushButton';
 import OfferModal from '@/components/OfferModal';
 import OmSearch from '@/components/OmSearch';
+import CampaignsPanel from '@/components/CampaignsPanel';
 import { timeAgo, channelLabel } from '@/lib/format';
 import { playDing } from '@/lib/sound';
 import { DIRECTIONS, OFFER_DIRECTIONS, GENERAL_DIRECTIONS, FOLLOWUP_BUCKETS, FOLLOWUP_KEYS, LOST_REASONS, formatOffer, mergeScript, firstTouch, touchForStep } from '@/lib/followups';
@@ -5739,21 +5740,7 @@ export default function LandLeadsAdminPage() {
         {/* PIPELINE BUCKETS, Appointment Set / Offer Made / Agreement Sent / Signed Contract / Closed Deal */}
         {/* FOLLOW-UP CAMPAIGNS (engine built in Phase 2) */}
         {activeTab === 'campaigns' && (
-          <div className="space-y-6">
-            <div className="bg-gradient-to-br from-rose-500/10 to-rose-600/5 border border-rose-500/40 rounded-xl p-6">
-              <h2 className="text-2xl font-bold text-rose-300">Follow-Up Campaigns</h2>
-              <p className="text-slate-400 text-sm mt-1">Automated drips for silent and price-far-off leads. Being built next, carefully.</p>
-            </div>
-            <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6 max-w-3xl">
-              <p className="text-slate-300">This is the next phase. Here's exactly what it will do, and the guardrails so it never repeats the old problems (no sends / duplicate bursts):</p>
-              <ul className="mt-4 space-y-2 text-sm text-slate-300 list-disc pl-5">
-                <li>Create named campaigns with a cadence (e.g. <span className="text-white font-medium">twice a week</span> for silent leads, <span className="text-white font-medium">once a month</span> for "price too far off").</li>
-                <li>A lead that goes quiet in PPC Inflow moves into a campaign and out of the inflow, then auto-exits the moment they reply.</li>
-                <li><span className="text-white font-medium">One reliable scheduled sender</span>, strict idempotency (at most one message per scheduled touch), quiet hours, and a dry-run before any real texts go out.</li>
-              </ul>
-              <p className="mt-4 text-xs text-slate-500">Tell Claude "go" on Phase 2 to build this.</p>
-            </div>
-          </div>
+          <CampaignsPanel leads={allLeads} currentUserId={currentUserId} />
         )}
 
         {/* MAPPED & APPOINTMENT SET, physician's-office month calendar */}
