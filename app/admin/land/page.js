@@ -4376,9 +4376,9 @@ export default function LandLeadsAdminPage() {
         </div>
       </div>
 
-      {/* Daily Action Tray: today's due calls/tasks for the logged-in person,
-          forced up top until cleared. Per person (assigned_to === you). */}
-      {(() => {
+      {/* Daily Action Tray: HIDDEN for now (confusing / not working right). The
+          pipeline redesign will replace this. Flip `false` to re-enable. */}
+      {false && (() => {
         const now = Date.now();
         const endToday = new Date(); endToday.setHours(23, 59, 59, 999);
         // Fresh system only: show tasks OUR flows created, never the old
