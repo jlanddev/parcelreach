@@ -637,15 +637,15 @@ export default function LandLeadsAdminPage() {
   const TAB_KEYS = ['ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent', 'campaigns', 'follow-up', 'lost'];
   const [tabSeen, setTabSeen] = useState(() => {
     if (typeof window === 'undefined') return {};
-    const VER = 'v2';
+    const VER = 'v3';
     try {
       const raw = localStorage.getItem('pr_tab_seen');
       const ver = localStorage.getItem('pr_tab_seen_ver');
       if (raw && ver === VER) return JSON.parse(raw);
     } catch {}
-    // Fresh load or upgrade: seed to 48h ago so recent activity (incl. anything
-    // buried overnight) shows as "new" right away instead of being hidden.
-    const seed = Date.now() - 48 * 3600 * 1000;
+    // Clean slate: seed to NOW so the backlog doesn't flood the tabs. Only
+    // activity that happens from here on shows as new.
+    const seed = Date.now();
     const init = {};
     TAB_KEYS.forEach(t => { init[t] = seed; });
     try { localStorage.setItem('pr_tab_seen', JSON.stringify(init)); localStorage.setItem('pr_tab_seen_ver', VER); } catch {}
