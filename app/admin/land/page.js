@@ -4485,7 +4485,7 @@ export default function LandLeadsAdminPage() {
               if (tab === 'unassigned') return ` (${unassignedLeads.length})`;
               if (tab === 'ppc-inflow') return ` (${allLeads.filter(l => ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(up(l)) && l.status !== 'archived').length})`;
               if (tab === 'appointment-set') return ` (${(scheduledTasks || []).filter(t => t.task_type === 'meeting').length})`;
-              if (tab === 'offer-curated') return ` (${allLeads.filter(hasOffer).length})`;
+              if (tab === 'offer-curated') return ` (${allLeads.filter(l => hasOffer(l) && !['OFFER_SENT', 'NEGOTIATING', 'AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(up(l))).length})`;
               if (tab === 'offer-made') return ` (${allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING'].includes(up(l))).length})`;
               if (tab === 'agreement-sent') return ` (${allLeads.filter(l => ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(up(l))).length})`;
               if (tab === 'follow-up') return ` (${allLeads.filter(l => up(l) === 'FOLLOW_UP').length})`;
@@ -5390,7 +5390,7 @@ export default function LandLeadsAdminPage() {
                 const statusOf = (l) => (l.pipeline_status || l.status || '').toUpperCase();
                 const inflow = allLeads.filter(l => ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(statusOf(l)) && l.status !== 'archived').length;
                 const apptSet = (scheduledTasks || []).filter(t => t.task_type === 'meeting').length;
-                const offerCurated = allLeads.filter(l => l.offer_amount != null && Number(l.offer_amount) !== 0).length;
+                const offerCurated = allLeads.filter(l => l.offer_amount != null && Number(l.offer_amount) !== 0 && !['OFFER_SENT', 'NEGOTIATING', 'AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(statusOf(l))).length;
                 const offerMade = allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING'].includes(statusOf(l))).length;
                 const signed = allLeads.filter(l => ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(statusOf(l))).length;
                 const tiles = [
@@ -5696,7 +5696,8 @@ export default function LandLeadsAdminPage() {
             const s = (l.pipeline_status || l.status || '').toUpperCase();
             // Offer Curated is driven by the offer being filled in, not by status.
             if (activeTab === 'offer-curated') {
-              return l.offer_amount != null && Number(l.offer_amount) !== 0;
+              return l.offer_amount != null && Number(l.offer_amount) !== 0
+                && !['OFFER_SENT', 'NEGOTIATING', 'AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(s);
             }
             if (!cfg.statuses.includes(s)) return false;
             if (l.source === 'subdivision' && !bucketIsCrossover) return false;
