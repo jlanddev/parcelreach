@@ -675,7 +675,26 @@ export default function LandLeadsAdminPage() {
     if (s === 'APPT_SET_FOR_JORDAN') return 'appointment-set';
     return 'ppc-inflow';
   };
-  const leadInTabC = (l, tab) => homeTab(l) === tab;
+  // Furthest-stage rank for a lead (higher = deeper in the pipeline).
+  const stageRank = (l) => ({ 'ppc-inflow': 1, 'appointment-set': 2, 'offer-curated': 3, 'offer-made': 4, 'agreement-sent': 5, 'follow-up': 1, 'lost': 0, 'archive': 0 }[homeTab(l)] ?? 1);
+  // One person can have several lead records (they filled out multiple forms).
+  // Keep only each person's furthest-along record, so for notifications they count
+  // once, in the deepest stage they've reached, never in two tabs.
+  const primaryLeadIds = (() => {
+    const groups = {};
+    for (const l of (allLeads || [])) {
+      const key = (l.phone || '').replace(/\D/g, '').slice(-10) || l.id;
+      (groups[key] = groups[key] || []).push(l);
+    }
+    const ids = new Set();
+    for (const k in groups) {
+      const arr = groups[k].slice().sort((a, b) => stageRank(b) - stageRank(a)
+        || (parseTs(b.last_activity_at || b.created_at).getTime() - parseTs(a.last_activity_at || a.created_at).getTime()));
+      ids.add(arr[0].id);
+    }
+    return ids;
+  })();
+  const leadInTabC = (l, tab) => primaryLeadIds.has(l.id) && homeTab(l) === tab;
   // Tab-aware: the label reflects what matters in THAT tab (an appointment-set
   // lead that changed reads "Appointment scheduled", not "We reached out").
   const STAGE_EVENT = {
