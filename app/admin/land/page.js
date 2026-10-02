@@ -4508,17 +4508,17 @@ export default function LandLeadsAdminPage() {
       )}
 
       {/* Tabs */}
-      <div className="bg-slate-800/30 border-b border-slate-700/50 px-6 overflow-x-auto">
-        <div className="flex items-center gap-2 min-w-max">
+      <div className="bg-slate-800/30 border-b border-slate-700/50 px-6">
+        <div className="flex items-center gap-2">
           {(() => {
             // Four left-to-right pipeline stages up front; everything else lives in
             // the "More" overflow menu so the board stays clean.
             const MAIN_TABS = ['ppc-inflow', 'appointment-set', 'offer-made', 'agreement-sent'];
             const overflow = isAdmin
-              ? ['shared-calendar', 'activity-log', 'follow-up', 'lost', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search', 'investors']
-              : ['shared-calendar', 'follow-up', 'lost', 'subdivision-inflow', 'all-leads', 'investors'];
+              ? ['shared-calendar', 'campaigns', 'follow-up', 'lost', 'activity-log', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search', 'investors']
+              : ['shared-calendar', 'campaigns', 'follow-up', 'lost', 'subdivision-inflow', 'all-leads', 'investors'];
             const up = (l) => (l.pipeline_status || l.status || '').toUpperCase();
-            const labelFor = (tab) => tab === 'ppc-inflow' ? 'PPC Inflow' : tab === 'appointment-set' ? 'Mapped & Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Signed Agreement' : tab === 'om-search' ? 'OM Search' : tab === 'campaigns' ? 'Campaigns' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab === 'investors' ? 'Investors' : tab === 'organizations' ? 'Organizations' : tab === 'unassigned' ? 'Unassigned' : tab === 'create-lead' ? 'Create Lead' : tab === 'all-leads' ? 'All Leads' : tab.replace('-', ' ');
+            const labelFor = (tab) => tab === 'ppc-inflow' ? 'PPC Inflow' : tab === 'appointment-set' ? 'Mapped & Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Signed Agreement' : tab === 'om-search' ? 'OM Search' : tab === 'campaigns' ? 'Follow-Up Campaigns' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab === 'investors' ? 'Investors' : tab === 'organizations' ? 'Organizations' : tab === 'unassigned' ? 'Unassigned' : tab === 'create-lead' ? 'Create Lead' : tab === 'all-leads' ? 'All Leads' : tab.replace('-', ' ');
             const countFor = (tab) => {
               if (tab === 'unassigned') return ` (${unassignedLeads.length})`;
               if (tab === 'ppc-inflow') return ` (${allLeads.filter(l => ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(up(l)) && l.status !== 'archived').length})`;
@@ -4542,8 +4542,9 @@ export default function LandLeadsAdminPage() {
             );
             return (
               <>
+                <div className="flex items-center gap-2 overflow-x-auto flex-1 min-w-0">
                 {MAIN_TABS.map((tab, i) => (
-                  <div key={tab} className="flex items-center">
+                  <div key={tab} className="flex items-center flex-shrink-0">
                     {i > 0 && (
                       <svg className="w-4 h-4 text-slate-600 mx-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
@@ -4552,7 +4553,8 @@ export default function LandLeadsAdminPage() {
                     {tabBtn(tab, activeTab === tab)}
                   </div>
                 ))}
-                <div className="relative ml-1">
+                </div>
+                <div className="relative flex-shrink-0 ml-1">
                   <button
                     onClick={() => setMoreOpen(v => !v)}
                     className={`px-4 py-3 font-medium border-b-2 transition whitespace-nowrap inline-flex items-center gap-1 ${overflow.includes(activeTab) ? 'border-blue-500 text-blue-400' : 'border-transparent text-slate-400 hover:text-white'}`}
@@ -5528,6 +5530,25 @@ export default function LandLeadsAdminPage() {
         )}
 
         {/* PIPELINE BUCKETS, Appointment Set / Offer Made / Agreement Sent / Signed Contract / Closed Deal */}
+        {/* FOLLOW-UP CAMPAIGNS (engine built in Phase 2) */}
+        {activeTab === 'campaigns' && (
+          <div className="space-y-6">
+            <div className="bg-gradient-to-br from-rose-500/10 to-rose-600/5 border border-rose-500/40 rounded-xl p-6">
+              <h2 className="text-2xl font-bold text-rose-300">Follow-Up Campaigns</h2>
+              <p className="text-slate-400 text-sm mt-1">Automated drips for silent and price-far-off leads. Being built next, carefully.</p>
+            </div>
+            <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6 max-w-3xl">
+              <p className="text-slate-300">This is the next phase. Here's exactly what it will do, and the guardrails so it never repeats the old problems (no sends / duplicate bursts):</p>
+              <ul className="mt-4 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                <li>Create named campaigns with a cadence (e.g. <span className="text-white font-medium">twice a week</span> for silent leads, <span className="text-white font-medium">once a month</span> for "price too far off").</li>
+                <li>A lead that goes quiet in PPC Inflow moves into a campaign and out of the inflow, then auto-exits the moment they reply.</li>
+                <li><span className="text-white font-medium">One reliable scheduled sender</span>, strict idempotency (at most one message per scheduled touch), quiet hours, and a dry-run before any real texts go out.</li>
+              </ul>
+              <p className="mt-4 text-xs text-slate-500">Tell Claude "go" on Phase 2 to build this.</p>
+            </div>
+          </div>
+        )}
+
         {/* MAPPED & APPOINTMENT SET, physician's-office month calendar */}
         {activeTab === 'appointment-set' && (() => {
           const meetings = (scheduledTasks || []).filter(t => t.task_type === 'meeting');
