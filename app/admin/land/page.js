@@ -742,7 +742,16 @@ export default function LandLeadsAdminPage() {
       if (e) out.push({ lead: l, ...e });
     }
     out.sort((a, b) => b.ts - a.ts);
-    return out;
+    // Collapse duplicate lead records for the same person (same phone) to one row.
+    const seenKey = new Set();
+    const deduped = [];
+    for (const e of out) {
+      const key = (e.lead.phone || '').replace(/\D/g, '').slice(-10) || e.lead.id;
+      if (seenKey.has(key)) continue;
+      seenKey.add(key);
+      deduped.push(e);
+    }
+    return deduped;
   };
   const [ppcSearch, setPpcSearch] = useState('');
   const [pipelineSearch, setPipelineSearch] = useState('');
