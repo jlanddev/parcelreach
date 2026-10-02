@@ -4474,11 +4474,11 @@ export default function LandLeadsAdminPage() {
           {(() => {
             // Four left-to-right pipeline stages up front; everything else lives in
             // the "More" overflow menu so the board stays clean.
-            const MAIN_TABS = ['ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent'];
+            const MAIN_TABS = ['ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent', 'campaigns'];
             const hasOffer = (l) => l.offer_amount != null && Number(l.offer_amount) !== 0;
             const overflow = isAdmin
-              ? ['shared-calendar', 'campaigns', 'follow-up', 'lost', 'activity-log', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search', 'investors']
-              : ['shared-calendar', 'campaigns', 'follow-up', 'lost', 'subdivision-inflow', 'all-leads', 'investors'];
+              ? ['shared-calendar', 'follow-up', 'lost', 'activity-log', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search', 'investors']
+              : ['shared-calendar', 'follow-up', 'lost', 'subdivision-inflow', 'all-leads', 'investors'];
             const up = (l) => (l.pipeline_status || l.status || '').toUpperCase();
             const labelFor = (tab) => tab === 'ppc-inflow' ? 'PPC Inflow' : tab === 'appointment-set' ? 'Mapped & Appointment Set' : tab === 'offer-curated' ? 'Offer Curated' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Signed Contracts' : tab === 'om-search' ? 'OM Search' : tab === 'campaigns' ? 'Follow-Up Campaigns' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab === 'investors' ? 'Investors' : tab === 'organizations' ? 'Organizations' : tab === 'unassigned' ? 'Unassigned' : tab === 'create-lead' ? 'Create Lead' : tab === 'all-leads' ? 'All Leads' : tab.replace('-', ' ');
             const countFor = (tab) => {
@@ -4508,11 +4508,12 @@ export default function LandLeadsAdminPage() {
                 <div className="flex items-center gap-2 overflow-x-auto flex-1 min-w-0">
                 {MAIN_TABS.map((tab, i) => (
                   <div key={tab} className="flex items-center flex-shrink-0">
-                    {i > 0 && (
+                    {i > 0 && tab !== 'campaigns' && (
                       <svg className="w-4 h-4 text-slate-600 mx-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
                       </svg>
                     )}
+                    {tab === 'campaigns' && <span className="w-px h-6 bg-slate-700 mx-2 flex-shrink-0" />}
                     {tabBtn(tab, activeTab === tab)}
                   </div>
                 ))}
