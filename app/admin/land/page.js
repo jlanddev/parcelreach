@@ -4359,6 +4359,8 @@ export default function LandLeadsAdminPage() {
                   }
                 } catch {}
               };
+              return null; /* FollowUpsBell hidden for now: not working right */
+              // eslint-disable-next-line no-unreachable
               return <FollowUpsBell tasks={dueTasks} leadsById={leadsById} onOpenLead={(l) => navigateToLeadCard(l)} onComplete={completeTask} />;
             })()}
             {currentUserId && <NotificationBell userId={currentUserId} onOpen={handleOpenNotification} />}
