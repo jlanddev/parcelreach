@@ -10,9 +10,11 @@ import { supabase } from '@/lib/supabase';
 
 const BLANK_STEP = () => ({ day: 0, type: 'text', message: '', label: '' });
 
-export default function CampaignsPanel({ leads = [], currentUserId }) {
+export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCard, scheduledTasks = [], onOpenLead }) {
   const [campaigns, setCampaigns] = useState(null);
   const [counts, setCounts] = useState({}); // campaignId -> { active, pending }
+  const [openCampaign, setOpenCampaign] = useState(null); // campaign being viewed in detail
+  const [enrolledIds, setEnrolledIds] = useState(new Set());
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -36,6 +38,16 @@ export default function CampaignsPanel({ leads = [], currentUserId }) {
     setCounts(c);
   };
   useEffect(() => { load(); }, []);
+
+  const leadsById = useMemo(() => Object.fromEntries(leads.map(l => [l.id, l])), [leads]);
+  const openDetail = async (cp) => {
+    setOpenCampaign(cp);
+    setEnrolledIds(new Set());
+    const { data } = await supabase.from('campaign_enrollments').select('lead_id, status').eq('campaign_id', cp.id).eq('status', 'active');
+    setEnrolledIds(new Set((data || []).map(e => e.lead_id)));
+  };
+  // refresh enrolled set when campaigns reload while a detail is open
+  useEffect(() => { if (openCampaign) { const cp = (campaigns || []).find(c => c.id === openCampaign.id); if (cp) openDetail(cp); } /* eslint-disable-next-line */ }, [campaigns]);
 
   const startNew = () => { setEditing({ id: null, name: '', description: '', steps: [BLANK_STEP()], active: true }); setShowCreate(true); };
   const startEdit = (cp) => { setEditing({ id: cp.id, name: cp.name, description: cp.description || '', steps: (Array.isArray(cp.steps) && cp.steps.length ? cp.steps : [BLANK_STEP()]).map(s => ({ day: s.day ?? 0, type: s.type || 'text', message: s.message || '', label: s.label || '' })), active: cp.active !== false }); setShowCreate(true); };
@@ -118,8 +130,100 @@ export default function CampaignsPanel({ leads = [], currentUserId }) {
     }).slice(0, 80);
   }, [leads, enrollSearch]);
 
+  // ---- Campaign detail view data ----
+  const enrolledLeads = openCampaign ? leads.filter(l => enrolledIds.has(l.id)).sort((a, b) => new Date(b.last_activity_at || b.created_at) - new Date(a.last_activity_at || a.created_at)) : [];
+  const campaignCalls = openCampaign ? (scheduledTasks || []).filter(t => t.status === 'pending' && (t.source === 'campaign' || /^campaign:/i.test(t.description || '')) && enrolledIds.has(t.lead_id)).sort((a, b) => new Date(a.due_at) - new Date(b.due_at)) : [];
+  const repliesWaiting = enrolledLeads.filter(l => l.last_contact_dir === 'inbound').length;
+  const fmtWhen = (iso) => { const d = new Date(iso); const today = new Date().toDateString() === d.toDateString(); return (today ? 'Today' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })) + ' ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
+
+  const detailView = openCampaign ? (
+    <div className="space-y-5">
+      <div>
+        <button onClick={() => setOpenCampaign(null)} className="text-sm text-slate-300 hover:text-white inline-flex items-center gap-1.5 mb-3">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+          All campaigns
+        </button>
+        <div className="bg-gradient-to-br from-rose-500/10 to-rose-600/5 border border-rose-500/40 rounded-xl p-6">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <h2 className="text-2xl font-bold text-rose-300">{openCampaign.name}</h2>
+              {openCampaign.description && <p className="text-slate-400 text-sm mt-1">{openCampaign.description}</p>}
+              <div className="mt-2 flex items-center gap-4 text-sm text-slate-300">
+                <span><span className="font-bold text-white">{enrolledLeads.length}</span> enrolled</span>
+                <span><span className="font-bold text-white">{campaignCalls.length}</span> calls to make</span>
+                {repliesWaiting > 0 && <span className="text-cyan-300"><span className="font-bold">{repliesWaiting}</span> replied, owe a response</span>}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => { setEnrollFor(openCampaign); setEnrollSel(new Set()); setEnrollSearch(''); }} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white">Enroll leads</button>
+              <button onClick={() => scanSilent(openCampaign)} disabled={busy} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 disabled:opacity-50">Scan silent (7d)</button>
+              <button onClick={() => startEdit(openCampaign)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">Edit sequence</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Sequence */}
+      <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-5">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400 mb-3">Message &amp; follow-up sequence</h3>
+        <div className="space-y-2">
+          {(Array.isArray(openCampaign.steps) ? openCampaign.steps : []).map((s, i) => (
+            <div key={i} className="flex items-start gap-3">
+              <span className="flex-shrink-0 text-xs font-bold text-slate-400 w-14">Day {s.day ?? 0}</span>
+              <span className={`flex-shrink-0 text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${s.type === 'call' ? 'bg-amber-500/20 text-amber-300' : 'bg-cyan-500/20 text-cyan-300'}`}>{s.type === 'call' ? 'Call' : 'Text'}</span>
+              <span className="text-sm text-slate-200">{s.type === 'call' ? (s.label || 'Call') : s.message}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Calls to make */}
+      {campaignCalls.length > 0 && (
+        <div className="bg-amber-500/5 border border-amber-500/40 rounded-xl p-5">
+          <h3 className="text-sm font-semibold uppercase tracking-wide text-amber-300 mb-3 flex items-center gap-2">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11 11 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
+            Calls to make
+          </h3>
+          <div className="space-y-2">
+            {campaignCalls.map(t => {
+              const lead = leadsById[t.lead_id];
+              const overdue = new Date(t.due_at) < new Date();
+              return (
+                <div key={t.id} className="flex items-center justify-between gap-3 bg-slate-800/60 border border-slate-700/50 rounded-lg px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="text-sm text-white truncate">Follow-up call: <span className="font-semibold">{lead?.full_name || lead?.name || 'Lead'}</span></div>
+                    <div className="text-xs text-slate-400 truncate">{openCampaign.name} · <span className={overdue ? 'text-amber-300' : ''}>{overdue ? 'Overdue' : 'Due'} {fmtWhen(t.due_at)}</span></div>
+                  </div>
+                  <button onClick={() => lead && onOpenLead && onOpenLead(lead)} className="flex-shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white">Open &amp; call</button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Enrolled leads */}
+      <div>
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400 mb-3">Enrolled leads ({enrolledLeads.length})</h3>
+        {enrolledLeads.length === 0 ? (
+          <div className="text-center py-12 text-slate-500 border border-dashed border-slate-700 rounded-xl">No leads enrolled yet. Use "Enroll leads" or "Scan silent".</div>
+        ) : renderLeadCard ? (
+          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">{enrolledLeads.map(l => <div key={l.id}>{renderLeadCard(l)}</div>)}</div>
+        ) : (
+          <div className="space-y-2">{enrolledLeads.map(l => (
+            <button key={l.id} onClick={() => onOpenLead && onOpenLead(l)} className="w-full text-left bg-slate-800/60 border border-slate-700/50 rounded-lg px-3 py-2 hover:bg-slate-700/60">
+              <div className="text-sm text-white">{l.full_name || l.name}</div>
+              <div className="text-xs text-slate-400">{l.phone}{l.last_contact_dir === 'inbound' ? ' · replied, owe a response' : ''}</div>
+            </button>
+          ))}</div>
+        )}
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div className="space-y-5">
+      {openCampaign ? detailView : (<>
       <div className="bg-gradient-to-br from-rose-500/10 to-rose-600/5 border border-rose-500/40 rounded-xl p-6 flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h2 className="text-2xl font-bold text-rose-300">Follow-Up Campaigns</h2>
@@ -145,9 +249,9 @@ export default function CampaignsPanel({ leads = [], currentUserId }) {
           {campaigns.map(cp => (
             <div key={cp.id} className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-5">
               <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
+                <div className="min-w-0 cursor-pointer" onClick={() => openDetail(cp)}>
                   <div className="flex items-center gap-2">
-                    <h3 className="text-lg font-bold text-white">{cp.name}</h3>
+                    <h3 className="text-lg font-bold text-white hover:text-rose-200">{cp.name}</h3>
                     <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full ${cp.active ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-600/40 text-slate-400'}`}>{cp.active ? 'Active' : 'Paused'}</span>
                   </div>
                   {cp.description && <p className="text-sm text-slate-400 mt-1">{cp.description}</p>}
@@ -169,6 +273,7 @@ export default function CampaignsPanel({ leads = [], currentUserId }) {
           ))}
         </div>
       )}
+      </>)}
 
       {/* Create / edit modal */}
       {showCreate && editing && (

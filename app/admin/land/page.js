@@ -4669,7 +4669,9 @@ export default function LandLeadsAdminPage() {
               return '';
             };
             // New-activity count per tab (shares the same event engine as the panel).
-            const newCountFor = (tab) => tabEventsFor(tab).length;
+            // Campaigns bubbles on due campaign CALLS so they get made.
+            const dueCampaignCalls = (scheduledTasks || []).filter(t => t.status === 'pending' && (t.source === 'campaign' || /^campaign:/i.test(t.description || '')) && new Date(t.due_at) <= new Date()).length;
+            const newCountFor = (tab) => tab === 'campaigns' ? dueCampaignCalls : tabEventsFor(tab).length;
             const Bubble = ({ n }) => n > 0 ? (
               <span className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[11px] font-bold align-middle">{n > 99 ? '99+' : n}</span>
             ) : null;
@@ -5762,7 +5764,7 @@ export default function LandLeadsAdminPage() {
         {/* PIPELINE BUCKETS, Appointment Set / Offer Made / Agreement Sent / Signed Contract / Closed Deal */}
         {/* FOLLOW-UP CAMPAIGNS (engine built in Phase 2) */}
         {activeTab === 'campaigns' && (
-          <CampaignsPanel leads={allLeads} currentUserId={currentUserId} />
+          <CampaignsPanel leads={allLeads} currentUserId={currentUserId} renderLeadCard={renderLeadCard} scheduledTasks={scheduledTasks} onOpenLead={navigateToLeadCard} />
         )}
 
         {/* MAPPED & APPOINTMENT SET, physician's-office month calendar */}

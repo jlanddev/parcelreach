@@ -20,7 +20,7 @@ export async function POST(request) {
     if (!campaignId) return NextResponse.json({ ok: false, error: 'campaignId required' }, { status: 400 });
 
     const sb = supabaseAdmin();
-    const { data: campaign, error: cErr } = await sb.from('campaigns').select('id, steps, active').eq('id', campaignId).maybeSingle();
+    const { data: campaign, error: cErr } = await sb.from('campaigns').select('id, name, steps, active').eq('id', campaignId).maybeSingle();
     if (cErr || !campaign) return NextResponse.json({ ok: false, error: 'Campaign not found' }, { status: 404 });
     const steps = Array.isArray(campaign.steps) ? campaign.steps : [];
 
@@ -65,10 +65,13 @@ export async function POST(request) {
         const dayOffset = Number(step.day) || 0;
         const dueAt = new Date(Date.now() + dayOffset * DAY).toISOString();
         if (step.type === 'call') {
-          await sb.from('scheduled_tasks').insert({
-            lead_id: lead.id, task_type: 'callback', title: step.label || 'Campaign call',
-            description: 'Campaign step', due_at: dueAt, status: 'pending', priority: 'normal',
-          }).then(() => { calls++; }, () => {});
+          const callRow = {
+            lead_id: lead.id, task_type: 'callback', title: step.label || `Follow-up call: ${campaign.name}`,
+            description: `Campaign: ${campaign.name}`, due_at: dueAt, status: 'pending', priority: 'normal', source: 'campaign',
+          };
+          let { error: ce } = await sb.from('scheduled_tasks').insert(callRow);
+          if (ce) { const { source, ...noSrc } = callRow; await sb.from('scheduled_tasks').insert(noSrc).then(() => {}, () => {}); }
+          calls++;
         } else {
           textRows.push({
             enrollment_id: enr.id, lead_id: lead.id, campaign_id: campaignId, step_index: i,
