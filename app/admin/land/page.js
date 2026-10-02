@@ -648,6 +648,47 @@ export default function LandLeadsAdminPage() {
     try { localStorage.setItem('pr_tab_seen', JSON.stringify(next)); } catch {}
     return next;
   });
+  // Build the "what's new" event list for a tab: which leads changed since it was
+  // last seen, and WHAT changed (new lead / new message / reached out / updated).
+  const _up = (l) => (l.pipeline_status || l.status || '').toUpperCase();
+  const _hasOffer = (l) => l.offer_amount != null && Number(l.offer_amount) !== 0;
+  const leadInTabC = (l, tab) => {
+    if ((l.status || '').toLowerCase() === 'archived') return tab === 'archive';
+    const s = _up(l);
+    const early = ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'];
+    switch (tab) {
+      case 'ppc-inflow': return early.includes(s);
+      case 'appointment-set': return s === 'APPT_SET_FOR_JORDAN';
+      case 'offer-curated': return _hasOffer(l) && [...early, 'APPT_SET_FOR_JORDAN'].includes(s);
+      case 'offer-made': return ['OFFER_SENT', 'NEGOTIATING'].includes(s);
+      case 'agreement-sent': return ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(s);
+      case 'follow-up': return s === 'FOLLOW_UP';
+      case 'lost': return s === 'LOST';
+      default: return false;
+    }
+  };
+  const eventKind = (l, seen) => {
+    const created = l.created_at ? parseTs(l.created_at).getTime() : 0;
+    const contact = l.last_contact_at ? parseTs(l.last_contact_at).getTime() : 0;
+    const act = l.last_activity_at ? parseTs(l.last_activity_at).getTime() : 0;
+    if (created > seen) return { kind: 'New lead', ts: created, color: 'text-emerald-300', dot: 'bg-emerald-400' };
+    if (contact > seen && l.last_contact_dir === 'inbound') return { kind: 'New message', ts: contact, color: 'text-cyan-300', dot: 'bg-cyan-400' };
+    if (contact > seen && l.last_contact_dir === 'outbound') return { kind: 'We reached out', ts: contact, color: 'text-slate-300', dot: 'bg-slate-400' };
+    if (act > seen) return { kind: 'Updated', ts: act, color: 'text-amber-300', dot: 'bg-amber-400' };
+    return null;
+  };
+  const tabEventsFor = (tab) => {
+    const seen = tabSeen[tab];
+    if (seen == null) return [];
+    const out = [];
+    for (const l of (allLeads || [])) {
+      if (!leadInTabC(l, tab)) continue;
+      const e = eventKind(l, seen);
+      if (e) out.push({ lead: l, ...e });
+    }
+    out.sort((a, b) => b.ts - a.ts);
+    return out;
+  };
   const [ppcSearch, setPpcSearch] = useState('');
   const [pipelineSearch, setPipelineSearch] = useState('');
   const [pipelineMapped, setPipelineMapped] = useState(false);
@@ -659,8 +700,6 @@ export default function LandLeadsAdminPage() {
   // Reset the render cap whenever the tab or filters change, so each view starts
   // light and only grows when you ask for more.
   useEffect(() => { setCardLimit(60); }, [activeTab, ppcSearch, pipelineSearch, pipelineMapped, pipelineSort]);
-  // Opening a tab marks it seen, clearing its red bubble.
-  useEffect(() => { if (activeTab) markTabSeen(activeTab); }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
   // Clean View defaults to "newest pushed first"; exiting restores last-activity.
   useEffect(() => {
     setPipelineSort(cleanViewActive ? 'cleanview_desc' : 'activity_desc');
@@ -4522,34 +4561,8 @@ export default function LandLeadsAdminPage() {
               if (tab === 'investors') return ` (${allLeads.filter(l => l.source === 'go-west-lands').length})`;
               return '';
             };
-            // Does a lead belong to this tab's working set? (used for new-activity bubbles)
-            const leadInTab = (l, tab) => {
-              if ((l.status || '').toLowerCase() === 'archived') return tab === 'archive';
-              const s = up(l);
-              const early = ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'];
-              switch (tab) {
-                case 'ppc-inflow': return early.includes(s);
-                case 'appointment-set': return s === 'APPT_SET_FOR_JORDAN';
-                case 'offer-curated': return hasOffer(l) && [...early, 'APPT_SET_FOR_JORDAN'].includes(s);
-                case 'offer-made': return ['OFFER_SENT', 'NEGOTIATING'].includes(s);
-                case 'agreement-sent': return ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(s);
-                case 'follow-up': return s === 'FOLLOW_UP';
-                case 'lost': return s === 'LOST';
-                default: return false;
-              }
-            };
-            // Count of leads in a tab with activity newer than the last time it was opened.
-            const newCountFor = (tab) => {
-              const seen = tabSeen[tab];
-              if (seen == null) return 0;
-              let n = 0;
-              for (const l of allLeads) {
-                if (!leadInTab(l, tab)) continue;
-                const ts = l.last_activity_at ? parseTs(l.last_activity_at).getTime() : 0;
-                if (ts > seen) n += 1;
-              }
-              return n;
-            };
+            // New-activity count per tab (shares the same event engine as the panel).
+            const newCountFor = (tab) => tabEventsFor(tab).length;
             const Bubble = ({ n }) => n > 0 ? (
               <span className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[11px] font-bold align-middle">{n > 99 ? '99+' : n}</span>
             ) : null;
@@ -4609,6 +4622,35 @@ export default function LandLeadsAdminPage() {
       </div>
 
       <div className="p-6">
+        {/* WHAT'S NEW panel: what changed in this tab since you last looked. */}
+        {(() => {
+          const events = tabEventsFor(activeTab);
+          if (events.length === 0) return null;
+          const fmt = (ts) => { const m = Math.round((Date.now() - ts) / 60000); if (m < 60) return `${m}m ago`; const h = Math.round(m / 60); if (h < 24) return `${h}h ago`; return `${Math.round(h / 24)}d ago`; };
+          return (
+            <div className="mb-5 bg-slate-800/60 border border-slate-700 rounded-xl overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-700/70 bg-slate-800">
+                <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                  <span className="inline-flex items-center justify-center min-w-[20px] h-[20px] px-1 rounded-full bg-red-500 text-white text-[11px] font-bold">{events.length}</span>
+                  New since you last looked
+                </div>
+                <button onClick={() => markTabSeen(activeTab)} className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">Mark all seen</button>
+              </div>
+              <div className="max-h-56 overflow-y-auto divide-y divide-slate-700/50">
+                {events.slice(0, 25).map(ev => (
+                  <button key={ev.lead.id} onClick={() => navigateToLeadCard(ev.lead)} className="w-full text-left px-4 py-2.5 hover:bg-slate-700/40 flex items-center gap-3">
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${ev.dot}`} />
+                    <span className={`text-xs font-semibold uppercase tracking-wide flex-shrink-0 ${ev.color}`}>{ev.kind}</span>
+                    <span className="text-sm text-white truncate">{ev.lead.full_name || ev.lead.name || 'Lead'}</span>
+                    {(ev.lead.last_contact_preview && ev.kind === 'New message') && <span className="text-xs text-slate-400 truncate hidden md:inline">“{ev.lead.last_contact_preview}”</span>}
+                    <span className="ml-auto text-xs text-slate-500 flex-shrink-0">{fmt(ev.ts)}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* DAILY RUNDOWN TAB */}
         {activeTab === 'daily-rundown' && (
           <div className="space-y-6">
