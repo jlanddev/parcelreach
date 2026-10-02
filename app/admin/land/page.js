@@ -630,6 +630,10 @@ export default function LandLeadsAdminPage() {
   const [pipelineSearch, setPipelineSearch] = useState('');
   const [pipelineMapped, setPipelineMapped] = useState(false);
   const [pipelineSort, setPipelineSort] = useState('activity_desc');
+  // Overflow ("More") menu for secondary tabs, and appointment-calendar state.
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [calMonth, setCalMonth] = useState(() => { const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; });
+  const [calSelectedDay, setCalSelectedDay] = useState(() => new Date().toDateString());
   // Clean View defaults to "newest pushed first"; exiting restores last-activity.
   useEffect(() => {
     setPipelineSort(cleanViewActive ? 'cleanview_desc' : 'activity_desc');
@@ -905,13 +909,12 @@ export default function LandLeadsAdminPage() {
     if (isSubdivisionInflow(lead)) return 'subdivision-inflow';
     if (s === 'FOLLOW_UP') return 'follow-up';
     if (s === 'LOST') return 'lost';
-    if (s === 'OFFER_CURATED') return 'offer-curated';
     if (s === 'APPT_SET_FOR_JORDAN') return 'appointment-set';
     if (['OFFER_SENT', 'NEGOTIATING'].includes(s)) return 'offer-made';
-    if (s === 'AGREEMENT_SENT') return 'agreement-sent';
-    if (s === 'UNDER_CONTRACT') return 'signed-contract';
-    if (s === 'CLOSED') return 'closed-deal';
-    if (['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s)) return 'ppc-inflow';
+    // Signed Agreement = the end of the pipeline (agreement out, signed, closed).
+    if (['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(s)) return 'agreement-sent';
+    // Offer Curated folds back into PPC Inflow (pre-appointment work).
+    if (['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(s)) return 'ppc-inflow';
     return 'all-leads'; // DEAD / NOT_INTERESTED / QUALIFIED / anything else
   };
 
@@ -928,7 +931,14 @@ export default function LandLeadsAdminPage() {
     setPipelineSearch('');
     setPpcSearch('');
     setPipelineMapped(false);
-    setActiveTab(tabForLead(lead));
+    const dest = tabForLead(lead);
+    // On the appointment calendar, select the day this lead's meeting sits on so
+    // its card is actually rendered (cards only show for the selected day).
+    if (dest === 'appointment-set') {
+      const mtg = (scheduledTasks || []).find(t => t.task_type === 'meeting' && t.lead_id === lead.id && t.due_at);
+      if (mtg) { const d = new Date(mtg.due_at); setCalMonth(new Date(d.getFullYear(), d.getMonth(), 1)); setCalSelectedDay(d.toDateString()); }
+    }
+    setActiveTab(dest);
     setHighlightLeadId(lead.id);
     let tries = 0;
     const find = () => {
@@ -4501,73 +4511,74 @@ export default function LandLeadsAdminPage() {
       <div className="bg-slate-800/30 border-b border-slate-700/50 px-6 overflow-x-auto">
         <div className="flex items-center gap-2 min-w-max">
           {(() => {
-            // Pipeline buckets render east-to-west between Daily Rundown and the other tabs,
-            // with arrow chevrons between them to visualize lead flow.
-            const PIPELINE_TABS = ['ppc-inflow', 'offer-curated', 'appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'];
-            const allTabs = isAdmin
-              ? ['shared-calendar', 'activity-log', ...PIPELINE_TABS, 'follow-up', 'lost', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search', 'investors']
-              : ['shared-calendar', ...PIPELINE_TABS, 'follow-up', 'lost', 'subdivision-inflow', 'all-leads', 'investors'];
-            return allTabs.map((tab, i) => {
-              const prevTab = allTabs[i - 1];
-              const showChevron = PIPELINE_TABS.includes(tab) && PIPELINE_TABS.includes(prevTab);
-              return (
-                <div key={tab} className="flex items-center">
-                  {showChevron && (
-                    <svg className="w-4 h-4 text-slate-600 mx-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
-                    </svg>
-                  )}
+            // Four left-to-right pipeline stages up front; everything else lives in
+            // the "More" overflow menu so the board stays clean.
+            const MAIN_TABS = ['ppc-inflow', 'appointment-set', 'offer-made', 'agreement-sent'];
+            const overflow = isAdmin
+              ? ['shared-calendar', 'activity-log', 'follow-up', 'lost', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search', 'investors']
+              : ['shared-calendar', 'follow-up', 'lost', 'subdivision-inflow', 'all-leads', 'investors'];
+            const up = (l) => (l.pipeline_status || l.status || '').toUpperCase();
+            const labelFor = (tab) => tab === 'ppc-inflow' ? 'PPC Inflow' : tab === 'appointment-set' ? 'Mapped & Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Signed Agreement' : tab === 'om-search' ? 'OM Search' : tab === 'campaigns' ? 'Campaigns' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab === 'investors' ? 'Investors' : tab === 'organizations' ? 'Organizations' : tab === 'unassigned' ? 'Unassigned' : tab === 'create-lead' ? 'Create Lead' : tab === 'all-leads' ? 'All Leads' : tab.replace('-', ' ');
+            const countFor = (tab) => {
+              if (tab === 'unassigned') return ` (${unassignedLeads.length})`;
+              if (tab === 'ppc-inflow') return ` (${allLeads.filter(l => ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(up(l)) && l.status !== 'archived').length})`;
+              if (tab === 'appointment-set') return ` (${allLeads.filter(l => up(l) === 'APPT_SET_FOR_JORDAN').length})`;
+              if (tab === 'offer-made') return ` (${allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING'].includes(up(l))).length})`;
+              if (tab === 'agreement-sent') return ` (${allLeads.filter(l => ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(up(l))).length})`;
+              if (tab === 'follow-up') return ` (${allLeads.filter(l => up(l) === 'FOLLOW_UP').length})`;
+              if (tab === 'lost') return ` (${allLeads.filter(l => up(l) === 'LOST').length})`;
+              if (tab === 'subdivision-inflow') return ` (${allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived').length})`;
+              if (tab === 'archive') return ` (${allLeads.filter(l => l.status === 'archived').length})`;
+              if (tab === 'investors') return ` (${allLeads.filter(l => l.source === 'go-west-lands').length})`;
+              return '';
+            };
+            const tabBtn = (tab, active) => (
+              <button
+                onClick={() => { setActiveTab(tab); setMoreOpen(false); }}
+                className={`px-4 py-3 font-medium border-b-2 transition whitespace-nowrap ${active ? 'border-blue-500 text-blue-400' : 'border-transparent text-slate-400 hover:text-white'}`}
+              >
+                {labelFor(tab)}{countFor(tab)}
+              </button>
+            );
+            return (
+              <>
+                {MAIN_TABS.map((tab, i) => (
+                  <div key={tab} className="flex items-center">
+                    {i > 0 && (
+                      <svg className="w-4 h-4 text-slate-600 mx-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
+                      </svg>
+                    )}
+                    {tabBtn(tab, activeTab === tab)}
+                  </div>
+                ))}
+                <div className="relative ml-1">
                   <button
-                    onClick={() => setActiveTab(tab)}
-                    className={`px-4 py-3 font-medium capitalize border-b-2 transition ${
-                      activeTab === tab
-                        ? 'border-blue-500 text-blue-400'
-                        : 'border-transparent text-slate-400 hover:text-white'
-                    }`}
+                    onClick={() => setMoreOpen(v => !v)}
+                    className={`px-4 py-3 font-medium border-b-2 transition whitespace-nowrap inline-flex items-center gap-1 ${overflow.includes(activeTab) ? 'border-blue-500 text-blue-400' : 'border-transparent text-slate-400 hover:text-white'}`}
                   >
-              {tab === 'daily-rundown' && (
-                <svg className="w-4 h-4 inline-block mr-1 -mt-0.5" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-                </svg>
-              )}
-              {tab === 'ppc-inflow' && (
-                <svg className="w-4 h-4 inline-block mr-1 -mt-0.5" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M3 13h2v8H3v-8zm4-6h2v14H7V7zm4-4h2v18h-2V3zm4 9h2v9h-2v-9zm4-3h2v12h-2V9z"/>
-                </svg>
-              )}
-              {tab === 'subdivision-inflow' && (
-                <svg className="w-4 h-4 inline-block mr-1 -mt-0.5" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M1 22h4V11H1v11zm6-7h4v7H7v-7zm6-4h4v11h-4V11zm6-5h4v16h-4V6z"/>
-                </svg>
-              )}
-              {tab === 'archive' && (
-                <svg className="w-4 h-4 inline-block mr-1 -mt-0.5" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M20.54 5.23l-1.39-1.68C18.88 3.21 18.47 3 18 3H6c-.47 0-.88.21-1.16.55L3.46 5.23C3.17 5.57 3 6.02 3 6.5V19c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6.5c0-.48-.17-.93-.46-1.27zM12 17.5L6.5 12H10v-2h4v2h3.5L12 17.5zM5.12 5l.81-1h12l.94 1H5.12z"/>
-                </svg>
-              )}
-              {tab === 'session-analytics' && (
-                <svg className="w-4 h-4 inline-block mr-1 -mt-0.5" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M11 7h2v10h-2zm4 4h2v6h-2zM7 9h2v8H7zm12-7H5c-1.1 0-2 .9-2 2v18l4-4h13c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
-                </svg>
-              )}
-              {tab === 'om-search' ? 'OM Search' : tab === 'campaigns' ? 'Campaigns' : tab === 'daily-rundown' ? 'Daily Rundown' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'offer-curated' ? 'Offer Curated' : tab === 'appointment-set' ? 'Appointment Set' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Agreement Sent' : tab === 'signed-contract' ? 'Signed Contract' : tab === 'closed-deal' ? 'Closed Deal' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab === 'investors' ? 'Investors' : tab.replace('-', ' ')}
-              {tab === 'unassigned' && ` (${unassignedLeads.length})`}
-              {tab === 'ppc-inflow' && ` (${allLeads.filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })()).length})`}
-              {tab === 'offer-curated' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'OFFER_CURATED').length})`}
-              {tab === 'appointment-set' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN').length})`}
-              {tab === 'offer-made' && ` (${allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING'].includes((l.pipeline_status || l.status || '').toUpperCase())).length})`}
-              {tab === 'agreement-sent' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'AGREEMENT_SENT').length})`}
-              {tab === 'signed-contract' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'UNDER_CONTRACT').length})`}
-              {tab === 'closed-deal' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'CLOSED').length})`}
-              {tab === 'follow-up' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'FOLLOW_UP').length})`}
-              {tab === 'lost' && ` (${allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'LOST').length})`}
-              {tab === 'subdivision-inflow' && ` (${allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived').length})`}
-              {tab === 'archive' && ` (${allLeads.filter(l => l.status === 'archived').length})`}
-              {tab === 'investors' && ` (${allLeads.filter(l => l.source === 'go-west-lands').length})`}
+                    More
+                    <svg className={`w-4 h-4 transition-transform ${moreOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                   </button>
+                  {moreOpen && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setMoreOpen(false)} />
+                      <div className="absolute right-0 mt-1 z-50 bg-slate-800 border border-slate-700 rounded-lg shadow-2xl py-1 min-w-[210px] max-h-[70vh] overflow-y-auto">
+                        {overflow.map(tab => (
+                          <button
+                            key={tab}
+                            onClick={() => { setActiveTab(tab); setMoreOpen(false); }}
+                            className={`block w-full text-left px-4 py-2 text-sm ${activeTab === tab ? 'bg-blue-600/20 text-blue-300' : 'text-slate-300 hover:bg-slate-700'}`}
+                          >
+                            {labelFor(tab)}{countFor(tab)}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
-              );
-            });
+              </>
+            );
           })()}
         </div>
       </div>
@@ -5412,19 +5423,15 @@ export default function LandLeadsAdminPage() {
               (() => {
                 // Pipeline funnel tiles. Click any to jump straight to that bucket.
                 const statusOf = (l) => (l.pipeline_status || l.status || '').toUpperCase();
-                const inflow = allLeads.filter(l => ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(statusOf(l)) && l.status !== 'archived').length;
+                const inflow = allLeads.filter(l => ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(statusOf(l)) && l.status !== 'archived').length;
                 const apptSet = allLeads.filter(l => statusOf(l) === 'APPT_SET_FOR_JORDAN').length;
                 const offerMade = allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING'].includes(statusOf(l))).length;
-                const agreement = allLeads.filter(l => statusOf(l) === 'AGREEMENT_SENT').length;
-                const signed = allLeads.filter(l => statusOf(l) === 'UNDER_CONTRACT').length;
-                const closed = allLeads.filter(l => statusOf(l) === 'CLOSED').length;
+                const signed = allLeads.filter(l => ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(statusOf(l))).length;
                 const tiles = [
-                  { label: 'PPC Inflow',      count: inflow,    tab: 'ppc-inflow',      color: 'orange'  },
-                  { label: 'Appointments Set',count: apptSet,   tab: 'appointment-set', color: 'green'   },
-                  { label: 'Offer Made',      count: offerMade, tab: 'offer-made',      color: 'purple'  },
-                  { label: 'Agreement Sent',  count: agreement, tab: 'agreement-sent',  color: 'amber'   },
-                  { label: 'Signed Contract', count: signed,    tab: 'signed-contract', color: 'blue'    },
-                  { label: 'Closed Deals',    count: closed,    tab: 'closed-deal',     color: 'emerald' },
+                  { label: 'PPC Inflow',             count: inflow,    tab: 'ppc-inflow',      color: 'orange'  },
+                  { label: 'Mapped & Appt Set',      count: apptSet,   tab: 'appointment-set', color: 'green'   },
+                  { label: 'Offer Made',             count: offerMade, tab: 'offer-made',      color: 'purple'  },
+                  { label: 'Signed Agreement',       count: signed,    tab: 'agreement-sent',  color: 'emerald' },
                 ];
                 const colorMap = {
                   orange:  'from-orange-500/20 to-orange-600/20 border-orange-500/30 text-orange-400',
@@ -5435,7 +5442,7 @@ export default function LandLeadsAdminPage() {
                   emerald: 'from-emerald-500/20 to-emerald-600/20 border-emerald-500/30 text-emerald-400',
                 };
                 return (
-                  <div className="grid grid-cols-6 gap-3">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     {tiles.map(t => (
                       <button
                         key={t.tab}
@@ -5497,7 +5504,7 @@ export default function LandLeadsAdminPage() {
                   /* PPC Inflow is the unified working tab: it now includes subdivision /
                      OM-Search inflow-stage leads too (they also remain in the Subdivision
                      Inflow tab as a filtered view). */
-                  .filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })())
+                  .filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(s) && l.status !== 'archived'; })())
                   .filter(l => leadMatchesSearch(l, ppcSearch))
                   .filter(l => !pipelineMapped || l.map_uploaded)
                   .filter(passesEngagement),
@@ -5512,7 +5519,7 @@ export default function LandLeadsAdminPage() {
               ).map((lead) => renderLeadCard(lead))}
             </div>
 
-            {allLeads.filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(s) && l.status !== 'archived'; })()).length === 0 && (
+            {allLeads.filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(s) && l.status !== 'archived'; })()).length === 0 && (
               <div className="text-center py-12 text-slate-400">
                 No PPC leads yet. Leads from Haven Ground form will appear here.
               </div>
@@ -5521,7 +5528,109 @@ export default function LandLeadsAdminPage() {
         )}
 
         {/* PIPELINE BUCKETS, Appointment Set / Offer Made / Agreement Sent / Signed Contract / Closed Deal */}
-        {['offer-curated', 'appointment-set', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal', 'follow-up', 'lost'].includes(activeTab) && (() => {
+        {/* MAPPED & APPOINTMENT SET, physician's-office month calendar */}
+        {activeTab === 'appointment-set' && (() => {
+          const meetings = (scheduledTasks || []).filter(t => t.task_type === 'meeting');
+          const byDay = {};
+          meetings.forEach(t => { if (!t.due_at) return; const k = new Date(t.due_at).toDateString(); (byDay[k] = byDay[k] || []).push(t); });
+          const first = new Date(calMonth.getFullYear(), calMonth.getMonth(), 1);
+          const startDow = first.getDay();
+          const daysInMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 0).getDate();
+          const cells = [];
+          for (let i = 0; i < startDow; i++) cells.push(null);
+          for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(calMonth.getFullYear(), calMonth.getMonth(), d));
+          const todayStr = new Date().toDateString();
+          const monthLabel = calMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+          const totalThisMonth = cells.filter(Boolean).reduce((n, d) => n + (byDay[d.toDateString()]?.length || 0), 0);
+          const selMeetings = (byDay[calSelectedDay] || []).slice().sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+          const selLabel = new Date(calSelectedDay).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+          const shiftMonth = (delta) => setCalMonth(new Date(calMonth.getFullYear(), calMonth.getMonth() + delta, 1));
+          const fmtTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+          return (
+            <div className="space-y-6">
+              <div className="bg-gradient-to-br from-green-500/10 to-emerald-600/5 border border-green-500/40 rounded-xl p-6">
+                <h2 className="text-2xl font-bold text-green-300">Mapped &amp; Appointment Set</h2>
+                <p className="text-slate-400 text-sm mt-1">Confirmed, mapped, and on the calendar. {totalThisMonth} appointment{totalThisMonth === 1 ? '' : 's'} in {monthLabel}.</p>
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
+                {/* Calendar */}
+                <div className="xl:col-span-3 bg-slate-800/50 border border-slate-700/50 rounded-xl p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <button onClick={() => shiftMonth(-1)} className="p-2 rounded-lg hover:bg-slate-700 text-slate-300" aria-label="Previous month">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+                    </button>
+                    <div className="flex items-center gap-3">
+                      <h3 className="text-lg font-bold text-white">{monthLabel}</h3>
+                      <button onClick={() => { const t = new Date(); setCalMonth(new Date(t.getFullYear(), t.getMonth(), 1)); setCalSelectedDay(t.toDateString()); }} className="text-xs px-2 py-1 rounded bg-slate-700 text-slate-300 hover:bg-slate-600">Today</button>
+                    </div>
+                    <button onClick={() => shiftMonth(1)} className="p-2 rounded-lg hover:bg-slate-700 text-slate-300" aria-label="Next month">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-7 gap-1 mb-1">
+                    {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => (
+                      <div key={d} className="text-center text-[11px] font-semibold uppercase tracking-wide text-slate-500 py-1">{d}</div>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-7 gap-1">
+                    {cells.map((d, idx) => {
+                      if (!d) return <div key={`e${idx}`} />;
+                      const ds = d.toDateString();
+                      const count = byDay[ds]?.length || 0;
+                      const isToday = ds === todayStr;
+                      const isSel = ds === calSelectedDay;
+                      return (
+                        <button
+                          key={ds}
+                          onClick={() => setCalSelectedDay(ds)}
+                          className={`relative aspect-square rounded-lg p-1.5 text-left transition border ${isSel ? 'border-blue-500 bg-blue-500/15' : isToday ? 'border-slate-500 bg-slate-700/40' : 'border-transparent hover:bg-slate-700/40'}`}
+                        >
+                          <span className={`text-sm ${isToday ? 'text-blue-300 font-bold' : 'text-slate-300'}`}>{d.getDate()}</span>
+                          {count > 0 && (
+                            <span className="absolute bottom-1 right-1 min-w-[18px] h-[18px] px-1 inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[11px] font-bold shadow">{count}</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Selected day's appointments */}
+                <div className="xl:col-span-2">
+                  <h3 className="text-lg font-bold text-white mb-1">{selLabel}</h3>
+                  <p className="text-sm text-slate-400 mb-4">{selMeetings.length} appointment{selMeetings.length === 1 ? '' : 's'}</p>
+                  {selMeetings.length === 0 ? (
+                    <div className="text-center py-10 text-slate-500 border border-dashed border-slate-700 rounded-xl">No appointments this day.</div>
+                  ) : (
+                    <div className="space-y-4">
+                      {selMeetings.map(t => {
+                        const lead = allLeads.find(l => l.id === t.lead_id) || rawLeads.find(l => l.id === t.lead_id);
+                        const who = t.assigned_to && usersById[t.assigned_to] ? usersById[t.assigned_to].split(' ')[0] : null;
+                        return (
+                          <div key={t.id}>
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-green-500/15 text-green-300 text-sm font-semibold">
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                {fmtTime(t.due_at)}
+                              </span>
+                              {who && <span className="text-xs text-slate-400">with {who}</span>}
+                            </div>
+                            {lead ? renderLeadCard(lead) : (
+                              <div className="text-sm text-slate-500 border border-slate-700 rounded-lg p-3">{t.title || 'Appointment'} (lead not found)</div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {['offer-curated', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal', 'follow-up', 'lost'].includes(activeTab) && (() => {
           const bucketConfig = {
             'offer-curated': {
               title: 'Offer Curated',
@@ -5554,10 +5663,10 @@ export default function LandLeadsAdminPage() {
               accent: 'purple',
             },
             'agreement-sent': {
-              title: 'Agreement Sent',
-              subtitle: 'Agreement out the door, waiting for the seller to sign',
-              statuses: ['AGREEMENT_SENT'],
-              accent: 'amber',
+              title: 'Signed Agreement',
+              subtitle: 'Agreement out, signed, and closed, the finish line of the pipeline.',
+              statuses: ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'],
+              accent: 'emerald',
             },
             'signed-contract': {
               title: 'Signed Contract',
