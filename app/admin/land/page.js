@@ -660,21 +660,22 @@ export default function LandLeadsAdminPage() {
   // last seen, and WHAT changed (new lead / new message / reached out / updated).
   const _up = (l) => (l.pipeline_status || l.status || '').toUpperCase();
   const _hasOffer = (l) => l.offer_amount != null && Number(l.offer_amount) !== 0;
-  const leadInTabC = (l, tab) => {
-    if ((l.status || '').toLowerCase() === 'archived') return tab === 'archive';
+  // Each lead has exactly ONE home tab for notifications, so a notification never
+  // shows in two tabs at once. Offer Curated takes precedence over Inflow/Appt
+  // when a lead has an offer entered.
+  const homeTab = (l) => {
+    if ((l.status || '').toLowerCase() === 'archived') return 'archive';
     const s = _up(l);
+    if (s === 'LOST') return 'lost';
+    if (s === 'FOLLOW_UP') return 'follow-up';
+    if (['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(s)) return 'agreement-sent';
+    if (['OFFER_SENT', 'NEGOTIATING'].includes(s)) return 'offer-made';
     const early = ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'];
-    switch (tab) {
-      case 'ppc-inflow': return early.includes(s);
-      case 'appointment-set': return s === 'APPT_SET_FOR_JORDAN';
-      case 'offer-curated': return _hasOffer(l) && [...early, 'APPT_SET_FOR_JORDAN'].includes(s);
-      case 'offer-made': return ['OFFER_SENT', 'NEGOTIATING'].includes(s);
-      case 'agreement-sent': return ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(s);
-      case 'follow-up': return s === 'FOLLOW_UP';
-      case 'lost': return s === 'LOST';
-      default: return false;
-    }
+    if (_hasOffer(l) && [...early, 'APPT_SET_FOR_JORDAN'].includes(s)) return 'offer-curated';
+    if (s === 'APPT_SET_FOR_JORDAN') return 'appointment-set';
+    return 'ppc-inflow';
   };
+  const leadInTabC = (l, tab) => homeTab(l) === tab;
   // Tab-aware: the label reflects what matters in THAT tab (an appointment-set
   // lead that changed reads "Appointment scheduled", not "We reached out").
   const STAGE_EVENT = {
