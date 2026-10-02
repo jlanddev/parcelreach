@@ -667,12 +667,28 @@ export default function LandLeadsAdminPage() {
       default: return false;
     }
   };
-  const eventKind = (l, seen) => {
+  // Tab-aware: the label reflects what matters in THAT tab (an appointment-set
+  // lead that changed reads "Appointment scheduled", not "We reached out").
+  const STAGE_EVENT = {
+    'appointment-set': { kind: 'Appointment scheduled', color: 'text-green-300', dot: 'bg-green-400' },
+    'offer-curated': { kind: 'Offer curated', color: 'text-amber-300', dot: 'bg-amber-400' },
+    'offer-made': { kind: 'Offer made', color: 'text-purple-300', dot: 'bg-purple-400' },
+    'agreement-sent': { kind: 'Contract signed', color: 'text-emerald-300', dot: 'bg-emerald-400' },
+    'follow-up': { kind: 'Moved to follow-up', color: 'text-rose-300', dot: 'bg-rose-400' },
+    'lost': { kind: 'Marked lost', color: 'text-zinc-300', dot: 'bg-zinc-400' },
+  };
+  const eventKind = (l, seen, tab) => {
     const created = l.created_at ? parseTs(l.created_at).getTime() : 0;
     const contact = l.last_contact_at ? parseTs(l.last_contact_at).getTime() : 0;
     const act = l.last_activity_at ? parseTs(l.last_activity_at).getTime() : 0;
-    if (created > seen) return { kind: 'New lead', ts: created, color: 'text-emerald-300', dot: 'bg-emerald-400' };
+    const newest = Math.max(created, contact, act);
+    if (newest <= seen) return null;
+    // A fresh inbound reply is always called out as its own thing, any tab.
     if (contact > seen && l.last_contact_dir === 'inbound') return { kind: 'New message', ts: contact, color: 'text-cyan-300', dot: 'bg-cyan-400' };
+    // Non-inflow pipeline tabs: label by the stage the lead is in.
+    if (STAGE_EVENT[tab]) return { ...STAGE_EVENT[tab], ts: newest };
+    // PPC Inflow / default.
+    if (created > seen) return { kind: 'New lead', ts: created, color: 'text-emerald-300', dot: 'bg-emerald-400' };
     if (contact > seen && l.last_contact_dir === 'outbound') return { kind: 'We reached out', ts: contact, color: 'text-slate-300', dot: 'bg-slate-400' };
     if (act > seen) return { kind: 'Updated', ts: act, color: 'text-amber-300', dot: 'bg-amber-400' };
     return null;
@@ -683,7 +699,7 @@ export default function LandLeadsAdminPage() {
     const out = [];
     for (const l of (allLeads || [])) {
       if (!leadInTabC(l, tab)) continue;
-      const e = eventKind(l, seen);
+      const e = eventKind(l, seen, tab);
       if (e) out.push({ lead: l, ...e });
     }
     out.sort((a, b) => b.ts - a.ts);
@@ -5679,19 +5695,30 @@ export default function LandLeadsAdminPage() {
                     {cells.map((d, idx) => {
                       if (!d) return <div key={`e${idx}`} />;
                       const ds = d.toDateString();
-                      const count = byDay[ds]?.length || 0;
+                      const dayMeetings = (byDay[ds] || []).slice().sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
                       const isToday = ds === todayStr;
                       const isSel = ds === calSelectedDay;
                       return (
                         <button
                           key={ds}
                           onClick={() => setCalSelectedDay(ds)}
-                          className={`relative aspect-square rounded-lg p-1.5 text-left transition border ${isSel ? 'border-blue-500 bg-blue-500/15' : isToday ? 'border-slate-500 bg-slate-700/40' : 'border-transparent hover:bg-slate-700/40'}`}
+                          className={`relative min-h-[92px] rounded-lg p-1.5 text-left align-top transition border flex flex-col ${isSel ? 'border-blue-500 bg-blue-500/15' : isToday ? 'border-slate-500 bg-slate-700/40' : 'border-slate-700/40 hover:bg-slate-700/40'}`}
                         >
-                          <span className={`text-sm ${isToday ? 'text-blue-300 font-bold' : 'text-slate-300'}`}>{d.getDate()}</span>
-                          {count > 0 && (
-                            <span className="absolute bottom-1 right-1 min-w-[18px] h-[18px] px-1 inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[11px] font-bold shadow">{count}</span>
-                          )}
+                          <span className={`text-xs mb-1 ${isToday ? 'text-blue-300 font-bold' : 'text-slate-400'}`}>{d.getDate()}</span>
+                          <div className="flex flex-col gap-0.5 overflow-hidden">
+                            {dayMeetings.slice(0, 3).map(t => {
+                              const lead = allLeads.find(l => l.id === t.lead_id);
+                              const nm = lead?.full_name || lead?.name || t.title || 'Appt';
+                              return (
+                                <span key={t.id} className="block rounded bg-green-500/20 border border-green-500/40 text-green-200 text-[10px] leading-tight px-1 py-0.5 truncate" title={`${fmtTime(t.due_at)} ${nm}`}>
+                                  <span className="font-semibold">{fmtTime(t.due_at)}</span> {nm}
+                                </span>
+                              );
+                            })}
+                            {dayMeetings.length > 3 && (
+                              <span className="text-[10px] text-slate-400 px-1">+{dayMeetings.length - 3} more</span>
+                            )}
+                          </div>
                         </button>
                       );
                     })}
