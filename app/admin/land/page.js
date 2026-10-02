@@ -628,6 +628,26 @@ export default function LandLeadsAdminPage() {
   const [rundownVisibleCount, setRundownVisibleCount] = useState(20);
   // Render cards in pages so a big tab (600+ leads) doesn't lag the board.
   const [cardLimit, setCardLimit] = useState(60);
+
+  // Per-tab "new since you last looked" tracking. A red bubble shows the count of
+  // leads in a tab with activity (new lead / message / move / update, all of which
+  // bump last_activity_at) newer than the last time you opened that tab. Opening a
+  // tab stamps it seen and clears the bubble. Per-browser via localStorage; seeded
+  // to "now" on first load so you don't get flooded by the whole backlog.
+  const TAB_KEYS = ['ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent', 'campaigns', 'follow-up', 'lost'];
+  const [tabSeen, setTabSeen] = useState(() => {
+    if (typeof window === 'undefined') return {};
+    try { const raw = localStorage.getItem('pr_tab_seen'); if (raw) return JSON.parse(raw); } catch {}
+    const now = Date.now(); const init = {};
+    TAB_KEYS.forEach(t => { init[t] = now; });
+    try { localStorage.setItem('pr_tab_seen', JSON.stringify(init)); } catch {}
+    return init;
+  });
+  const markTabSeen = (tab) => setTabSeen(prev => {
+    const next = { ...prev, [tab]: Date.now() };
+    try { localStorage.setItem('pr_tab_seen', JSON.stringify(next)); } catch {}
+    return next;
+  });
   const [ppcSearch, setPpcSearch] = useState('');
   const [pipelineSearch, setPipelineSearch] = useState('');
   const [pipelineMapped, setPipelineMapped] = useState(false);
@@ -639,6 +659,8 @@ export default function LandLeadsAdminPage() {
   // Reset the render cap whenever the tab or filters change, so each view starts
   // light and only grows when you ask for more.
   useEffect(() => { setCardLimit(60); }, [activeTab, ppcSearch, pipelineSearch, pipelineMapped, pipelineSort]);
+  // Opening a tab marks it seen, clearing its red bubble.
+  useEffect(() => { if (activeTab) markTabSeen(activeTab); }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
   // Clean View defaults to "newest pushed first"; exiting restores last-activity.
   useEffect(() => {
     setPipelineSort(cleanViewActive ? 'cleanview_desc' : 'activity_desc');
@@ -4500,12 +4522,43 @@ export default function LandLeadsAdminPage() {
               if (tab === 'investors') return ` (${allLeads.filter(l => l.source === 'go-west-lands').length})`;
               return '';
             };
+            // Does a lead belong to this tab's working set? (used for new-activity bubbles)
+            const leadInTab = (l, tab) => {
+              if ((l.status || '').toLowerCase() === 'archived') return tab === 'archive';
+              const s = up(l);
+              const early = ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'];
+              switch (tab) {
+                case 'ppc-inflow': return early.includes(s);
+                case 'appointment-set': return s === 'APPT_SET_FOR_JORDAN';
+                case 'offer-curated': return hasOffer(l) && [...early, 'APPT_SET_FOR_JORDAN'].includes(s);
+                case 'offer-made': return ['OFFER_SENT', 'NEGOTIATING'].includes(s);
+                case 'agreement-sent': return ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(s);
+                case 'follow-up': return s === 'FOLLOW_UP';
+                case 'lost': return s === 'LOST';
+                default: return false;
+              }
+            };
+            // Count of leads in a tab with activity newer than the last time it was opened.
+            const newCountFor = (tab) => {
+              const seen = tabSeen[tab];
+              if (seen == null) return 0;
+              let n = 0;
+              for (const l of allLeads) {
+                if (!leadInTab(l, tab)) continue;
+                const ts = l.last_activity_at ? parseTs(l.last_activity_at).getTime() : 0;
+                if (ts > seen) n += 1;
+              }
+              return n;
+            };
+            const Bubble = ({ n }) => n > 0 ? (
+              <span className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[11px] font-bold align-middle">{n > 99 ? '99+' : n}</span>
+            ) : null;
             const tabBtn = (tab, active) => (
               <button
                 onClick={() => { setActiveTab(tab); setMoreOpen(false); }}
                 className={`px-4 py-3 font-medium border-b-2 transition whitespace-nowrap ${active ? 'border-blue-500 text-blue-400' : 'border-transparent text-slate-400 hover:text-white'}`}
               >
-                {labelFor(tab)}{countFor(tab)}
+                {labelFor(tab)}{countFor(tab)}<Bubble n={newCountFor(tab)} />
               </button>
             );
             return (
@@ -4529,6 +4582,7 @@ export default function LandLeadsAdminPage() {
                     className={`px-4 py-3 font-medium border-b-2 transition whitespace-nowrap inline-flex items-center gap-1 ${overflow.includes(activeTab) ? 'border-blue-500 text-blue-400' : 'border-transparent text-slate-400 hover:text-white'}`}
                   >
                     More
+                    <Bubble n={overflow.reduce((s, t) => s + newCountFor(t), 0)} />
                     <svg className={`w-4 h-4 transition-transform ${moreOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                   </button>
                   {moreOpen && (
@@ -4541,7 +4595,7 @@ export default function LandLeadsAdminPage() {
                             onClick={() => { setActiveTab(tab); setMoreOpen(false); }}
                             className={`block w-full text-left px-4 py-2 text-sm ${activeTab === tab ? 'bg-blue-600/20 text-blue-300' : 'text-slate-300 hover:bg-slate-700'}`}
                           >
-                            {labelFor(tab)}{countFor(tab)}
+                            {labelFor(tab)}{countFor(tab)}<Bubble n={newCountFor(tab)} />
                           </button>
                         ))}
                       </div>
