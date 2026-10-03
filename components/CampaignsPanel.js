@@ -33,6 +33,8 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   const [openCampaign, setOpenCampaign] = useState(null); // campaign being viewed in detail
   const [enrolledIds, setEnrolledIds] = useState(new Set());
   const [detailQueue, setDetailQueue] = useState([]); // text queue for the open campaign
+  const [enrolledAtById, setEnrolledAtById] = useState({}); // leadId -> enrollment time (open campaign)
+  const [enrollAtByCampaign, setEnrollAtByCampaign] = useState({}); // campaignId -> { leadId: enrolledAt }
   const [templateFor, setTemplateFor] = useState(null); // step index whose template list is open
   const [aiGoal, setAiGoal] = useState(''); // AI builder: describe the campaign
   const [aiFeedback, setAiFeedback] = useState(''); // follow-up tweak request
@@ -55,16 +57,21 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     const { data: camps } = await supabase.from('campaigns').select('*').order('created_at', { ascending: true });
     // Hide the hidden settings row (used to store the appointment reminder config).
     setCampaigns((camps || []).filter(c => !String(c.name || '').startsWith('__settings')));
-    const { data: enr } = await supabase.from('campaign_enrollments').select('lead_id, campaign_id, status');
+    const { data: enr } = await supabase.from('campaign_enrollments').select('lead_id, campaign_id, status, created_at');
     const { data: q } = await supabase.from('campaign_queue').select('campaign_id, status');
     const c = {};
     const byCamp = {};
+    const atByCamp = {};
     (camps || []).forEach(cp => { c[cp.id] = { active: 0, pending: 0 }; });
-    (enr || []).forEach(e => { if (e.status === 'active' && c[e.campaign_id]) { c[e.campaign_id].active += 1; (byCamp[e.campaign_id] = byCamp[e.campaign_id] || new Set()).add(e.lead_id); } });
+    (enr || []).forEach(e => { if (e.status === 'active' && c[e.campaign_id]) { c[e.campaign_id].active += 1; (byCamp[e.campaign_id] = byCamp[e.campaign_id] || new Set()).add(e.lead_id); (atByCamp[e.campaign_id] = atByCamp[e.campaign_id] || {})[e.lead_id] = e.created_at; } });
     (q || []).forEach(x => { if (x.status === 'pending' && c[x.campaign_id]) c[x.campaign_id].pending += 1; });
     setCounts(c);
     setEnrollByCampaign(byCamp);
+    setEnrollAtByCampaign(atByCamp);
   };
+  // A reply only "needs attention" if it came AFTER we enrolled them (replies from
+  // before the campaign are just their old thread history, not a campaign response).
+  const repliedAfterEnroll = (lead, enrolledAt) => lead && String(lead.last_contact_dir || '').toLowerCase() === 'inbound' && lead.last_contact_at && (!enrolledAt || new Date(lead.last_contact_at) >= new Date(enrolledAt));
   useEffect(() => { load(); }, []);
 
   const leadsById = useMemo(() => Object.fromEntries(leads.map(l => [l.id, l])), [leads]);
@@ -72,8 +79,9 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     setOpenCampaign(cp);
     setEnrolledIds(new Set());
     setDetailQueue([]);
-    const { data } = await supabase.from('campaign_enrollments').select('lead_id, status').eq('campaign_id', cp.id).eq('status', 'active');
+    const { data } = await supabase.from('campaign_enrollments').select('lead_id, status, created_at').eq('campaign_id', cp.id).eq('status', 'active');
     setEnrolledIds(new Set((data || []).map(e => e.lead_id)));
+    setEnrolledAtById(Object.fromEntries((data || []).map(e => [e.lead_id, e.created_at])));
     const { data: q } = await supabase.from('campaign_queue').select('id, lead_id, message, due_at, status, processed_at').eq('campaign_id', cp.id).eq('type', 'text').order('due_at', { ascending: true }).limit(200);
     setDetailQueue(q || []);
   };
@@ -235,7 +243,8 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   const campaignNotif = (cp) => {
     const set = enrollByCampaign[cp.id] || new Set();
     if (!set.size) return 0;
-    const replies = leads.filter(l => set.has(l.id) && l.last_contact_dir === 'inbound').length;
+    const atMap = enrollAtByCampaign[cp.id] || {};
+    const replies = leads.filter(l => set.has(l.id) && repliedAfterEnroll(l, atMap[l.id])).length;
     const calls = (scheduledTasks || []).filter(t => t.status === 'pending' && (t.source === 'campaign' || /^campaign:/i.test(t.description || '')) && set.has(t.lead_id) && new Date(t.due_at) <= new Date()).length;
     return replies + calls;
   };
@@ -252,9 +261,9 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   // ---- Campaign detail view data ----
   const enrolledLeads = openCampaign ? leads.filter(l => enrolledIds.has(l.id)).sort((a, b) => new Date(b.last_activity_at || b.created_at) - new Date(a.last_activity_at || a.created_at)) : [];
   const campaignCalls = openCampaign ? (scheduledTasks || []).filter(t => t.status === 'pending' && (t.source === 'campaign' || /^campaign:/i.test(t.description || '')) && enrolledIds.has(t.lead_id)).sort((a, b) => new Date(a.due_at) - new Date(b.due_at)) : [];
-  const repliesWaiting = enrolledLeads.filter(l => l.last_contact_dir === 'inbound').length;
+  const repliesWaiting = enrolledLeads.filter(l => repliedAfterEnroll(l, enrolledAtById[l.id])).length;
   const detailItems = openCampaign ? [
-    ...enrolledLeads.filter(l => l.last_contact_dir === 'inbound').map(l => ({ kind: 'message', lead: l, ts: l.last_contact_at, text: l.last_contact_preview })),
+    ...enrolledLeads.filter(l => repliedAfterEnroll(l, enrolledAtById[l.id])).map(l => ({ kind: 'message', lead: l, ts: l.last_contact_at, text: l.last_contact_preview })),
     ...campaignCalls.map(t => ({ kind: 'call', lead: leadsById[t.lead_id], ts: t.due_at, overdue: new Date(t.due_at) < new Date() })),
   ].filter(it => it.lead).sort((a, b) => new Date(b.ts || 0) - new Date(a.ts || 0)) : [];
   const fmtWhen = (iso) => { const d = new Date(iso); const today = new Date().toDateString() === d.toDateString(); return (today ? 'Today' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })) + ' ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
@@ -381,7 +390,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
           <div className="space-y-2">{enrolledLeads.map(l => (
             <button key={l.id} onClick={() => onOpenLead && onOpenLead(l)} className="w-full text-left bg-slate-800/60 border border-slate-700/50 rounded-lg px-3 py-2 hover:bg-slate-700/60">
               <div className="text-sm text-white">{l.full_name || l.name}</div>
-              <div className="text-xs text-slate-400">{l.phone}{l.last_contact_dir === 'inbound' ? ' · replied, owe a response' : ''}</div>
+              <div className="text-xs text-slate-400">{l.phone}{repliedAfterEnroll(l, enrolledAtById[l.id]) ? ' · replied, owe a response' : ''}</div>
             </button>
           ))}</div>
         )}
