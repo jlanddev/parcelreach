@@ -11,6 +11,9 @@ import { supabase } from '@/lib/supabase';
 const BLANK_STEP = () => ({ delayMin: 0, type: 'text', message: '', label: '' });
 // The appointment-reminders automation is stored as a campaign with this name.
 const REMINDER_CAMPAIGN_NAME = 'Appointment Reminders';
+// Deal-in-progress / closed stages that bulk drips must never touch. Not offered
+// as targetable stages, and always excluded server-side too.
+const PROTECTED_STAGES = ['APPT_SET_FOR_JORDAN', 'OFFER_CURATED', 'OFFER_SENT', 'OFFER_MADE', 'NEGOTIATING', 'AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED', 'DEAD', 'WE_PASSED', 'ARCHIVED'];
 // Ready-to-use message templates so a step is never a blank box you have to guess at.
 const MESSAGE_TEMPLATES = [
   { name: 'Friendly check-in', body: 'Hi {{first}}, just checking in on your land in {{county}}. Still happy to help whenever the timing is right, no pressure at all.' },
@@ -88,9 +91,10 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   // refresh enrolled set when campaigns reload while a detail is open
   useEffect(() => { if (openCampaign) { const cp = (campaigns || []).find(c => c.id === openCampaign.id); if (cp) openDetail(cp); } /* eslint-disable-next-line */ }, [campaigns]);
 
-  const firstStage = stages[0]?.value || 'NEW';
-  const startNew = () => { setEditing({ id: null, name: '', description: '', steps: [BLANK_STEP()], active: true, kind: 'manual', autoRule: 'nocontact', autoDays: 30, autoStage: firstStage }); setAiGoal(""); setAiFeedback(""); setAiDrafted(false); setTemplateFor(null); setShowCreate(true); };
-  const startEdit = (cp) => { const a = parseAuto(cp.description); setEditing({ id: cp.id, name: cp.name, description: descClean(cp.description), steps: (Array.isArray(cp.steps) && cp.steps.length ? cp.steps : [BLANK_STEP()]).map(s => ({ delayMin: stepOffsetMin(s), type: s.type || 'text', message: s.message || '', label: s.label || '' })), active: cp.active !== false, kind: a ? 'drip' : 'manual', autoRule: a?.rule || 'nocontact', autoDays: a?.days ?? 30, autoStage: a?.stage || firstStage }); setAiGoal(""); setAiFeedback(""); setAiDrafted(false); setTemplateFor(null); setShowCreate(true); };
+  const safeStages = (stages || []).filter(s => !PROTECTED_STAGES.includes(s.value));
+  const allSafe = safeStages.map(s => s.value);
+  const startNew = () => { setEditing({ id: null, name: '', description: '', steps: [BLANK_STEP()], active: true, kind: 'manual', autoRule: 'nocontact', autoDays: 30, autoStages: allSafe }); setAiGoal(""); setAiFeedback(""); setAiDrafted(false); setTemplateFor(null); setShowCreate(true); };
+  const startEdit = (cp) => { const a = parseAuto(cp.description); setEditing({ id: cp.id, name: cp.name, description: descClean(cp.description), steps: (Array.isArray(cp.steps) && cp.steps.length ? cp.steps : [BLANK_STEP()]).map(s => ({ delayMin: stepOffsetMin(s), type: s.type || 'text', message: s.message || '', label: s.label || '' })), active: cp.active !== false, kind: a ? 'drip' : 'manual', autoRule: a?.rule || 'nocontact', autoDays: a?.days ?? 30, autoStages: (a?.stages?.length ? a.stages.filter(v => allSafe.includes(v)) : allSafe) }); setAiGoal(""); setAiFeedback(""); setAiDrafted(false); setTemplateFor(null); setShowCreate(true); };
 
   const saveCampaign = async () => {
     if (!editing?.name.trim()) { say('Name is required', 'error'); return; }
@@ -105,8 +109,10 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     let desc = descClean(editing.description);
     if (editing.kind === 'drip') {
       const d = Math.max(1, Number(editing.autoDays) || 30);
-      const marker = editing.autoRule === 'stage' ? `[auto:stage:${editing.autoStage}:${d}]` : `[auto:${editing.autoRule}:${d}]`;
-      desc = `${desc} ${marker}`.trim();
+      const sel = (editing.autoStages || []).filter(v => allSafe.includes(v));
+      // Only encode a stage list if it's a real subset; empty or "all safe" => no filter.
+      const stagePart = (sel.length && sel.length < allSafe.length) ? ':' + sel.join(',') : '';
+      desc = `${desc} [auto:${editing.autoRule}:${d}${stagePart}]`.trim();
     }
     const payload = { name: editing.name.trim(), description: desc, steps, active: editing.active };
     let err;
@@ -178,8 +184,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     if (!a) { say('This campaign has no auto rule', 'error'); return; }
     setBusy(true);
     try {
-      const body = { campaignId: cp.id, rule: a.rule, days: a.days, userId: currentUserId };
-      if (a.rule === 'stage') body.stage = a.stage;
+      const body = { campaignId: cp.id, rule: a.rule, days: a.days, stages: a.stages || [], userId: currentUserId };
       const c = await fetch('/api/campaigns/enroll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, countOnly: true }) }).then(r => r.json());
       if (!c.ok) throw new Error(c.error || 'failed');
       if (!c.wouldAdd) { say(`No new leads match right now${c.alreadyIn ? ` (${c.alreadyIn} already in)` : ''}`, 'error'); setBusy(false); return; }
@@ -212,23 +217,25 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     setBusy(false);
   };
 
-  // Auto-enroll rule stored as an [auto:<rule>:<n>] (or [auto:stage:<STATUS>:<n>])
-  // marker in the description. Legacy [auto:untouched:N] maps to "no contact".
-  const RULE_LABELS = { nocontact: "haven't been contacted (text or call)", notext: "haven't been texted", nocall: "haven't been called", stage: 'are stuck in a stage' };
+  // Auto-enroll rule stored as [auto:<rule>:<days>] with an optional stage filter
+  // [auto:<rule>:<days>:STAGE1,STAGE2]. Legacy [auto:untouched:N] => "no contact",
+  // legacy [auto:stage:STATUS:N] => contact rule limited to that one stage.
+  const RULE_LABELS = { nocontact: "haven't been contacted (text or call)", notext: "haven't been texted", nocall: "haven't been called" };
   const parseAuto = (d) => {
     const s = String(d || '');
     let m = s.match(/\[auto:stage:([A-Za-z_]+):(\d+)\]/i);
-    if (m) return { rule: 'stage', stage: m[1].toUpperCase(), days: Number(m[2]) };
-    m = s.match(/\[auto:(nocontact|notext|nocall|untouched):(\d+)\]/i);
-    if (m) return { rule: m[1].toLowerCase() === 'untouched' ? 'nocontact' : m[1].toLowerCase(), days: Number(m[2]) };
+    if (m) return { rule: 'nocontact', days: Number(m[2]), stages: [m[1].toUpperCase()] };
+    m = s.match(/\[auto:(nocontact|notext|nocall|untouched):(\d+)(?::([A-Za-z_,]+))?\]/i);
+    if (m) return { rule: m[1].toLowerCase() === 'untouched' ? 'nocontact' : m[1].toLowerCase(), days: Number(m[2]), stages: m[3] ? m[3].toUpperCase().split(',').filter(Boolean) : [] };
     return null;
   };
   const descClean = (d) => String(d || '').replace(/\s*\[auto:[^\]]+\]\s*/i, '').trim();
+  const stageLabels = (vals) => (vals || []).map(v => stages.find(s => s.value === v)?.label || v).join(', ');
   const autoSummary = (d) => {
     const a = parseAuto(d);
     if (!a) return null;
-    if (a.rule === 'stage') { const st = stages.find(s => s.value === a.stage); return `Auto-adds "${st?.label || a.stage}" leads idle ${a.days}d`; }
-    return `Auto-adds leads who ${RULE_LABELS[a.rule]} in ${a.days}d`;
+    const where = a.stages?.length ? ` in ${stageLabels(a.stages)}` : '';
+    return `Auto-adds${where ? where.replace(' in ', ' ') : ''} leads who ${RULE_LABELS[a.rule]} in ${a.days}d`;
   };
 
   const stepSummary = (steps) => {
@@ -518,25 +525,43 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
                   </button>
                 </div>
                 {editing.kind === 'drip' && (
-                  <div className="bg-indigo-500/10 border border-indigo-500/40 rounded-lg p-3 space-y-2">
-                    <div className="text-sm font-semibold text-indigo-200">Who should auto-enroll?</div>
-                    <select value={editing.autoRule} onChange={e => setEditing({ ...editing, autoRule: e.target.value })} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-sm">
-                      <option value="nocontact">Haven't been contacted (text or call)</option>
-                      <option value="notext">Haven't been texted</option>
-                      <option value="nocall">Haven't been called</option>
-                      <option value="stage">Stuck in a stage (no movement)</option>
-                    </select>
-                    {editing.autoRule === 'stage' && (
-                      <select value={editing.autoStage} onChange={e => setEditing({ ...editing, autoStage: e.target.value })} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-sm">
-                        {stages.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                  <div className="bg-indigo-500/10 border border-indigo-500/40 rounded-lg p-3 space-y-3">
+                    <div>
+                      <div className="text-sm font-semibold text-indigo-200 mb-1">Who should auto-enroll?</div>
+                      <select value={editing.autoRule} onChange={e => setEditing({ ...editing, autoRule: e.target.value })} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-sm">
+                        <option value="nocontact">Haven't been contacted (text or call)</option>
+                        <option value="notext">Haven't been texted</option>
+                        <option value="nocall">Haven't been called</option>
                       </select>
-                    )}
-                    <div className="flex items-center gap-2 text-sm text-indigo-100">
-                      <span>for</span>
-                      <input type="number" min="1" value={editing.autoDays} onChange={e => setEditing({ ...editing, autoDays: e.target.value })} className="w-16 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-center" />
-                      <span>days or more.</span>
+                      <div className="flex items-center gap-2 text-sm text-indigo-100 mt-2">
+                        <span>for</span>
+                        <input type="number" min="1" value={editing.autoDays} onChange={e => setEditing({ ...editing, autoDays: e.target.value })} className="w-16 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-center" />
+                        <span>days or more.</span>
+                      </div>
                     </div>
-                    <p className="text-xs text-indigo-200/70">Runs on every scheduler tick, a batch at a time, so a big backlog trickles in instead of blasting at once. Enroll once and it runs itself.</p>
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm font-semibold text-indigo-200">Only these stages</div>
+                        <div className="flex gap-2">
+                          <button type="button" onClick={() => setEditing({ ...editing, autoStages: allSafe })} className="text-[10px] text-indigo-300 hover:text-white">All</button>
+                          <button type="button" onClick={() => setEditing({ ...editing, autoStages: [] })} className="text-[10px] text-indigo-300 hover:text-white">None</button>
+                        </div>
+                      </div>
+                      <div className="text-xs text-indigo-200/70 mb-1.5">Pick which part of the pipeline this targets, e.g. just PPC Inflow.</div>
+                      <div className="grid grid-cols-2 gap-1">
+                        {safeStages.map(s => {
+                          const on = (editing.autoStages || []).includes(s.value);
+                          return (
+                            <label key={s.value} className={`flex items-center gap-2 rounded px-2 py-1 text-xs cursor-pointer ${on ? 'bg-indigo-600/30 text-white' : 'bg-slate-800/60 text-slate-300'}`}>
+                              <input type="checkbox" checked={on} onChange={() => setEditing(prev => { const cur = new Set(prev.autoStages || []); on ? cur.delete(s.value) : cur.add(s.value); return { ...prev, autoStages: [...cur] }; })} className="accent-indigo-500" />
+                              {s.label}
+                            </label>
+                          );
+                        })}
+                      </div>
+                      {(editing.autoStages || []).length === 0 && <p className="text-[11px] text-amber-300 mt-1">Pick at least one stage or nobody will enroll.</p>}
+                    </div>
+                    <p className="text-xs text-indigo-200/70">Deals in progress and closed (offer out, under contract, etc.) and anyone who has replied are never included. Runs a small batch per tick, so it trickles instead of blasting.</p>
                   </div>
                 )}
               </div>

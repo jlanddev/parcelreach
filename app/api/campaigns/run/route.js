@@ -188,7 +188,8 @@ async function run(request) {
   //   nocontact (or legacy untouched) - no text/call in N+ days
   //   notext  - no OUTBOUND text in N+ days (and the lead is older than N days)
   //   nocall  - no call in N+ days
-  //   stage:<STATUS> - sitting in <STATUS> with no activity for N+ days
+  // Optional stage filter: [auto:<rule>:N:STAGE1,STAGE2] limits to those stages.
+  // Protected stages (deals in progress/closed) and repliers are always excluded.
   // Capped per run so a big backlog trickles in over several ticks. ----
   let autoEnrolled = 0; const autoPreview = [];
   try {
@@ -197,12 +198,13 @@ async function run(request) {
     for (const camp of camps || []) {
       if (String(camp.name || '').startsWith('__settings') || camp.name === 'Appointment Reminders') continue;
       const desc = String(camp.description || '');
-      const stageM = desc.match(/\[auto:stage:([A-Za-z_]+):(\d+)\]/i);
-      const ruleM = desc.match(/\[auto:(nocontact|notext|nocall|untouched):(\d+)\]/i);
+      const stageM = desc.match(/\[auto:stage:([A-Za-z_]+):(\d+)\]/i); // legacy single-stage marker
+      const ruleM = desc.match(/\[auto:(nocontact|notext|nocall|untouched):(\d+)(?::([A-Za-z_,]+))?\]/i);
       if (!stageM && !ruleM) continue;
-      const rule = stageM ? 'stage' : (ruleM[1].toLowerCase() === 'untouched' ? 'nocontact' : ruleM[1].toLowerCase());
+      const rule = stageM ? 'nocontact' : (ruleM[1].toLowerCase() === 'untouched' ? 'nocontact' : ruleM[1].toLowerCase());
       const days = Math.max(1, Number((stageM ? stageM[2] : ruleM[2])) || 30);
-      const cand = (await leadsForRule(supabase, { rule, stage: stageM?.[1], days })).slice(0, 40);
+      const stageFilter = stageM ? [stageM[1].toUpperCase()] : (ruleM[3] ? ruleM[3].toUpperCase().split(',').filter(Boolean) : []);
+      const cand = (await leadsForRule(supabase, { rule, stages: stageFilter, days })).slice(0, 40);
 
       for (const lead of cand) {
         const { data: ex } = await supabase.from('campaign_enrollments')
