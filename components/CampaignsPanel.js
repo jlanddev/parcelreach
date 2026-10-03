@@ -11,9 +11,13 @@ import { supabase } from '@/lib/supabase';
 const BLANK_STEP = () => ({ delayMin: 0, type: 'text', message: '', label: '' });
 // The appointment-reminders automation is stored as a campaign with this name.
 const REMINDER_CAMPAIGN_NAME = 'Appointment Reminders';
-// Deal-in-progress / closed stages that bulk drips must never touch. Not offered
-// as targetable stages, and always excluded server-side too.
-const PROTECTED_STAGES = ['APPT_SET_FOR_JORDAN', 'OFFER_CURATED', 'OFFER_SENT', 'OFFER_MADE', 'NEGOTIATING', 'AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED', 'DEAD', 'WE_PASSED', 'ARCHIVED'];
+// Committed/closed stages a bulk drip must NEVER touch, no matter what you pick
+// (a signed/closed/dead deal should never get a generic "still interested?").
+// Everything else, including Offer Curated/Sent and Negotiating, is selectable.
+const ALWAYS_EXCLUDED = ['UNDER_CONTRACT', 'CLOSED', 'DEAD', 'WE_PASSED', 'ARCHIVED'];
+// Stages checked by default on a brand-new campaign (early pipeline). You can
+// tick any of the mid-funnel stages on top.
+const DEFAULT_STAGES = ['NEW', 'CONTACTING', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'NURTURE'];
 // Ready-to-use message templates so a step is never a blank box you have to guess at.
 const MESSAGE_TEMPLATES = [
   { name: 'Friendly check-in', body: 'Hi {{first}}, just checking in on your land in {{county}}. Still happy to help whenever the timing is right, no pressure at all.' },
@@ -91,9 +95,10 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   // refresh enrolled set when campaigns reload while a detail is open
   useEffect(() => { if (openCampaign) { const cp = (campaigns || []).find(c => c.id === openCampaign.id); if (cp) openDetail(cp); } /* eslint-disable-next-line */ }, [campaigns]);
 
-  const safeStages = (stages || []).filter(s => !PROTECTED_STAGES.includes(s.value));
+  const safeStages = (stages || []).filter(s => !ALWAYS_EXCLUDED.includes(s.value));
   const allSafe = safeStages.map(s => s.value);
-  const startNew = () => { setEditing({ id: null, name: '', description: '', steps: [BLANK_STEP()], active: true, kind: 'manual', autoRule: 'nocontact', autoDays: 30, autoStages: allSafe }); setAiGoal(""); setAiFeedback(""); setAiDrafted(false); setTemplateFor(null); setShowCreate(true); };
+  const defaultStages = allSafe.filter(v => DEFAULT_STAGES.includes(v));
+  const startNew = () => { setEditing({ id: null, name: '', description: '', steps: [BLANK_STEP()], active: true, kind: 'manual', autoRule: 'nocontact', autoDays: 30, autoStages: defaultStages }); setAiGoal(""); setAiFeedback(""); setAiDrafted(false); setTemplateFor(null); setShowCreate(true); };
   const startEdit = (cp) => { const a = parseAuto(cp.description); setEditing({ id: cp.id, name: cp.name, description: descClean(cp.description), steps: (Array.isArray(cp.steps) && cp.steps.length ? cp.steps : [BLANK_STEP()]).map(s => ({ delayMin: stepOffsetMin(s), type: s.type || 'text', message: s.message || '', label: s.label || '' })), active: cp.active !== false, kind: a ? 'drip' : 'manual', autoRule: a?.rule || 'nocontact', autoDays: a?.days ?? 30, autoStages: (a?.stages?.length ? a.stages.filter(v => allSafe.includes(v)) : allSafe) }); setAiGoal(""); setAiFeedback(""); setAiDrafted(false); setTemplateFor(null); setShowCreate(true); };
 
   const saveCampaign = async () => {
@@ -561,7 +566,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
                       </div>
                       {(editing.autoStages || []).length === 0 && <p className="text-[11px] text-amber-300 mt-1">Pick at least one stage or nobody will enroll.</p>}
                     </div>
-                    <p className="text-xs text-indigo-200/70">Deals in progress and closed (offer out, under contract, etc.) and anyone who has replied are never included. Runs a small batch per tick, so it trickles instead of blasting.</p>
+                    <p className="text-xs text-indigo-200/70">Under contract and closed/dead deals, and anyone who has replied, are never included (even if their stage is checked). Runs a small batch per tick, so it trickles instead of blasting.</p>
                   </div>
                 )}
               </div>
