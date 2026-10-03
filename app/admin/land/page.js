@@ -961,6 +961,24 @@ export default function LandLeadsAdminPage() {
     showToast('Day blocked off');
   };
 
+  // ---- Appointment reminder settings (editable; read by the campaign scheduler) ----
+  const DEFAULT_REMINDER = { enabled: true, hoursBefore: 3, message: 'Hi {{first}}, this is Jordan with Haven Ground. Reminder of our appointment today at {{time}} to talk about your land. Looking forward to it. Reply STOP to opt out.' };
+  const [reminderCfg, setReminderCfg] = useState(DEFAULT_REMINDER);
+  const [reminderOpen, setReminderOpen] = useState(false);
+  const [reminderSaving, setReminderSaving] = useState(false);
+  useEffect(() => {
+    (async () => {
+      try { const { data } = await supabase.from('app_settings').select('value').eq('key', 'appointment_reminder').maybeSingle(); if (data?.value) setReminderCfg(prev => ({ ...prev, ...data.value })); } catch { /* table may not exist yet */ }
+    })();
+  }, []);
+  const saveReminderCfg = async () => {
+    setReminderSaving(true);
+    const { error } = await supabase.from('app_settings').upsert({ key: 'appointment_reminder', value: reminderCfg, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+    setReminderSaving(false);
+    if (error) { showToast('Could not save (run the app_settings SQL first)', 'error'); return; }
+    showToast('Reminder settings saved'); setReminderOpen(false);
+  };
+
   // ---- Appointment outcomes (complete / reschedule / no-show) ----
   const [outcomeFor, setOutcomeFor] = useState(null); // meeting task id with the complete panel open
   const [outcomeNotes, setOutcomeNotes] = useState('');
@@ -5901,9 +5919,39 @@ export default function LandLeadsAdminPage() {
           return (
             <div className="space-y-6">
               <div className="bg-gradient-to-br from-green-500/10 to-emerald-600/5 border border-green-500/40 rounded-xl p-6">
-                <h2 className="text-2xl font-bold text-green-300">Mapped &amp; Appointment Set</h2>
-                <p className="text-slate-400 text-sm mt-1">Confirmed, mapped, and on the calendar. {totalThisMonth} appointment{totalThisMonth === 1 ? '' : 's'} in {monthLabel}. Appointments stay 30 min apart.</p>
-                <p className="text-slate-500 text-xs mt-1">Sellers get a reminder text ~3 hours before their appointment (once live). On each appointment: <span className="text-emerald-400">Complete</span> to add notes and advance the stage, <span className="text-slate-300">Reschedule</span>, or <span className="text-red-400">No-show</span> to move them to Follow-Up with a reschedule task.</p>
+                <div className="flex items-start justify-between gap-4 flex-wrap">
+                  <div>
+                    <h2 className="text-2xl font-bold text-green-300">Mapped &amp; Appointment Set</h2>
+                    <p className="text-slate-400 text-sm mt-1">Confirmed, mapped, and on the calendar. {totalThisMonth} appointment{totalThisMonth === 1 ? '' : 's'} in {monthLabel}. Appointments stay 30 min apart.</p>
+                    <p className="text-slate-500 text-xs mt-1">On each appointment: <span className="text-emerald-400">Complete</span> to add notes + advance, <span className="text-slate-300">Reschedule</span>, or <span className="text-red-400">No-show</span> &rarr; Follow-Up with a reschedule task.</p>
+                  </div>
+                  <button onClick={() => setReminderOpen(v => !v)} className="flex-shrink-0 text-sm font-semibold px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 inline-flex items-center gap-1.5">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
+                    Reminder message
+                  </button>
+                </div>
+                {reminderOpen && (
+                  <div className="mt-4 bg-slate-900/60 border border-slate-700 rounded-lg p-4">
+                    <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+                      <label className="inline-flex items-center gap-2 text-sm text-slate-200">
+                        <input type="checkbox" checked={reminderCfg.enabled !== false} onChange={e => setReminderCfg({ ...reminderCfg, enabled: e.target.checked })} />
+                        Send appointment reminders
+                      </label>
+                      <label className="inline-flex items-center gap-2 text-sm text-slate-300">
+                        Hours before:
+                        <input type="number" min="1" max="24" value={reminderCfg.hoursBefore} onChange={e => setReminderCfg({ ...reminderCfg, hoursBefore: Number(e.target.value) })} className="w-16 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-sm" />
+                      </label>
+                    </div>
+                    <label className="block text-xs text-slate-400 mb-1">Message (use <code>{'{{first}}'}</code> for first name, <code>{'{{time}}'}</code> for the appointment time)</label>
+                    <textarea value={reminderCfg.message} onChange={e => setReminderCfg({ ...reminderCfg, message: e.target.value })} rows={3} className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" />
+                    <div className="mt-2 text-xs text-slate-400">Preview: <span className="text-slate-200">{String(reminderCfg.message || '').replace(/\{\{\s*first\s*\}\}/gi, 'Mike').replace(/\{\{\s*time\s*\}\}/gi, '2:30 PM')}</span></div>
+                    <div className="mt-3 flex gap-2">
+                      <button onClick={saveReminderCfg} disabled={reminderSaving} className="text-sm font-semibold px-4 py-2 rounded-lg bg-green-600 hover:bg-green-500 text-white disabled:opacity-50">{reminderSaving ? 'Saving...' : 'Save'}</button>
+                      <button onClick={() => setReminderOpen(false)} className="text-sm font-semibold px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">Cancel</button>
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">Reminders only send for real once CAMPAIGNS_LIVE is on. Use "Preview sends" in Follow-Up Campaigns to see what would go.</p>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">

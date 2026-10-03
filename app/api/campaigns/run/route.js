@@ -95,12 +95,20 @@ async function run(request) {
     } catch { /* non-fatal */ }
   }
 
-  // ---- Appointment reminders: text the seller ~3h before their meeting, once. ----
+  // ---- Appointment reminders: text the seller before their meeting, once.
+  // Message + lead time are editable in the app_settings row 'appointment_reminder'. ----
   let reminded = 0;
   try {
+    const DEFAULT_REM = { enabled: true, hoursBefore: 3, message: 'Hi {{first}}, this is Jordan with Haven Ground. Reminder of our appointment today at {{time}} to talk about your land. Looking forward to it. Reply STOP to opt out.' };
+    let remCfg = DEFAULT_REM;
+    try {
+      const { data: s } = await supabase.from('app_settings').select('value').eq('key', 'appointment_reminder').maybeSingle();
+      if (s?.value) remCfg = { ...DEFAULT_REM, ...s.value };
+    } catch { /* table may not exist yet; use defaults */ }
+    const hoursBefore = Number(remCfg.hoursBefore) > 0 ? Number(remCfg.hoursBefore) : 3;
     const TZ_BY_ABBR = { ET: 'America/New_York', CT: 'America/Chicago', MT: 'America/Denver', PT: 'America/Los_Angeles' };
-    const soon = new Date(Date.now() + 3 * 3600 * 1000).toISOString();
-    const { data: meetings } = await supabase.from('scheduled_tasks')
+    const soon = new Date(Date.now() + hoursBefore * 3600 * 1000).toISOString();
+    const { data: meetings } = remCfg.enabled === false ? { data: [] } : await supabase.from('scheduled_tasks')
       .select('id, lead_id, due_at, description, title')
       .eq('task_type', 'meeting').eq('status', 'pending')
       .gte('due_at', now).lte('due_at', soon).limit(50);
@@ -113,7 +121,7 @@ async function run(request) {
       const abbr = (String(m.description || '').match(/·\s*(ET|CT|MT|PT)/i) || [])[1];
       const tz = TZ_BY_ABBR[(abbr || 'CT').toUpperCase()] || 'America/Chicago';
       const tLabel = new Date(m.due_at).toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' });
-      const msg = `Hi ${first}, this is Jordan with Haven Ground. Reminder of our appointment today at ${tLabel} to talk about your land. Looking forward to it. Reply STOP to opt out.`;
+      const msg = String(remCfg.message || DEFAULT_REM.message).replace(/\{\{\s*first\s*\}\}/gi, first).replace(/\{\{\s*time\s*\}\}/gi, tLabel);
       if (dryRun) { preview.push({ lead_id: m.lead_id, name: lead.full_name || lead.name || 'Lead', phone: lead.phone, message: `[REMINDER] ${msg}` }); continue; }
       await sendMessage({ to: lead.phone, message: msg });
       const ri = new Date().toISOString();
