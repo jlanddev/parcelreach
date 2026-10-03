@@ -9,6 +9,8 @@ import { supabase } from '@/lib/supabase';
 // then "Preview sends" shows the dry-run.
 
 const BLANK_STEP = () => ({ day: 0, type: 'text', message: '', label: '' });
+// The appointment-reminders automation is stored as a campaign with this name.
+const REMINDER_CAMPAIGN_NAME = 'Appointment Reminders';
 
 export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCard, scheduledTasks = [], onOpenLead, onManageReminders }) {
   const [campaigns, setCampaigns] = useState(null);
@@ -270,32 +272,43 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
         </div>
       </div>
 
-      {/* Appointment reminders: an always-on automation, managed on the Appointments tab */}
-      {(() => {
-        const upcoming = (scheduledTasks || []).filter(t => t.task_type === 'meeting' && t.status === 'pending' && !/^BLOCKED/i.test(t.title || '') && t.lead_id && new Date(t.due_at) > new Date());
-        const sent = upcoming.filter(t => /\[reminded/.test(t.description || '')).length;
-        return (
-          <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-5 flex items-start justify-between gap-4 flex-wrap">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h3 className="text-lg font-bold text-white">Appointment Reminders</h3>
-                <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300">Always on</span>
-              </div>
-              <p className="text-sm text-slate-400 mt-1">Automatic texts before each scheduled appointment. You can set several (e.g. a day before and a few hours before).</p>
-              <p className="text-xs text-slate-500 mt-2"><span className="font-bold text-white">{upcoming.length}</span> upcoming appointment{upcoming.length === 1 ? '' : 's'} · <span className="font-bold text-emerald-300">{sent}</span> already have a reminder sent</p>
-            </div>
-            {onManageReminders && <button onClick={onManageReminders} className="flex-shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">Manage reminders</button>}
-          </div>
-        );
-      })()}
-
       {campaigns === null ? (
         <div className="text-slate-400">Loading campaigns…</div>
       ) : campaigns.length === 0 ? (
         <div className="text-center py-12 text-slate-400 border border-dashed border-slate-700 rounded-xl">No campaigns yet. Create your first drip.</div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {campaigns.map(cp => (
+          {campaigns.map(cp => {
+            // The appointment-reminders campaign lives in this list like any other,
+            // but it's appointment-driven (not enroll-driven), so it gets tailored controls.
+            if (cp.name === REMINDER_CAMPAIGN_NAME) {
+              const upcoming = (scheduledTasks || []).filter(t => t.task_type === 'meeting' && t.status === 'pending' && !/^BLOCKED/i.test(t.title || '') && t.lead_id && new Date(t.due_at) > new Date());
+              const sentN = upcoming.filter(t => /\[reminded/.test(t.description || '')).length;
+              const msgN = (Array.isArray(cp.steps) ? cp.steps : []).filter(s => s.enabled !== false).length;
+              return (
+                <div key={cp.id} className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 cursor-pointer" onClick={() => onManageReminders && onManageReminders()}>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-lg font-bold text-white hover:text-rose-200">{cp.name}</h3>
+                        <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full ${cp.active ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-600/40 text-slate-400'}`}>{cp.active ? 'Active' : 'Paused'}</span>
+                      </div>
+                      <p className="text-sm text-slate-400 mt-1">Automatic texts before each scheduled appointment.</p>
+                      <p className="text-xs text-slate-500 mt-2">{msgN} reminder message{msgN === 1 ? '' : 's'} · over {upcoming.length} upcoming appointment{upcoming.length === 1 ? '' : 's'}</p>
+                    </div>
+                    <button onClick={() => toggleActive(cp)} className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 flex-shrink-0">{cp.active ? 'Pause' : 'Activate'}</button>
+                  </div>
+                  <div className="mt-3 flex items-center gap-4 text-sm">
+                    <span className="text-slate-300"><span className="font-bold text-white">{upcoming.length}</span> upcoming</span>
+                    <span className="text-slate-300"><span className="font-bold text-emerald-300">{sentN}</span> reminded</span>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button onClick={() => onManageReminders && onManageReminders()} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-rose-600/20 text-rose-200 border border-rose-500/40 hover:bg-rose-600/40">Edit reminders</button>
+                  </div>
+                </div>
+              );
+            }
+            return (
             <div key={cp.id} className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-5">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 cursor-pointer" onClick={() => openDetail(cp)}>
@@ -320,7 +333,8 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
                 <button onClick={() => deleteCampaign(cp)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700/40 text-slate-400 hover:text-red-300">Delete</button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
       </>)}

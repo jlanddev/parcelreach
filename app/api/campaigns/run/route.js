@@ -109,12 +109,16 @@ async function run(request) {
   try {
     const DEFAULT_REM = [{ enabled: true, hoursBefore: 3, message: 'Hi {{first}}, this is Jordan with Haven Ground. Reminder of our appointment today at {{time}} to talk about your land. Looking forward to it!' }];
     let remList = DEFAULT_REM;
+    let remActive = true;
     try {
-      const { data: s } = await supabase.from('campaigns').select('steps').eq('name', '__settings:appointment_reminder').maybeSingle();
+      // Reminders now live in a normal campaign row; fall back to the legacy settings row.
+      let { data: s } = await supabase.from('campaigns').select('steps, active').eq('name', 'Appointment Reminders').maybeSingle();
+      if (!s) ({ data: s } = await supabase.from('campaigns').select('steps, active').eq('name', '__settings:appointment_reminder').maybeSingle());
       if (s?.steps && Array.isArray(s.steps) && s.steps.length) remList = s.steps;
+      if (s) remActive = s.active !== false;
     } catch { /* use defaults */ }
     // Keep original indices so the [reminded:i] marker is stable, then drop disabled ones.
-    const active = remList.map((r, i) => ({ ...r, i, H: Number(r.hoursBefore) > 0 ? Number(r.hoursBefore) : 3 })).filter(r => r.enabled !== false);
+    const active = !remActive ? [] : remList.map((r, i) => ({ ...r, i, H: Number(r.hoursBefore) > 0 ? Number(r.hoursBefore) : 3 })).filter(r => r.enabled !== false);
     const maxH = active.length ? Math.max(...active.map(r => r.H)) : 0;
     const TZ_BY_ABBR = { ET: 'America/New_York', CT: 'America/Chicago', MT: 'America/Denver', PT: 'America/Los_Angeles' };
     const soon = new Date(Date.now() + maxH * 3600 * 1000).toISOString();

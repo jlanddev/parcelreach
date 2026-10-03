@@ -398,7 +398,7 @@ export default function LandLeadsAdminPage() {
       const { data: camps } = await supabase.from('campaigns').select('id, name, active').order('created_at', { ascending: true });
       const { data: enr } = await supabase.from('campaign_enrollments').select('lead_id, campaign_id, status');
       if (cancel) return;
-      setCampaignList((camps || []).filter(c => c.active !== false && !String(c.name || '').startsWith('__settings')));
+      setCampaignList((camps || []).filter(c => c.active !== false && !String(c.name || '').startsWith('__settings') && c.name !== 'Appointment Reminders'));
       const byLead = {};
       (enr || []).forEach(e => { if (e.status === 'active') (byLead[e.lead_id] = byLead[e.lead_id] || new Set()).add(e.campaign_id); });
       setCampaignsByLead(byLead);
@@ -1015,16 +1015,30 @@ export default function LandLeadsAdminPage() {
     if (data) setScheduledTasks(prev => [...prev, data]);
   };
 
-  // ---- Appointment reminder settings (editable; read by the campaign scheduler) ----
-  // Stored as an array of reminders so you can send more than one (e.g. a day
-  // before AND a few hours before). Each: { enabled, hoursBefore, message }.
+  // ---- Appointment reminders: a REAL campaign row named "Appointment Reminders"
+  // so it lives in the Follow-Up Campaigns list and turns on/off like any other.
+  // steps = array of { enabled, hoursBefore, message } (one or more reminders). ----
+  const REMINDER_CAMPAIGN_NAME = 'Appointment Reminders';
   const DEFAULT_REMINDER_ITEM = { enabled: true, hoursBefore: 3, message: 'Hi {{first}}, this is Jordan with Haven Ground. Reminder of our appointment today at {{time}} to talk about your land. Looking forward to it!' };
   const [reminders, setReminders] = useState([DEFAULT_REMINDER_ITEM]);
+  const [reminderActive, setReminderActive] = useState(true); // the campaign on/off
   const [reminderOpen, setReminderOpen] = useState(false);
   const [reminderSaving, setReminderSaving] = useState(false);
   useEffect(() => {
     (async () => {
-      try { const { data } = await supabase.from('campaigns').select('steps').eq('name', '__settings:appointment_reminder').maybeSingle(); if (Array.isArray(data?.steps) && data.steps.length) setReminders(data.steps.map(s => ({ enabled: s.enabled !== false, hoursBefore: Number(s.hoursBefore) || 3, message: s.message || DEFAULT_REMINDER_ITEM.message }))); } catch { /* ignore */ }
+      try {
+        // Prefer the new named campaign; migrate the legacy hidden settings row if found.
+        let { data } = await supabase.from('campaigns').select('id, steps, active, name').eq('name', REMINDER_CAMPAIGN_NAME).maybeSingle();
+        if (!data) {
+          const { data: legacy } = await supabase.from('campaigns').select('id, steps, active').eq('name', '__settings:appointment_reminder').maybeSingle();
+          if (legacy?.id) {
+            await supabase.from('campaigns').update({ name: REMINDER_CAMPAIGN_NAME, description: 'Automatic texts before each scheduled appointment', active: legacy.active !== false }).eq('id', legacy.id);
+            data = legacy;
+          }
+        }
+        if (Array.isArray(data?.steps) && data.steps.length) setReminders(data.steps.map(s => ({ enabled: s.enabled !== false, hoursBefore: Number(s.hoursBefore) || 3, message: s.message || DEFAULT_REMINDER_ITEM.message })));
+        if (data) setReminderActive(data.active !== false);
+      } catch { /* ignore */ }
     })();
   }, []);
   const addReminder = () => setReminders(prev => [...prev, { enabled: true, hoursBefore: 24, message: 'Hi {{first}}, looking forward to our call tomorrow at {{time}}. Talk soon, Jordan with Haven Ground.' }]);
@@ -1034,13 +1048,14 @@ export default function LandLeadsAdminPage() {
     setReminderSaving(true);
     try {
       const clean = reminders.map(r => ({ enabled: r.enabled !== false, hoursBefore: Number(r.hoursBefore) > 0 ? Number(r.hoursBefore) : 3, message: r.message || '' }));
-      const { data: ex } = await supabase.from('campaigns').select('id').eq('name', '__settings:appointment_reminder').maybeSingle();
+      const payload = { name: REMINDER_CAMPAIGN_NAME, description: 'Automatic texts before each scheduled appointment', steps: clean, active: reminderActive };
+      const { data: ex } = await supabase.from('campaigns').select('id').eq('name', REMINDER_CAMPAIGN_NAME).maybeSingle();
       let error;
-      if (ex?.id) ({ error } = await supabase.from('campaigns').update({ steps: clean }).eq('id', ex.id));
-      else ({ error } = await supabase.from('campaigns').insert({ name: '__settings:appointment_reminder', description: 'App setting (not a campaign)', steps: clean, active: false }));
+      if (ex?.id) ({ error } = await supabase.from('campaigns').update(payload).eq('id', ex.id));
+      else ({ error } = await supabase.from('campaigns').insert(payload));
       if (error) throw error;
-      showToast('Reminder settings saved'); setReminderOpen(false);
-    } catch (e) { showToast('Could not save reminder settings', 'error'); }
+      showToast('Reminders saved'); setReminderOpen(false); setCampaignRefresh(t => t + 1);
+    } catch (e) { showToast('Could not save reminders', 'error'); }
     setReminderSaving(false);
   };
 
@@ -5991,7 +6006,7 @@ export default function LandLeadsAdminPage() {
         {/* PIPELINE BUCKETS, Appointment Set / Offer Made / Agreement Sent / Signed Contract / Closed Deal */}
         {/* FOLLOW-UP CAMPAIGNS (engine built in Phase 2) */}
         {activeTab === 'campaigns' && (
-          <CampaignsPanel leads={allLeads} currentUserId={currentUserId} renderLeadCard={renderLeadCard} scheduledTasks={scheduledTasks} onOpenLead={navigateToLeadCard} onManageReminders={() => { setActiveTab('appointment-set'); setReminderOpen(true); }} />
+          <CampaignsPanel leads={allLeads} currentUserId={currentUserId} renderLeadCard={renderLeadCard} scheduledTasks={scheduledTasks} onOpenLead={navigateToLeadCard} onManageReminders={() => setReminderOpen(true)} />
         )}
 
         {/* MAPPED & APPOINTMENT SET, physician's-office month calendar */}
@@ -6022,100 +6037,7 @@ export default function LandLeadsAdminPage() {
                     <p className="text-slate-400 text-sm mt-1">Confirmed, mapped, and on the calendar. {totalThisMonth} appointment{totalThisMonth === 1 ? '' : 's'} in {monthLabel}. Appointments stay 30 min apart.</p>
                     <p className="text-slate-500 text-xs mt-1">On each appointment: <span className="text-emerald-400">Complete</span> to add notes + advance, <span className="text-slate-300">Reschedule</span>, or <span className="text-red-400">No-show</span> &rarr; Follow-Up with a reschedule task.</p>
                   </div>
-                  <button onClick={() => setReminderOpen(v => !v)} className="flex-shrink-0 text-sm font-semibold px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 inline-flex items-center gap-1.5">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
-                    Reminder message
-                  </button>
                 </div>
-                {reminderOpen && (
-                  <div className="mt-4 bg-slate-900/60 border border-slate-700 rounded-lg p-4 space-y-4">
-                    <div>
-                      <div className="flex items-center justify-between gap-2 mb-2">
-                        <h4 className="text-sm font-bold text-white">Reminder messages</h4>
-                        <span className="text-xs text-slate-500">Send as many as you want (e.g. a day before and a few hours before).</span>
-                      </div>
-                      <div className="space-y-3">
-                        {reminders.map((r, i) => (
-                          <div key={i} className="bg-slate-800/70 border border-slate-700 rounded-lg p-3">
-                            <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
-                              <label className="inline-flex items-center gap-2 text-sm text-slate-200">
-                                <input type="checkbox" checked={r.enabled !== false} onChange={e => updateReminder(i, { enabled: e.target.checked })} />
-                                Reminder {i + 1}
-                              </label>
-                              <div className="flex items-center gap-2">
-                                <label className="inline-flex items-center gap-2 text-sm text-slate-300">
-                                  Send
-                                  <input type="number" min="1" max="168" value={r.hoursBefore} onChange={e => updateReminder(i, { hoursBefore: Number(e.target.value) })} className="w-16 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white text-sm" />
-                                  hrs before
-                                </label>
-                                {reminders.length > 1 && <button onClick={() => removeReminder(i)} className="text-slate-500 hover:text-red-300 text-sm px-1" title="Remove reminder">✕</button>}
-                              </div>
-                            </div>
-                            <textarea value={r.message} onChange={e => updateReminder(i, { message: e.target.value })} rows={3} className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="Hi {{first}}, ..." />
-                            <div className="mt-1.5 text-xs text-slate-500">Preview: <span className="text-slate-300">{String(r.message || '').replace(/\{\{\s*first\s*\}\}/gi, 'Mike').replace(/\{\{\s*time\s*\}\}/gi, '2:30 PM')}</span></div>
-                          </div>
-                        ))}
-                      </div>
-                      <button onClick={addReminder} className="mt-3 text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">+ Add another reminder</button>
-                      <p className="mt-2 text-xs text-slate-500">Use <code>{'{{first}}'}</code> for the first name and <code>{'{{time}}'}</code> for the appointment time.</p>
-                    </div>
-
-                    {/* Visibility: who has already gotten a reminder, who's next */}
-                    {(() => {
-                      const upcoming = (scheduledTasks || [])
-                        .filter(t => t.task_type === 'meeting' && t.status === 'pending' && !/^BLOCKED/i.test(t.title || '') && t.lead_id && new Date(t.due_at) > new Date())
-                        .sort((a, b) => new Date(a.due_at) - new Date(b.due_at)).slice(0, 8);
-                      if (!upcoming.length) return <div className="text-xs text-slate-500 border-t border-slate-700 pt-3">No upcoming appointments to remind.</div>;
-                      const activeRem = reminders.map((r, i) => ({ ...r, i, H: Number(r.hoursBefore) > 0 ? Number(r.hoursBefore) : 3 })).filter(r => r.enabled !== false);
-                      const fmtDT = (d) => d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-                      return (
-                        <div className="border-t border-slate-700 pt-3">
-                          <h4 className="text-sm font-bold text-white mb-2">Reminder schedule (next {upcoming.length})</h4>
-                          <div className="space-y-2.5">
-                            {upcoming.map(t => {
-                              const lead = allLeads.find(l => l.id === t.lead_id) || rawLeads.find(l => l.id === t.lead_id);
-                              const nm = lead?.full_name || lead?.name || t.title || 'Appt';
-                              const appt = new Date(t.due_at);
-                              return (
-                                <div key={t.id} className="text-xs">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-slate-100 font-semibold truncate flex-1">{nm}</span>
-                                    <span className="text-slate-400 flex-shrink-0">Appt {fmtDT(appt)}</span>
-                                  </div>
-                                  <div className="mt-1 pl-3 border-l border-slate-700 space-y-0.5">
-                                    {activeRem.length === 0 && <div className="text-slate-500">No reminders enabled.</div>}
-                                    {activeRem.map(r => {
-                                      const sendAt = new Date(appt.getTime() - r.H * 3600000);
-                                      const sent = (String(t.description || '').includes(`[reminded:${r.i}]`));
-                                      const past = !sent && sendAt < new Date();
-                                      return (
-                                        <div key={r.i} className="flex items-center gap-2">
-                                          <span className="text-slate-400 flex-1 truncate">Reminder {r.i + 1} ({r.H}h before) → sends {fmtDT(sendAt)}</span>
-                                          {sent
-                                            ? <span className="flex-shrink-0 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold">sent ✓</span>
-                                            : past
-                                              ? <span className="flex-shrink-0 px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-semibold">sending</span>
-                                              : <span className="flex-shrink-0 px-2 py-0.5 rounded-full bg-slate-700 text-slate-400">scheduled</span>}
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                          <p className="mt-2 text-xs text-slate-500">Each reminder goes out <span className="text-slate-300">before</span> the appointment (not at the appointment time). "Sent ✓" means it already went; every reminder also shows in the lead's message thread.</p>
-                        </div>
-                      );
-                    })()}
-
-                    <div className="flex gap-2 border-t border-slate-700 pt-3">
-                      <button onClick={saveReminderCfg} disabled={reminderSaving} className="text-sm font-semibold px-4 py-2 rounded-lg bg-green-600 hover:bg-green-500 text-white disabled:opacity-50">{reminderSaving ? 'Saving...' : 'Save reminders'}</button>
-                      <button onClick={() => setReminderOpen(false)} className="text-sm font-semibold px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">Cancel</button>
-                    </div>
-                    <p className="text-xs text-slate-500">Reminders only send for real once CAMPAIGNS_LIVE is on. Use "Preview sends" in Follow-Up Campaigns to see exactly what would go.</p>
-                  </div>
-                )}
               </div>
 
               <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
@@ -9749,6 +9671,111 @@ export default function LandLeadsAdminPage() {
             <div className="flex gap-2">
               <button onClick={submitBlock} className="flex-1 bg-slate-600 hover:bg-slate-500 text-white font-semibold py-2 px-4 rounded-lg">Block it off</button>
               <button onClick={() => setBlockModalOpen(false)} className="bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 px-4 rounded-lg">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Appointment Reminders editor (opened from the Follow-Up Campaigns list) */}
+      {reminderOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setReminderOpen(false)}>
+          <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-2xl max-h-[88vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="p-4 border-b border-slate-700 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-bold text-white">Appointment Reminders</h3>
+                <p className="text-xs text-slate-400">Automatic texts before each scheduled appointment.</p>
+              </div>
+              <button onClick={() => setReminderOpen(false)} className="text-slate-400 hover:text-white">✕</button>
+            </div>
+            <div className="p-4 space-y-4 overflow-y-auto">
+              <label className="flex items-center gap-2.5 bg-slate-900/60 border border-slate-700 rounded-lg px-3 py-2.5 cursor-pointer">
+                <input type="checkbox" checked={reminderActive} onChange={e => setReminderActive(e.target.checked)} className="w-4 h-4 accent-emerald-500" />
+                <span className="text-sm font-semibold text-white">Campaign is {reminderActive ? 'on' : 'off'}</span>
+                <span className="text-xs text-slate-400">{reminderActive ? 'Reminders will go out for upcoming appointments.' : 'No reminders will be sent while off.'}</span>
+              </label>
+              <div>
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <h4 className="text-sm font-bold text-white">Reminder messages</h4>
+                  <span className="text-xs text-slate-500">Send as many as you want (e.g. a day before and a few hours before).</span>
+                </div>
+                <div className="space-y-3">
+                  {reminders.map((r, i) => (
+                    <div key={i} className="bg-slate-900/60 border border-slate-700 rounded-lg p-3">
+                      <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+                        <label className="inline-flex items-center gap-2 text-sm text-slate-200">
+                          <input type="checkbox" checked={r.enabled !== false} onChange={e => updateReminder(i, { enabled: e.target.checked })} />
+                          Reminder {i + 1}
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <label className="inline-flex items-center gap-2 text-sm text-slate-300">
+                            Send
+                            <input type="number" min="1" max="168" value={r.hoursBefore} onChange={e => updateReminder(i, { hoursBefore: Number(e.target.value) })} className="w-16 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-sm" />
+                            hrs before
+                          </label>
+                          {reminders.length > 1 && <button onClick={() => removeReminder(i)} className="text-slate-500 hover:text-red-300 text-sm px-1" title="Remove reminder">✕</button>}
+                        </div>
+                      </div>
+                      <textarea value={r.message} onChange={e => updateReminder(i, { message: e.target.value })} rows={3} className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="Hi {{first}}, ..." />
+                      <div className="mt-1.5 text-xs text-slate-500">Preview: <span className="text-slate-300">{String(r.message || '').replace(/\{\{\s*first\s*\}\}/gi, 'Mike').replace(/\{\{\s*time\s*\}\}/gi, '2:30 PM')}</span></div>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={addReminder} className="mt-3 text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">+ Add another reminder</button>
+                <p className="mt-2 text-xs text-slate-500">Use <code>{'{{first}}'}</code> for the first name and <code>{'{{time}}'}</code> for the appointment time.</p>
+              </div>
+
+              {(() => {
+                const upcoming = (scheduledTasks || [])
+                  .filter(t => t.task_type === 'meeting' && t.status === 'pending' && !/^BLOCKED/i.test(t.title || '') && t.lead_id && new Date(t.due_at) > new Date())
+                  .sort((a, b) => new Date(a.due_at) - new Date(b.due_at)).slice(0, 8);
+                if (!upcoming.length) return <div className="text-xs text-slate-500 border-t border-slate-700 pt-3">No upcoming appointments to remind.</div>;
+                const activeRem = reminders.map((r, i) => ({ ...r, i, H: Number(r.hoursBefore) > 0 ? Number(r.hoursBefore) : 3 })).filter(r => r.enabled !== false);
+                const fmtDT = (d) => d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+                return (
+                  <div className="border-t border-slate-700 pt-3">
+                    <h4 className="text-sm font-bold text-white mb-2">Reminder schedule (next {upcoming.length})</h4>
+                    <div className="space-y-2.5">
+                      {upcoming.map(t => {
+                        const lead = allLeads.find(l => l.id === t.lead_id) || rawLeads.find(l => l.id === t.lead_id);
+                        const nm = lead?.full_name || lead?.name || t.title || 'Appt';
+                        const appt = new Date(t.due_at);
+                        return (
+                          <div key={t.id} className="text-xs">
+                            <div className="flex items-center gap-2">
+                              <span className="text-slate-100 font-semibold truncate flex-1">{nm}</span>
+                              <span className="text-slate-400 flex-shrink-0">Appt {fmtDT(appt)}</span>
+                            </div>
+                            <div className="mt-1 pl-3 border-l border-slate-700 space-y-0.5">
+                              {activeRem.length === 0 && <div className="text-slate-500">No reminders enabled.</div>}
+                              {activeRem.map(r => {
+                                const sendAt = new Date(appt.getTime() - r.H * 3600000);
+                                const sent = (String(t.description || '').includes(`[reminded:${r.i}]`));
+                                const past = !sent && sendAt < new Date();
+                                return (
+                                  <div key={r.i} className="flex items-center gap-2">
+                                    <span className="text-slate-400 flex-1 truncate">Reminder {r.i + 1} ({r.H}h before) → sends {fmtDT(sendAt)}</span>
+                                    {sent
+                                      ? <span className="flex-shrink-0 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold">sent ✓</span>
+                                      : past
+                                        ? <span className="flex-shrink-0 px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-semibold">sending</span>
+                                        : <span className="flex-shrink-0 px-2 py-0.5 rounded-full bg-slate-700 text-slate-400">scheduled</span>}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">Each reminder goes out <span className="text-slate-300">before</span> the appointment (not at the appointment time). "Sent ✓" means it already went; every reminder also shows in the lead's message thread.</p>
+                  </div>
+                );
+              })()}
+            </div>
+            <div className="p-4 border-t border-slate-700 flex gap-2">
+              <button onClick={saveReminderCfg} disabled={reminderSaving} className="text-sm font-semibold px-4 py-2 rounded-lg bg-green-600 hover:bg-green-500 text-white disabled:opacity-50">{reminderSaving ? 'Saving...' : 'Save'}</button>
+              <button onClick={() => setReminderOpen(false)} className="text-sm font-semibold px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">Cancel</button>
+              <span className="ml-auto self-center text-xs text-slate-500">Sends for real once CAMPAIGNS_LIVE is on.</span>
             </div>
           </div>
         </div>
