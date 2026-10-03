@@ -100,28 +100,40 @@ async function run(request) {
     } catch { /* non-fatal */ }
   }
 
-  // ---- Appointment reminders: text the seller before their meeting, once.
-  // Message + lead time are editable in the app_settings row 'appointment_reminder'. ----
+  // ---- Appointment reminders: text the seller before their meeting. Supports
+  // MULTIPLE reminders (e.g. 24h before AND 3h before), editable in the hidden
+  // '__settings:appointment_reminder' row (steps = array of {enabled,hoursBefore,message}).
+  // Each reminder is sent at most once per appointment, tracked with a [reminded:i]
+  // marker. One text per lead per run (shared with the drip) still holds. ----
   let reminded = 0;
   try {
-    const DEFAULT_REM = { enabled: true, hoursBefore: 3, message: 'Hi {{first}}, this is Jordan with Haven Ground. Reminder of our appointment today at {{time}} to talk about your land. Looking forward to it!' };
-    let remCfg = DEFAULT_REM;
+    const DEFAULT_REM = [{ enabled: true, hoursBefore: 3, message: 'Hi {{first}}, this is Jordan with Haven Ground. Reminder of our appointment today at {{time}} to talk about your land. Looking forward to it!' }];
+    let remList = DEFAULT_REM;
     try {
-      // Stored as a hidden row in the campaigns table (no extra table needed).
       const { data: s } = await supabase.from('campaigns').select('steps').eq('name', '__settings:appointment_reminder').maybeSingle();
-      if (s?.steps && Array.isArray(s.steps) && s.steps[0]) remCfg = { ...DEFAULT_REM, ...s.steps[0] };
+      if (s?.steps && Array.isArray(s.steps) && s.steps.length) remList = s.steps;
     } catch { /* use defaults */ }
-    const hoursBefore = Number(remCfg.hoursBefore) > 0 ? Number(remCfg.hoursBefore) : 3;
+    // Keep original indices so the [reminded:i] marker is stable, then drop disabled ones.
+    const active = remList.map((r, i) => ({ ...r, i, H: Number(r.hoursBefore) > 0 ? Number(r.hoursBefore) : 3 })).filter(r => r.enabled !== false);
+    const maxH = active.length ? Math.max(...active.map(r => r.H)) : 0;
     const TZ_BY_ABBR = { ET: 'America/New_York', CT: 'America/Chicago', MT: 'America/Denver', PT: 'America/Los_Angeles' };
-    const soon = new Date(Date.now() + hoursBefore * 3600 * 1000).toISOString();
-    const { data: meetings } = remCfg.enabled === false ? { data: [] } : await supabase.from('scheduled_tasks')
+    const soon = new Date(Date.now() + maxH * 3600 * 1000).toISOString();
+    const { data: meetings } = !active.length ? { data: [] } : await supabase.from('scheduled_tasks')
       .select('id, lead_id, due_at, description, title')
       .eq('task_type', 'meeting').eq('status', 'pending')
       .gte('due_at', now).lte('due_at', soon).limit(50);
     for (const m of meetings || []) {
-      if ((m.description || '').includes('[reminded]')) continue;
       if (/^BLOCKED/i.test(m.title || '') || !m.lead_id) continue;
       if (perLeadSent.has(m.lead_id)) continue; // already messaging them this run
+      const hoursUntil = (new Date(m.due_at).getTime() - Date.now()) / 3600000;
+      // Pick the largest-window reminder that is due now and not yet sent, one per run.
+      let pick = null;
+      for (const r of active) {
+        if (hoursUntil <= r.H && !(m.description || '').includes(`[reminded:${r.i}]`)) {
+          if (!pick || r.H > pick.H) pick = r;
+        }
+      }
+      if (!pick) continue;
       const { data: lead } = await supabase.from('leads').select('full_name, name, phone, sms_opt_out').eq('id', m.lead_id).maybeSingle();
       if (!lead?.phone || lead.sms_opt_out) continue;
       perLeadSent.add(m.lead_id);
@@ -129,12 +141,12 @@ async function run(request) {
       const abbr = (String(m.description || '').match(/·\s*(ET|CT|MT|PT)/i) || [])[1];
       const tz = TZ_BY_ABBR[(abbr || 'CT').toUpperCase()] || 'America/Chicago';
       const tLabel = new Date(m.due_at).toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' });
-      const msg = String(remCfg.message || DEFAULT_REM.message).replace(/\{\{\s*first\s*\}\}/gi, first).replace(/\{\{\s*time\s*\}\}/gi, tLabel);
+      const msg = String(pick.message || DEFAULT_REM[0].message).replace(/\{\{\s*first\s*\}\}/gi, first).replace(/\{\{\s*time\s*\}\}/gi, tLabel);
       if (dryRun) { preview.push({ lead_id: m.lead_id, name: lead.full_name || lead.name || 'Lead', phone: lead.phone, message: `[REMINDER] ${msg}` }); continue; }
       await sendMessage({ to: lead.phone, message: msg });
       const ri = new Date().toISOString();
       await supabase.from('activities').insert({ lead_id: m.lead_id, activity_type: 'TEXT', direction: 'OUTBOUND', outcome: 'SENT', message_content: msg, created_at: ri, read_at: ri }).then(() => {}, () => {});
-      await supabase.from('scheduled_tasks').update({ description: `${m.description || ''} [reminded]`.trim() }).eq('id', m.id);
+      await supabase.from('scheduled_tasks').update({ description: `${m.description || ''} [reminded:${pick.i}]`.trim() }).eq('id', m.id);
       reminded++;
     }
   } catch (e) { console.error('[campaign run] reminders failed', e?.message); }

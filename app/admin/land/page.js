@@ -997,24 +997,47 @@ export default function LandLeadsAdminPage() {
     if (data) setScheduledTasks(prev => [...prev, data]);
     showToast('Day blocked off');
   };
+  // Block (or unblock) a single hour. dateStr is a toDateString() value, hour is 0-23
+  // in the browser's local time (same clock the calendar renders appointments in).
+  const toggleHourBlock = async (dateStr, hour) => {
+    const d = new Date(dateStr); d.setHours(hour, 0, 0, 0);
+    const existing = (scheduledTasks || []).find(t => t.task_type === 'meeting' && t.status === 'pending' && /^BLOCKED/i.test(t.title || '') && (t.description || '').includes('hourblock') && new Date(t.due_at).getTime() === d.getTime());
+    if (existing) {
+      setScheduledTasks(prev => prev.filter(t => t.id !== existing.id));
+      await supabase.from('scheduled_tasks').update({ status: 'cancelled' }).eq('id', existing.id);
+      return;
+    }
+    const { data, error } = await supabase.from('scheduled_tasks').insert({
+      assigned_to: adminUserId, created_by: currentUserId, task_type: 'meeting',
+      title: 'BLOCKED — Unavailable', description: 'hourblock', due_at: d.toISOString(), status: 'pending', priority: 'high',
+    }).select().single();
+    if (error) { showToast('Could not block that hour', 'error'); return; }
+    if (data) setScheduledTasks(prev => [...prev, data]);
+  };
 
   // ---- Appointment reminder settings (editable; read by the campaign scheduler) ----
-  const DEFAULT_REMINDER = { enabled: true, hoursBefore: 3, message: 'Hi {{first}}, this is Jordan with Haven Ground. Reminder of our appointment today at {{time}} to talk about your land. Looking forward to it!' };
-  const [reminderCfg, setReminderCfg] = useState(DEFAULT_REMINDER);
+  // Stored as an array of reminders so you can send more than one (e.g. a day
+  // before AND a few hours before). Each: { enabled, hoursBefore, message }.
+  const DEFAULT_REMINDER_ITEM = { enabled: true, hoursBefore: 3, message: 'Hi {{first}}, this is Jordan with Haven Ground. Reminder of our appointment today at {{time}} to talk about your land. Looking forward to it!' };
+  const [reminders, setReminders] = useState([DEFAULT_REMINDER_ITEM]);
   const [reminderOpen, setReminderOpen] = useState(false);
   const [reminderSaving, setReminderSaving] = useState(false);
   useEffect(() => {
     (async () => {
-      try { const { data } = await supabase.from('campaigns').select('steps').eq('name', '__settings:appointment_reminder').maybeSingle(); if (data?.steps?.[0]) setReminderCfg(prev => ({ ...prev, ...data.steps[0] })); } catch { /* ignore */ }
+      try { const { data } = await supabase.from('campaigns').select('steps').eq('name', '__settings:appointment_reminder').maybeSingle(); if (Array.isArray(data?.steps) && data.steps.length) setReminders(data.steps.map(s => ({ enabled: s.enabled !== false, hoursBefore: Number(s.hoursBefore) || 3, message: s.message || DEFAULT_REMINDER_ITEM.message }))); } catch { /* ignore */ }
     })();
   }, []);
+  const addReminder = () => setReminders(prev => [...prev, { enabled: true, hoursBefore: 24, message: 'Hi {{first}}, looking forward to our call tomorrow at {{time}}. Talk soon, Jordan with Haven Ground.' }]);
+  const updateReminder = (i, patch) => setReminders(prev => prev.map((r, j) => j === i ? { ...r, ...patch } : r));
+  const removeReminder = (i) => setReminders(prev => prev.filter((_, j) => j !== i));
   const saveReminderCfg = async () => {
     setReminderSaving(true);
     try {
+      const clean = reminders.map(r => ({ enabled: r.enabled !== false, hoursBefore: Number(r.hoursBefore) > 0 ? Number(r.hoursBefore) : 3, message: r.message || '' }));
       const { data: ex } = await supabase.from('campaigns').select('id').eq('name', '__settings:appointment_reminder').maybeSingle();
       let error;
-      if (ex?.id) ({ error } = await supabase.from('campaigns').update({ steps: [reminderCfg] }).eq('id', ex.id));
-      else ({ error } = await supabase.from('campaigns').insert({ name: '__settings:appointment_reminder', description: 'App setting (not a campaign)', steps: [reminderCfg], active: false }));
+      if (ex?.id) ({ error } = await supabase.from('campaigns').update({ steps: clean }).eq('id', ex.id));
+      else ({ error } = await supabase.from('campaigns').insert({ name: '__settings:appointment_reminder', description: 'App setting (not a campaign)', steps: clean, active: false }));
       if (error) throw error;
       showToast('Reminder settings saved'); setReminderOpen(false);
     } catch (e) { showToast('Could not save reminder settings', 'error'); }
@@ -5968,7 +5991,7 @@ export default function LandLeadsAdminPage() {
         {/* PIPELINE BUCKETS, Appointment Set / Offer Made / Agreement Sent / Signed Contract / Closed Deal */}
         {/* FOLLOW-UP CAMPAIGNS (engine built in Phase 2) */}
         {activeTab === 'campaigns' && (
-          <CampaignsPanel leads={allLeads} currentUserId={currentUserId} renderLeadCard={renderLeadCard} scheduledTasks={scheduledTasks} onOpenLead={navigateToLeadCard} />
+          <CampaignsPanel leads={allLeads} currentUserId={currentUserId} renderLeadCard={renderLeadCard} scheduledTasks={scheduledTasks} onOpenLead={navigateToLeadCard} onManageReminders={() => { setActiveTab('appointment-set'); setReminderOpen(true); }} />
         )}
 
         {/* MAPPED & APPOINTMENT SET, physician's-office month calendar */}
@@ -6005,25 +6028,74 @@ export default function LandLeadsAdminPage() {
                   </button>
                 </div>
                 {reminderOpen && (
-                  <div className="mt-4 bg-slate-900/60 border border-slate-700 rounded-lg p-4">
-                    <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
-                      <label className="inline-flex items-center gap-2 text-sm text-slate-200">
-                        <input type="checkbox" checked={reminderCfg.enabled !== false} onChange={e => setReminderCfg({ ...reminderCfg, enabled: e.target.checked })} />
-                        Send appointment reminders
-                      </label>
-                      <label className="inline-flex items-center gap-2 text-sm text-slate-300">
-                        Hours before:
-                        <input type="number" min="1" max="24" value={reminderCfg.hoursBefore} onChange={e => setReminderCfg({ ...reminderCfg, hoursBefore: Number(e.target.value) })} className="w-16 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-sm" />
-                      </label>
+                  <div className="mt-4 bg-slate-900/60 border border-slate-700 rounded-lg p-4 space-y-4">
+                    <div>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <h4 className="text-sm font-bold text-white">Reminder messages</h4>
+                        <span className="text-xs text-slate-500">Send as many as you want (e.g. a day before and a few hours before).</span>
+                      </div>
+                      <div className="space-y-3">
+                        {reminders.map((r, i) => (
+                          <div key={i} className="bg-slate-800/70 border border-slate-700 rounded-lg p-3">
+                            <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+                              <label className="inline-flex items-center gap-2 text-sm text-slate-200">
+                                <input type="checkbox" checked={r.enabled !== false} onChange={e => updateReminder(i, { enabled: e.target.checked })} />
+                                Reminder {i + 1}
+                              </label>
+                              <div className="flex items-center gap-2">
+                                <label className="inline-flex items-center gap-2 text-sm text-slate-300">
+                                  Send
+                                  <input type="number" min="1" max="168" value={r.hoursBefore} onChange={e => updateReminder(i, { hoursBefore: Number(e.target.value) })} className="w-16 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white text-sm" />
+                                  hrs before
+                                </label>
+                                {reminders.length > 1 && <button onClick={() => removeReminder(i)} className="text-slate-500 hover:text-red-300 text-sm px-1" title="Remove reminder">✕</button>}
+                              </div>
+                            </div>
+                            <textarea value={r.message} onChange={e => updateReminder(i, { message: e.target.value })} rows={3} className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="Hi {{first}}, ..." />
+                            <div className="mt-1.5 text-xs text-slate-500">Preview: <span className="text-slate-300">{String(r.message || '').replace(/\{\{\s*first\s*\}\}/gi, 'Mike').replace(/\{\{\s*time\s*\}\}/gi, '2:30 PM')}</span></div>
+                          </div>
+                        ))}
+                      </div>
+                      <button onClick={addReminder} className="mt-3 text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">+ Add another reminder</button>
+                      <p className="mt-2 text-xs text-slate-500">Use <code>{'{{first}}'}</code> for the first name and <code>{'{{time}}'}</code> for the appointment time.</p>
                     </div>
-                    <label className="block text-xs text-slate-400 mb-1">Message (use <code>{'{{first}}'}</code> for first name, <code>{'{{time}}'}</code> for the appointment time)</label>
-                    <textarea value={reminderCfg.message} onChange={e => setReminderCfg({ ...reminderCfg, message: e.target.value })} rows={3} className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" />
-                    <div className="mt-2 text-xs text-slate-400">Preview: <span className="text-slate-200">{String(reminderCfg.message || '').replace(/\{\{\s*first\s*\}\}/gi, 'Mike').replace(/\{\{\s*time\s*\}\}/gi, '2:30 PM')}</span></div>
-                    <div className="mt-3 flex gap-2">
-                      <button onClick={saveReminderCfg} disabled={reminderSaving} className="text-sm font-semibold px-4 py-2 rounded-lg bg-green-600 hover:bg-green-500 text-white disabled:opacity-50">{reminderSaving ? 'Saving...' : 'Save'}</button>
+
+                    {/* Visibility: who has already gotten a reminder, who's next */}
+                    {(() => {
+                      const upcoming = (scheduledTasks || [])
+                        .filter(t => t.task_type === 'meeting' && t.status === 'pending' && !/^BLOCKED/i.test(t.title || '') && t.lead_id && new Date(t.due_at) > new Date())
+                        .sort((a, b) => new Date(a.due_at) - new Date(b.due_at)).slice(0, 8);
+                      if (!upcoming.length) return <div className="text-xs text-slate-500 border-t border-slate-700 pt-3">No upcoming appointments to remind.</div>;
+                      return (
+                        <div className="border-t border-slate-700 pt-3">
+                          <h4 className="text-sm font-bold text-white mb-2">Reminder status (next {upcoming.length})</h4>
+                          <div className="space-y-1.5">
+                            {upcoming.map(t => {
+                              const lead = allLeads.find(l => l.id === t.lead_id) || rawLeads.find(l => l.id === t.lead_id);
+                              const nm = lead?.full_name || lead?.name || t.title || 'Appt';
+                              const sentCount = (String(t.description || '').match(/\[reminded/g) || []).length;
+                              const when = new Date(t.due_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+                              return (
+                                <div key={t.id} className="flex items-center gap-2 text-xs">
+                                  <span className="text-slate-200 truncate flex-1">{nm}</span>
+                                  <span className="text-slate-500 flex-shrink-0">{when}</span>
+                                  {sentCount > 0
+                                    ? <span className="flex-shrink-0 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold">{sentCount} sent ✓</span>
+                                    : <span className="flex-shrink-0 px-2 py-0.5 rounded-full bg-slate-700 text-slate-400">reminder pending</span>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <p className="mt-2 text-xs text-slate-500">"Sent ✓" means a reminder text already went out for that appointment. Every reminder also shows in the lead's message thread.</p>
+                        </div>
+                      );
+                    })()}
+
+                    <div className="flex gap-2 border-t border-slate-700 pt-3">
+                      <button onClick={saveReminderCfg} disabled={reminderSaving} className="text-sm font-semibold px-4 py-2 rounded-lg bg-green-600 hover:bg-green-500 text-white disabled:opacity-50">{reminderSaving ? 'Saving...' : 'Save reminders'}</button>
                       <button onClick={() => setReminderOpen(false)} className="text-sm font-semibold px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">Cancel</button>
                     </div>
-                    <p className="mt-2 text-xs text-slate-500">Reminders only send for real once CAMPAIGNS_LIVE is on. Use "Preview sends" in Follow-Up Campaigns to see what would go.</p>
+                    <p className="text-xs text-slate-500">Reminders only send for real once CAMPAIGNS_LIVE is on. Use "Preview sends" in Follow-Up Campaigns to see exactly what would go.</p>
                   </div>
                 )}
               </div>
@@ -6093,7 +6165,47 @@ export default function LandLeadsAdminPage() {
                       {selDayBlocked ? 'Unblock day' : 'Block this day'}
                     </button>
                   </div>
-                  <p className="text-sm text-slate-400 mb-4">{selDayBlocked ? 'Blocked, no appointments can be booked. ' : ''}{selMeetings.length} appointment{selMeetings.length === 1 ? '' : 's'}</p>
+                  <p className="text-sm text-slate-400 mb-3">{selDayBlocked ? 'Whole day blocked, no appointments can be booked. ' : ''}{selMeetings.filter(t => !/^BLOCKED/i.test(t.title || '')).length} appointment{selMeetings.filter(t => !/^BLOCKED/i.test(t.title || '')).length === 1 ? '' : 's'}</p>
+
+                  {/* Hour-by-hour availability. Tap an hour to block it (red); tap again to free it. */}
+                  {!selDayBlocked && (() => {
+                    const dayItems = byDay[calSelectedDay] || [];
+                    const HOURS = []; for (let h = 7; h <= 19; h++) HOURS.push(h);
+                    const hourLabel = (h) => new Date(2000, 0, 1, h).toLocaleTimeString([], { hour: 'numeric' });
+                    return (
+                      <div className="mb-4 bg-slate-800/40 border border-slate-700/50 rounded-xl p-3">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Tap an hour to block it off</div>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          {HOURS.map(h => {
+                            const items = dayItems.filter(t => !(t.description || '').includes('allday') && new Date(t.due_at).getHours() === h);
+                            const appt = items.find(t => !/^BLOCKED/i.test(t.title || ''));
+                            const block = items.find(t => /^BLOCKED/i.test(t.title || '') && (t.description || '').includes('hourblock'));
+                            if (appt) {
+                              const lead = allLeads.find(l => l.id === appt.lead_id);
+                              const nm = lead?.full_name || lead?.name || 'Appt';
+                              return (
+                                <div key={h} title={`${hourLabel(h)} · ${nm}`} className="rounded-lg px-2 py-1.5 text-left bg-green-500/20 border border-green-500/50 cursor-default">
+                                  <div className="text-[11px] font-bold text-green-200">{hourLabel(h)}</div>
+                                  <div className="text-[10px] text-green-300/80 truncate">{nm}</div>
+                                </div>
+                              );
+                            }
+                            return (
+                              <button
+                                key={h}
+                                onClick={() => toggleHourBlock(calSelectedDay, h)}
+                                className={`rounded-lg px-2 py-1.5 text-left border transition ${block ? 'bg-red-500/25 border-red-500/60 hover:bg-red-500/35' : 'bg-slate-700/40 border-slate-600/50 hover:bg-slate-600/50'}`}
+                              >
+                                <div className={`text-[11px] font-bold ${block ? 'text-red-300' : 'text-slate-300'}`}>{hourLabel(h)}</div>
+                                <div className={`text-[10px] ${block ? 'text-red-300/80' : 'text-slate-500'}`}>{block ? 'Blocked' : 'Open'}</div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   {selMeetings.length === 0 ? (
                     <div className="text-center py-10 text-slate-500 border border-dashed border-slate-700 rounded-xl">No appointments this day.</div>
                   ) : (

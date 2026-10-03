@@ -10,7 +10,7 @@ import { supabase } from '@/lib/supabase';
 
 const BLANK_STEP = () => ({ day: 0, type: 'text', message: '', label: '' });
 
-export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCard, scheduledTasks = [], onOpenLead }) {
+export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCard, scheduledTasks = [], onOpenLead, onManageReminders }) {
   const [campaigns, setCampaigns] = useState(null);
   const [counts, setCounts] = useState({}); // campaignId -> { active, pending }
   const [openCampaign, setOpenCampaign] = useState(null); // campaign being viewed in detail
@@ -269,6 +269,25 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
           <button onClick={sendTest} disabled={busy} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white disabled:opacity-50">Send test text</button>
         </div>
       </div>
+
+      {/* Appointment reminders: an always-on automation, managed on the Appointments tab */}
+      {(() => {
+        const upcoming = (scheduledTasks || []).filter(t => t.task_type === 'meeting' && t.status === 'pending' && !/^BLOCKED/i.test(t.title || '') && t.lead_id && new Date(t.due_at) > new Date());
+        const sent = upcoming.filter(t => /\[reminded/.test(t.description || '')).length;
+        return (
+          <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-5 flex items-start justify-between gap-4 flex-wrap">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h3 className="text-lg font-bold text-white">Appointment Reminders</h3>
+                <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300">Always on</span>
+              </div>
+              <p className="text-sm text-slate-400 mt-1">Automatic texts before each scheduled appointment. You can set several (e.g. a day before and a few hours before).</p>
+              <p className="text-xs text-slate-500 mt-2"><span className="font-bold text-white">{upcoming.length}</span> upcoming appointment{upcoming.length === 1 ? '' : 's'} · <span className="font-bold text-emerald-300">{sent}</span> already have a reminder sent</p>
+            </div>
+            {onManageReminders && <button onClick={onManageReminders} className="flex-shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">Manage reminders</button>}
+          </div>
+        );
+      })()}
 
       {campaigns === null ? (
         <div className="text-slate-400">Loading campaigns…</div>
