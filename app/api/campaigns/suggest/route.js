@@ -9,8 +9,10 @@ export async function POST(request) {
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return NextResponse.json({ ok: false, error: 'AI not configured' }, { status: 500 });
-    const { goal } = await request.json();
-    if (!goal || !String(goal).trim()) return NextResponse.json({ ok: false, error: 'Describe what you want the campaign to do.' }, { status: 400 });
+    const { goal, feedback, current } = await request.json();
+    if ((!goal || !String(goal).trim()) && (!feedback || !String(feedback).trim())) {
+      return NextResponse.json({ ok: false, error: 'Describe what you want the campaign to do.' }, { status: 400 });
+    }
 
     const system = `You are an elite land acquisitions manager for a land-buying company. You design SMS follow-up cadences (drip campaigns) that re-engage land sellers and move them toward a phone call. The company texts from iMessage, so NEVER include "reply STOP", opt-out language, or compliance footers. You are better at seller psychology than the person reading this; write cadences that actually get replies.
 
@@ -23,6 +25,8 @@ Write a short, effective sequence of steps. Each step is either a TEXT the syste
 - A CALL step has no message, just a short label like "Call to reconnect".
 - Never use em dashes or en dashes. Use commas, periods, or parentheses.
 
+If a CURRENT DRAFT and a CHANGE REQUEST are provided, REVISE the current draft to do exactly what the change asks (e.g. "make the first message ask if they already sold it"), keeping the parts that already work and only changing what is needed. Return the full updated sequence.
+
 Respond with ONLY a JSON object, no prose, no code fences:
 {
   "name": a short campaign name (3-5 words),
@@ -32,7 +36,19 @@ Respond with ONLY a JSON object, no prose, no code fences:
   ]
 }`;
 
-    const user = `Design the campaign for this goal:\n"${String(goal).trim()}"`;
+    const toAfterDays = (min) => Math.round(((Number(min) || 0) / 1440) * 100) / 100;
+    const currentSteps = Array.isArray(current?.steps) ? current.steps.map(s => ({
+      afterDays: toAfterDays(s.delayMin != null ? s.delayMin : (Number(s.day) || 0) * 1440),
+      type: s.type === 'call' ? 'call' : 'text',
+      message: s.message || '', label: s.label || '',
+    })) : null;
+
+    let user;
+    if (currentSteps && feedback && String(feedback).trim()) {
+      user = `Here is the CURRENT DRAFT of the campaign:\n${JSON.stringify({ name: current.name || '', description: current.description || '', steps: currentSteps }, null, 2)}\n\n${goal ? `Original goal: "${String(goal).trim()}"\n\n` : ''}CHANGE REQUEST from the user: "${String(feedback).trim()}"\n\nReturn the full revised campaign.`;
+    } else {
+      user = `Design the campaign for this goal:\n"${String(goal || feedback).trim()}"`;
+    }
 
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',

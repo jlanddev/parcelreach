@@ -35,6 +35,8 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   const [detailQueue, setDetailQueue] = useState([]); // text queue for the open campaign
   const [templateFor, setTemplateFor] = useState(null); // step index whose template list is open
   const [aiGoal, setAiGoal] = useState(''); // AI builder: describe the campaign
+  const [aiFeedback, setAiFeedback] = useState(''); // follow-up tweak request
+  const [aiDrafted, setAiDrafted] = useState(false); // a draft exists, show refine box
   const [aiBusy, setAiBusy] = useState(false);
   const [enrollByCampaign, setEnrollByCampaign] = useState({}); // campaignId -> Set(leadId)
   const [busy, setBusy] = useState(false);
@@ -79,8 +81,8 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   useEffect(() => { if (openCampaign) { const cp = (campaigns || []).find(c => c.id === openCampaign.id); if (cp) openDetail(cp); } /* eslint-disable-next-line */ }, [campaigns]);
 
   const firstStage = stages[0]?.value || 'NEW';
-  const startNew = () => { setEditing({ id: null, name: '', description: '', steps: [BLANK_STEP()], active: true, kind: 'manual', autoRule: 'nocontact', autoDays: 30, autoStage: firstStage }); setShowCreate(true); };
-  const startEdit = (cp) => { const a = parseAuto(cp.description); setEditing({ id: cp.id, name: cp.name, description: descClean(cp.description), steps: (Array.isArray(cp.steps) && cp.steps.length ? cp.steps : [BLANK_STEP()]).map(s => ({ delayMin: stepOffsetMin(s), type: s.type || 'text', message: s.message || '', label: s.label || '' })), active: cp.active !== false, kind: a ? 'drip' : 'manual', autoRule: a?.rule || 'nocontact', autoDays: a?.days ?? 30, autoStage: a?.stage || firstStage }); setShowCreate(true); };
+  const startNew = () => { setEditing({ id: null, name: '', description: '', steps: [BLANK_STEP()], active: true, kind: 'manual', autoRule: 'nocontact', autoDays: 30, autoStage: firstStage }); setAiGoal(""); setAiFeedback(""); setAiDrafted(false); setTemplateFor(null); setShowCreate(true); };
+  const startEdit = (cp) => { const a = parseAuto(cp.description); setEditing({ id: cp.id, name: cp.name, description: descClean(cp.description), steps: (Array.isArray(cp.steps) && cp.steps.length ? cp.steps : [BLANK_STEP()]).map(s => ({ delayMin: stepOffsetMin(s), type: s.type || 'text', message: s.message || '', label: s.label || '' })), active: cp.active !== false, kind: a ? 'drip' : 'manual', autoRule: a?.rule || 'nocontact', autoDays: a?.days ?? 30, autoStage: a?.stage || firstStage }); setAiGoal(""); setAiFeedback(""); setAiDrafted(false); setTemplateFor(null); setShowCreate(true); };
 
   const saveCampaign = async () => {
     if (!editing?.name.trim()) { say('Name is required', 'error'); return; }
@@ -137,21 +139,27 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     st[i] = { ...st[i], message: cur + (cur && !cur.endsWith(' ') ? ' ' : '') + token };
     return { ...prev, steps: st };
   });
-  // AI builder: describe the campaign, Claude drafts the whole cadence + messages.
-  const generateWithAI = async () => {
-    if (!aiGoal.trim()) { say('Describe what you want first', 'error'); return; }
+  // AI builder: describe the campaign (and refine it with plain-English feedback).
+  const runAI = async (isRefine) => {
+    if (isRefine && !aiFeedback.trim()) { say('Type what to change', 'error'); return; }
+    if (!isRefine && !aiGoal.trim()) { say('Describe what you want first', 'error'); return; }
     setAiBusy(true);
     try {
-      const res = await fetch('/api/campaigns/suggest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal: aiGoal.trim() }) });
+      const body = isRefine
+        ? { goal: aiGoal.trim(), feedback: aiFeedback.trim(), current: { name: editing.name, description: editing.description, steps: editing.steps } }
+        : { goal: aiGoal.trim() };
+      const res = await fetch('/api/campaigns/suggest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const j = await res.json();
       if (!j.ok) throw new Error(j.error || 'failed');
       setEditing(prev => ({
         ...prev,
-        name: prev.name?.trim() ? prev.name : (j.name || prev.name),
-        description: prev.description?.trim() ? prev.description : (j.description || prev.description),
+        name: (isRefine || !prev.name?.trim()) ? (j.name || prev.name) : prev.name,
+        description: (isRefine || !prev.description?.trim()) ? (j.description || prev.description) : prev.description,
         steps: (j.steps || []).map(s => ({ delayMin: Number(s.delayMin) || 0, type: s.type === 'call' ? 'call' : 'text', message: s.message || '', label: s.label || '' })),
       }));
-      say('Draft ready, review and tweak before saving');
+      setAiDrafted(true);
+      if (isRefine) setAiFeedback('');
+      say(isRefine ? 'Updated, review the changes' : 'Draft ready, review and tweak before saving');
     } catch (e) { say('AI failed: ' + e.message, 'error'); }
     setAiBusy(false);
   };
@@ -529,7 +537,14 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
                 <div className="text-sm font-semibold text-cyan-200 mb-1">Let Claude build it for you</div>
                 <div className="text-xs text-cyan-200/70 mb-2">Describe what you want and Claude drafts the timing and messages. You can edit everything after.</div>
                 <textarea value={aiGoal} onChange={e => setAiGoal(e.target.value)} rows="2" placeholder="e.g. Re-engage leads we haven't heard from in 30 days and get them on a call" className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" />
-                <button onClick={generateWithAI} disabled={aiBusy} className="mt-2 text-xs font-semibold px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white disabled:opacity-50">{aiBusy ? 'Drafting…' : '✨ Generate sequence'}</button>
+                <button onClick={() => runAI(false)} disabled={aiBusy} className="mt-2 text-xs font-semibold px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white disabled:opacity-50">{aiBusy ? 'Drafting…' : (aiDrafted ? '✨ Regenerate from scratch' : '✨ Generate sequence')}</button>
+                {aiDrafted && (
+                  <div className="mt-3 pt-3 border-t border-cyan-500/30">
+                    <div className="text-xs font-semibold text-cyan-200 mb-1">Tell Claude what to change</div>
+                    <textarea value={aiFeedback} onChange={e => setAiFeedback(e.target.value)} rows="2" placeholder="e.g. Make the first message ask if they already sold it. Keep it shorter." className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" />
+                    <button onClick={() => runAI(true)} disabled={aiBusy} className="mt-2 text-xs font-semibold px-3 py-1.5 rounded-lg bg-cyan-600/80 hover:bg-cyan-500 text-white disabled:opacity-50">{aiBusy ? 'Updating…' : 'Revise draft'}</button>
+                  </div>
+                )}
               </div>
 
               <div className="text-xs text-slate-400">Steps. Each one goes out a set time after enrollment (minutes, hours, or days). Use the <span className="text-slate-300">Insert</span> buttons or <span className="text-slate-300">Templates</span> below each message, so no typing brackets.</div>

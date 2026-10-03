@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { sendMessage } from '@/lib/projectBlue';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
-import { enrollLead, leadsForRule } from '@/lib/campaignEnroll';
+import { enrollLead, leadsForRule, PROTECTED_STAGES } from '@/lib/campaignEnroll';
 import { fillTokens } from '@/lib/messageTokens';
 
 const DAY = 86400000;
@@ -41,24 +41,45 @@ async function run(request) {
     }
   }
 
+  // DRIP THROTTLE: never fire a big burst (carriers flag high velocity as spam).
+  // Only a handful go out per run; the rest stay pending for the next tick. With
+  // the scheduler every 30 min, this meters a backlog out gradually.
+  const MAX_PER_RUN = Math.max(1, Number(process.env.CAMPAIGN_MAX_PER_RUN) || 8);
+
   const now = new Date().toISOString();
   const { data: due } = await supabase.from('campaign_queue')
     .select('id, lead_id, enrollment_id, message, type')
     .eq('status', 'pending').eq('type', 'text').lte('due_at', now)
-    .order('due_at', { ascending: true }).limit(50);
+    .order('due_at', { ascending: true }).limit(100);
 
   let sent = 0, skipped = 0, failed = 0; const preview = [];
   const perLeadSent = new Set(); // at most ONE message per person per run
   for (const item of due || []) {
     try {
+      // Throttle: once we've fired the per-run cap, stop; the rest wait for the next tick.
+      if ((dryRun ? preview.length : sent) >= MAX_PER_RUN) break;
       // Never stack multiple texts on one person in a single run: if they already
       // have a message going this run, leave the rest pending for later days.
       if (perLeadSent.has(item.lead_id)) { skipped++; continue; }
       const { data: enr } = await supabase.from('campaign_enrollments').select('status').eq('id', item.enrollment_id).maybeSingle();
       if (enr && enr.status !== 'active') { if (!dryRun) await mark(supabase, item.id, 'cancelled'); skipped++; continue; }
-      const { data: lead } = await supabase.from('leads').select('full_name, name, phone, sms_opt_out, last_contact_at, last_contact_dir, property_county, county, form_data').eq('id', item.lead_id).maybeSingle();
+      const { data: lead } = await supabase.from('leads').select('full_name, name, phone, sms_opt_out, pipeline_status, last_contact_at, last_contact_dir, property_county, county, form_data').eq('id', item.lead_id).maybeSingle();
       if (!lead?.phone) { if (!dryRun) await mark(supabase, item.id, 'failed'); failed++; continue; }
       if (lead.sms_opt_out) { if (!dryRun) await mark(supabase, item.id, 'cancelled'); skipped++; continue; }
+      // Never drip a deal in progress or a closed deal, even if it got queued.
+      if (PROTECTED_STAGES.includes(String(lead.pipeline_status || '').toUpperCase())) {
+        if (!dryRun) { await supabase.from('campaign_enrollments').update({ status: 'cancelled' }).eq('id', item.enrollment_id); await mark(supabase, item.id, 'cancelled'); }
+        skipped++; continue;
+      }
+      // If they've replied to us (last message inbound), never auto-drip over it.
+      // Pause the enrollment so a human handles it, and stop queued texts for them.
+      if (String(lead.last_contact_dir || '').toLowerCase() === 'inbound') {
+        if (!dryRun) {
+          await supabase.from('campaign_enrollments').update({ status: 'replied' }).eq('id', item.enrollment_id).eq('status', 'active');
+          await mark(supabase, item.id, 'cancelled');
+        }
+        skipped++; continue;
+      }
       // Safety net: re-run token fill so no raw {{...}} can ever go out, even if a
       // queued message somehow still has one. Already-filled text is left as-is.
       const outMsg = fillTokens(item.message, lead);
