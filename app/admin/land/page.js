@@ -6066,27 +6066,45 @@ export default function LandLeadsAdminPage() {
                         .filter(t => t.task_type === 'meeting' && t.status === 'pending' && !/^BLOCKED/i.test(t.title || '') && t.lead_id && new Date(t.due_at) > new Date())
                         .sort((a, b) => new Date(a.due_at) - new Date(b.due_at)).slice(0, 8);
                       if (!upcoming.length) return <div className="text-xs text-slate-500 border-t border-slate-700 pt-3">No upcoming appointments to remind.</div>;
+                      const activeRem = reminders.map((r, i) => ({ ...r, i, H: Number(r.hoursBefore) > 0 ? Number(r.hoursBefore) : 3 })).filter(r => r.enabled !== false);
+                      const fmtDT = (d) => d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
                       return (
                         <div className="border-t border-slate-700 pt-3">
-                          <h4 className="text-sm font-bold text-white mb-2">Reminder status (next {upcoming.length})</h4>
-                          <div className="space-y-1.5">
+                          <h4 className="text-sm font-bold text-white mb-2">Reminder schedule (next {upcoming.length})</h4>
+                          <div className="space-y-2.5">
                             {upcoming.map(t => {
                               const lead = allLeads.find(l => l.id === t.lead_id) || rawLeads.find(l => l.id === t.lead_id);
                               const nm = lead?.full_name || lead?.name || t.title || 'Appt';
-                              const sentCount = (String(t.description || '').match(/\[reminded/g) || []).length;
-                              const when = new Date(t.due_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+                              const appt = new Date(t.due_at);
                               return (
-                                <div key={t.id} className="flex items-center gap-2 text-xs">
-                                  <span className="text-slate-200 truncate flex-1">{nm}</span>
-                                  <span className="text-slate-500 flex-shrink-0">{when}</span>
-                                  {sentCount > 0
-                                    ? <span className="flex-shrink-0 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold">{sentCount} sent ✓</span>
-                                    : <span className="flex-shrink-0 px-2 py-0.5 rounded-full bg-slate-700 text-slate-400">reminder pending</span>}
+                                <div key={t.id} className="text-xs">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-slate-100 font-semibold truncate flex-1">{nm}</span>
+                                    <span className="text-slate-400 flex-shrink-0">Appt {fmtDT(appt)}</span>
+                                  </div>
+                                  <div className="mt-1 pl-3 border-l border-slate-700 space-y-0.5">
+                                    {activeRem.length === 0 && <div className="text-slate-500">No reminders enabled.</div>}
+                                    {activeRem.map(r => {
+                                      const sendAt = new Date(appt.getTime() - r.H * 3600000);
+                                      const sent = (String(t.description || '').includes(`[reminded:${r.i}]`));
+                                      const past = !sent && sendAt < new Date();
+                                      return (
+                                        <div key={r.i} className="flex items-center gap-2">
+                                          <span className="text-slate-400 flex-1 truncate">Reminder {r.i + 1} ({r.H}h before) → sends {fmtDT(sendAt)}</span>
+                                          {sent
+                                            ? <span className="flex-shrink-0 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold">sent ✓</span>
+                                            : past
+                                              ? <span className="flex-shrink-0 px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-semibold">sending</span>
+                                              : <span className="flex-shrink-0 px-2 py-0.5 rounded-full bg-slate-700 text-slate-400">scheduled</span>}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
                                 </div>
                               );
                             })}
                           </div>
-                          <p className="mt-2 text-xs text-slate-500">"Sent ✓" means a reminder text already went out for that appointment. Every reminder also shows in the lead's message thread.</p>
+                          <p className="mt-2 text-xs text-slate-500">Each reminder goes out <span className="text-slate-300">before</span> the appointment (not at the appointment time). "Sent ✓" means it already went; every reminder also shows in the lead's message thread.</p>
                         </div>
                       );
                     })()}
