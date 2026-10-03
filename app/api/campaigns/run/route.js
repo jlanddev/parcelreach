@@ -158,24 +158,53 @@ async function run(request) {
     }
   } catch (e) { console.error('[campaign run] reminders failed', e?.message); }
 
-  // ---- Rule-based auto-enroll: any active campaign whose description carries
-  // [auto:untouched:N] pulls in anybody we haven't touched (in or out) in N+ days
-  // and isn't already enrolled, then expands its steps for them. Capped per run so
-  // a big backlog trickles in over several ticks instead of all at once. ----
+  // ---- Rule-based auto-enroll (bulk drip): any active campaign whose description
+  // carries an [auto:<rule>:N] marker pulls in everyone matching that rule who isn't
+  // already enrolled, then expands its steps for them. Rules:
+  //   nocontact (or legacy untouched) - no text/call in N+ days
+  //   notext  - no OUTBOUND text in N+ days (and the lead is older than N days)
+  //   nocall  - no call in N+ days
+  //   stage:<STATUS> - sitting in <STATUS> with no activity for N+ days
+  // Capped per run so a big backlog trickles in over several ticks. ----
   let autoEnrolled = 0; const autoPreview = [];
   try {
     const { data: camps } = await supabase.from('campaigns')
       .select('id, name, steps, description, active').eq('active', true);
     for (const camp of camps || []) {
       if (String(camp.name || '').startsWith('__settings') || camp.name === 'Appointment Reminders') continue;
-      const m = String(camp.description || '').match(/\[auto:untouched:(\d+)\]/i);
-      if (!m) continue;
-      const days = Math.max(1, Number(m[1]) || 30);
+      const desc = String(camp.description || '');
+      const stageM = desc.match(/\[auto:stage:([A-Za-z_]+):(\d+)\]/i);
+      const ruleM = desc.match(/\[auto:(nocontact|notext|nocall|untouched):(\d+)\]/i);
+      if (!stageM && !ruleM) continue;
+      const rule = stageM ? 'stage' : (ruleM[1].toLowerCase() === 'untouched' ? 'nocontact' : ruleM[1].toLowerCase());
+      const days = Math.max(1, Number((stageM ? stageM[2] : ruleM[2])) || 30);
       const cutoff = new Date(Date.now() - days * DAY).toISOString();
-      const { data: cand } = await supabase.from('leads')
-        .select('id, full_name, name, phone, last_contact_at, sms_opt_out, status')
-        .lt('last_contact_at', cutoff)
-        .limit(40);
+
+      let cand = [];
+      if (rule === 'nocontact') {
+        ({ data: cand } = await supabase.from('leads')
+          .select('id, full_name, name, phone, sms_opt_out, status')
+          .lt('last_contact_at', cutoff).limit(40));
+      } else if (rule === 'nocall') {
+        ({ data: cand } = await supabase.from('leads')
+          .select('id, full_name, name, phone, sms_opt_out, status')
+          .lt('last_call_at', cutoff).lt('created_at', cutoff).limit(40));
+      } else if (rule === 'stage') {
+        ({ data: cand } = await supabase.from('leads')
+          .select('id, full_name, name, phone, sms_opt_out, status')
+          .eq('pipeline_status', stageM[1].toUpperCase()).lt('last_activity_at', cutoff).limit(40));
+      } else if (rule === 'notext') {
+        // Leads with no OUTBOUND text in the window: take leads old enough to matter,
+        // then drop any that appear in the recent-outbound-text set.
+        const { data: recent } = await supabase.from('activities')
+          .select('lead_id').eq('activity_type', 'TEXT').eq('direction', 'OUTBOUND').gte('created_at', cutoff).limit(5000);
+        const textedRecently = new Set((recent || []).map(r => r.lead_id));
+        const { data: pool } = await supabase.from('leads')
+          .select('id, full_name, name, phone, sms_opt_out, status')
+          .lt('created_at', cutoff).limit(200);
+        cand = (pool || []).filter(l => !textedRecently.has(l.id)).slice(0, 40);
+      }
+
       for (const lead of cand || []) {
         if (!lead.phone || lead.sms_opt_out || lead.status === 'archived') continue;
         const { data: ex } = await supabase.from('campaign_enrollments')
