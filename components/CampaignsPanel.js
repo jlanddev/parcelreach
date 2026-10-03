@@ -11,6 +11,16 @@ import { supabase } from '@/lib/supabase';
 const BLANK_STEP = () => ({ delayMin: 0, type: 'text', message: '', label: '' });
 // The appointment-reminders automation is stored as a campaign with this name.
 const REMINDER_CAMPAIGN_NAME = 'Appointment Reminders';
+// Ready-to-use message templates so a step is never a blank box you have to guess at.
+const MESSAGE_TEMPLATES = [
+  { name: 'Friendly check-in', body: 'Hi {{first}}, just checking in on your land in {{county}}. Still happy to help whenever the timing is right, no pressure at all.' },
+  { name: 'Still interested?', body: 'Hey {{first}}, are you still open to selling your property in {{county}}? Happy to take a quick look and see what we could do.' },
+  { name: 'Quick call ask', body: 'Hi {{first}}, would you have a few minutes for a quick call about your land in {{county}}? Easier to answer any questions that way.' },
+  { name: 'No pressure follow-up', body: 'Hey {{first}}, following up one more time. No rush at all, just let me know if selling your {{county}} property is something you want to explore.' },
+  { name: 'Cash buyer intro', body: 'Hi {{first}}, I buy land in {{county}} and would love to make you a fair cash offer on your property. Open to a quick chat?' },
+  { name: 'Re-engage (gone quiet)', body: 'Hey {{first}}, it has been a bit. Still interested in helping with your land in {{county}} whenever you are ready. Shoot me a text anytime.' },
+  { name: 'Timing check', body: 'Hi {{first}}, is now a better time to talk about your {{county}} property, or should I circle back down the road?' },
+];
 // Step timing helpers: delayMin (minutes after enrollment) is the source of truth.
 const stepOffsetMin = (s) => (s && s.delayMin != null) ? Number(s.delayMin) : (Number(s?.day) || 0) * 1440;
 const splitDelay = (min) => { min = Number(min) || 0; if (min === 0) return { amount: 0, unit: 'min' }; if (min % 1440 === 0) return { amount: min / 1440, unit: 'day' }; if (min % 60 === 0) return { amount: min / 60, unit: 'hour' }; return { amount: min, unit: 'min' }; };
@@ -23,6 +33,9 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   const [openCampaign, setOpenCampaign] = useState(null); // campaign being viewed in detail
   const [enrolledIds, setEnrolledIds] = useState(new Set());
   const [detailQueue, setDetailQueue] = useState([]); // text queue for the open campaign
+  const [templateFor, setTemplateFor] = useState(null); // step index whose template list is open
+  const [aiGoal, setAiGoal] = useState(''); // AI builder: describe the campaign
+  const [aiBusy, setAiBusy] = useState(false);
   const [enrollByCampaign, setEnrollByCampaign] = useState({}); // campaignId -> Set(leadId)
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
@@ -116,6 +129,31 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
       setEnrollFor(null); setEnrollSel(new Set()); setEnrollSearch(''); load();
     } catch (e) { say('Enroll failed: ' + e.message, 'error'); }
     setBusy(false);
+  };
+  // Append a {{token}} to a step's message so nobody has to type brackets.
+  const insertToken = (i, token) => setEditing(prev => {
+    const st = [...prev.steps];
+    const cur = st[i].message || '';
+    st[i] = { ...st[i], message: cur + (cur && !cur.endsWith(' ') ? ' ' : '') + token };
+    return { ...prev, steps: st };
+  });
+  // AI builder: describe the campaign, Claude drafts the whole cadence + messages.
+  const generateWithAI = async () => {
+    if (!aiGoal.trim()) { say('Describe what you want first', 'error'); return; }
+    setAiBusy(true);
+    try {
+      const res = await fetch('/api/campaigns/suggest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal: aiGoal.trim() }) });
+      const j = await res.json();
+      if (!j.ok) throw new Error(j.error || 'failed');
+      setEditing(prev => ({
+        ...prev,
+        name: prev.name?.trim() ? prev.name : (j.name || prev.name),
+        description: prev.description?.trim() ? prev.description : (j.description || prev.description),
+        steps: (j.steps || []).map(s => ({ delayMin: Number(s.delayMin) || 0, type: s.type === 'call' ? 'call' : 'text', message: s.message || '', label: s.label || '' })),
+      }));
+      say('Draft ready, review and tweak before saving');
+    } catch (e) { say('AI failed: ' + e.message, 'error'); }
+    setAiBusy(false);
   };
   // Immediately pull in everyone matching a bulk-drip rule (don't wait for the
   // 30-min scheduler tick). Confirms the count first so there are no surprises.
@@ -486,7 +524,15 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
                 )}
               </div>
 
-              <div className="text-xs text-slate-400">Steps. Each one goes out a set time after enrollment (minutes, hours, or days). Use <code>{'{{first}}'}</code> and <code>{'{{county}}'}</code>; they fill from the lead card.</div>
+              {/* AI builder: describe it, Claude drafts the whole sequence */}
+              <div className="bg-cyan-500/10 border border-cyan-500/40 rounded-lg p-3">
+                <div className="text-sm font-semibold text-cyan-200 mb-1">Let Claude build it for you</div>
+                <div className="text-xs text-cyan-200/70 mb-2">Describe what you want and Claude drafts the timing and messages. You can edit everything after.</div>
+                <textarea value={aiGoal} onChange={e => setAiGoal(e.target.value)} rows="2" placeholder="e.g. Re-engage leads we haven't heard from in 30 days and get them on a call" className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" />
+                <button onClick={generateWithAI} disabled={aiBusy} className="mt-2 text-xs font-semibold px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white disabled:opacity-50">{aiBusy ? 'Drafting…' : '✨ Generate sequence'}</button>
+              </div>
+
+              <div className="text-xs text-slate-400">Steps. Each one goes out a set time after enrollment (minutes, hours, or days). Use the <span className="text-slate-300">Insert</span> buttons or <span className="text-slate-300">Templates</span> below each message, so no typing brackets.</div>
               <div className="space-y-2">
                 {editing.steps.map((s, i) => {
                   const { amount, unit } = splitDelay(stepOffsetMin(s));
@@ -514,7 +560,26 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
                       <label className="text-[10px] text-slate-500 uppercase">{s.type === 'call' ? 'Call note' : 'Message'}</label>
                       {s.type === 'call'
                         ? <input value={s.label} onChange={e => { const st = [...editing.steps]; st[i] = { ...s, label: e.target.value }; setEditing({ ...editing, steps: st }); }} placeholder="e.g. Call new lead" className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-sm" />
-                        : <textarea value={s.message} onChange={e => { const st = [...editing.steps]; st[i] = { ...s, message: e.target.value }; setEditing({ ...editing, steps: st }); }} rows="2" placeholder="Hi {{first}}, ..." className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-sm" />}
+                        : <>
+                            <textarea value={s.message} onChange={e => { const st = [...editing.steps]; st[i] = { ...s, message: e.target.value }; setEditing({ ...editing, steps: st }); }} rows="2" placeholder="Hi {{first}}, ..." className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-sm" />
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              <span className="text-[10px] text-slate-500 self-center">Insert:</span>
+                              {[['Name', '{{first}}'], ['County', '{{county}}'], ['Acreage', '{{acres}}'], ['State', '{{state}}']].map(([lbl, tok]) => (
+                                <button key={tok} type="button" onClick={() => insertToken(i, tok)} className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600">+ {lbl}</button>
+                              ))}
+                              <button type="button" onClick={() => setTemplateFor(templateFor === i ? null : i)} className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-cyan-600/30 hover:bg-cyan-600/50 text-cyan-200 border border-cyan-500/40">Templates ▾</button>
+                            </div>
+                            {templateFor === i && (
+                              <div className="mt-1 bg-slate-900 border border-slate-600 rounded-lg p-1 max-h-48 overflow-y-auto">
+                                {MESSAGE_TEMPLATES.map((t, ti) => (
+                                  <button key={ti} type="button" onClick={() => { const st = [...editing.steps]; st[i] = { ...s, message: t.body }; setEditing({ ...editing, steps: st }); setTemplateFor(null); }} className="w-full text-left px-2 py-1.5 rounded hover:bg-slate-700">
+                                    <div className="text-[11px] font-semibold text-cyan-200">{t.name}</div>
+                                    <div className="text-[11px] text-slate-400 truncate">{t.body}</div>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </>}
                     </div>
                     <button onClick={() => setEditing({ ...editing, steps: editing.steps.filter((_, j) => j !== i) })} className="text-slate-500 hover:text-red-300 mt-4">✕</button>
                   </div>
