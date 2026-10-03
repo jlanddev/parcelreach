@@ -386,6 +386,43 @@ export default function LandLeadsAdminPage() {
 
   // Campaigns/drip removed. Inert state kept so nothing that still reads it breaks.
   const [enrollmentsByLead] = useState({});
+  // Follow-Up campaigns: list for the per-card "Add to campaign" control, plus
+  // which campaigns each lead is already enrolled in (so the card can show it).
+  const [campaignList, setCampaignList] = useState([]);
+  const [campaignsByLead, setCampaignsByLead] = useState({}); // leadId -> Set(campaignId)
+  const [campaignMenuLead, setCampaignMenuLead] = useState(null); // leadId whose enroll menu is open
+  const [campaignRefresh, setCampaignRefresh] = useState(0);
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      const { data: camps } = await supabase.from('campaigns').select('id, name, active').order('created_at', { ascending: true });
+      const { data: enr } = await supabase.from('campaign_enrollments').select('lead_id, campaign_id, status');
+      if (cancel) return;
+      setCampaignList((camps || []).filter(c => c.active !== false && !String(c.name || '').startsWith('__settings')));
+      const byLead = {};
+      (enr || []).forEach(e => { if (e.status === 'active') (byLead[e.lead_id] = byLead[e.lead_id] || new Set()).add(e.campaign_id); });
+      setCampaignsByLead(byLead);
+    })();
+    return () => { cancel = true; };
+  }, [campaignRefresh]);
+  useEffect(() => {
+    if (!campaignMenuLead) return;
+    const close = () => setCampaignMenuLead(null);
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [campaignMenuLead]);
+  const enrollLeadInCampaign = async (lead, campaignId) => {
+    try {
+      const res = await fetch('/api/campaigns/enroll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ campaignId, leadIds: [lead.id], userId: currentUserId }) });
+      const j = await res.json();
+      if (!j.ok) throw new Error(j.error || 'failed');
+      const cp = campaignList.find(c => c.id === campaignId);
+      setCampaignMenuLead(null);
+      if (j.already && !j.enrolled) { showToast('Already in that campaign', 'info'); return; }
+      showToast(`Added to ${cp?.name || 'campaign'}`, 'success', lead.full_name || lead.name);
+      setCampaignRefresh(t => t + 1);
+    } catch (e) { showToast('Could not add to campaign: ' + e.message, 'error'); }
+  };
   const [frozenBoardLeads, setFrozenBoardLeads] = useState(null); // snapshot so cards don't reshuffle while a modal is open
   const [notesRefresh, setNotesRefresh] = useState(0);
   const [activityLogDate, setActivityLogDate] = useState(() => new Date().toISOString().split('T')[0]);
@@ -4047,6 +4084,38 @@ export default function LandLeadsAdminPage() {
                                     </span>
                                   )}
                                 </button>
+                                {/* Add this lead to a follow-up campaign, right from the card */}
+                                <div className="relative">
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); setCampaignMenuLead(campaignMenuLead === lead.id ? null : lead.id); }}
+                                    title="Add to a follow-up campaign"
+                                    className="px-3 py-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 text-xs font-medium flex items-center gap-1.5"
+                                  >
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                                    Campaign
+                                  </button>
+                                  {campaignMenuLead === lead.id && (
+                                    <div className="absolute right-0 top-full mt-1 z-30 w-60 bg-slate-800 border border-slate-600 rounded-lg shadow-xl py-1" onClick={(e) => e.stopPropagation()}>
+                                      <div className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-700">Add to campaign</div>
+                                      {campaignList.length === 0 ? (
+                                        <div className="px-3 py-2 text-xs text-slate-400">No active campaigns. Create one in Follow-Up Campaigns.</div>
+                                      ) : campaignList.map(cp => {
+                                        const inIt = (campaignsByLead[lead.id] || new Set()).has(cp.id);
+                                        return (
+                                          <button
+                                            key={cp.id}
+                                            disabled={inIt}
+                                            onClick={() => !inIt && enrollLeadInCampaign(lead, cp.id)}
+                                            className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-2 ${inIt ? 'text-slate-500 cursor-default' : 'text-slate-200 hover:bg-slate-700'}`}
+                                          >
+                                            <span className="truncate">{cp.name}</span>
+                                            {inIt && <span className="text-[10px] text-emerald-400 flex-shrink-0">✓ In</span>}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             </div>
                             {last?.message_content && (

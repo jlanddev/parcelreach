@@ -44,8 +44,12 @@ async function run(request) {
     .order('due_at', { ascending: true }).limit(50);
 
   let sent = 0, skipped = 0, failed = 0; const preview = [];
+  const perLeadSent = new Set(); // at most ONE message per person per run
   for (const item of due || []) {
     try {
+      // Never stack multiple texts on one person in a single run: if they already
+      // have a message going this run, leave the rest pending for later days.
+      if (perLeadSent.has(item.lead_id)) { skipped++; continue; }
       const { data: enr } = await supabase.from('campaign_enrollments').select('status').eq('id', item.enrollment_id).maybeSingle();
       if (enr && enr.status !== 'active') { if (!dryRun) await mark(supabase, item.id, 'cancelled'); skipped++; continue; }
       const { data: lead } = await supabase.from('leads').select('full_name, name, phone, sms_opt_out, last_contact_at, last_contact_dir').eq('id', item.lead_id).maybeSingle();
@@ -65,6 +69,7 @@ async function run(request) {
         }
       }
 
+      perLeadSent.add(item.lead_id);
       if (dryRun) {
         preview.push({ lead_id: item.lead_id, name: lead.full_name || lead.name || 'Lead', phone: lead.phone, message: item.message });
         continue;
@@ -116,8 +121,10 @@ async function run(request) {
     for (const m of meetings || []) {
       if ((m.description || '').includes('[reminded]')) continue;
       if (/^BLOCKED/i.test(m.title || '') || !m.lead_id) continue;
+      if (perLeadSent.has(m.lead_id)) continue; // already messaging them this run
       const { data: lead } = await supabase.from('leads').select('full_name, name, phone, sms_opt_out').eq('id', m.lead_id).maybeSingle();
       if (!lead?.phone || lead.sms_opt_out) continue;
+      perLeadSent.add(m.lead_id);
       const first = String(lead.full_name || lead.name || 'there').trim().split(/\s+/)[0];
       const abbr = (String(m.description || '').match(/·\s*(ET|CT|MT|PT)/i) || [])[1];
       const tz = TZ_BY_ABBR[(abbr || 'CT').toUpperCase()] || 'America/Chicago';
