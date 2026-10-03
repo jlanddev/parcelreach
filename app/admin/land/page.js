@@ -942,6 +942,24 @@ export default function LandLeadsAdminPage() {
     if (data) setScheduledTasks(prev => [...prev, data]);
     showToast('Time blocked off'); setBlockModalOpen(false); setBlockLabel('');
   };
+  // One-click: block (or unblock) a whole day. dateStr is a toDateString() value.
+  const toggleDayBlock = async (dateStr) => {
+    const existing = (scheduledTasks || []).find(t => t.task_type === 'meeting' && t.status === 'pending' && /^BLOCKED/i.test(t.title || '') && (t.description || '').includes('allday') && new Date(t.due_at).toDateString() === dateStr);
+    if (existing) {
+      setScheduledTasks(prev => prev.filter(t => t.id !== existing.id));
+      await supabase.from('scheduled_tasks').update({ status: 'cancelled' }).eq('id', existing.id);
+      showToast('Day unblocked');
+      return;
+    }
+    const dd = new Date(dateStr); dd.setHours(12, 0, 0, 0);
+    const { data, error } = await supabase.from('scheduled_tasks').insert({
+      assigned_to: adminUserId, created_by: currentUserId, task_type: 'meeting',
+      title: 'BLOCKED — Day off', description: 'allday', due_at: dd.toISOString(), status: 'pending', priority: 'high',
+    }).select().single();
+    if (error) { showToast('Could not block day', 'error'); return; }
+    if (data) setScheduledTasks(prev => [...prev, data]);
+    showToast('Day blocked off');
+  };
 
   // Session Analytics states
   const [analyticsSubTab, setAnalyticsSubTab] = useState('live-feed');
@@ -2185,6 +2203,10 @@ export default function LandLeadsAdminPage() {
         setApptSaving(false);
         return;
       }
+      // Reject if Jordan blocked that whole day off.
+      const apptDay = new Date(dueAt).toDateString();
+      const dayBlocked = (scheduledTasks || []).some(t => t.task_type === 'meeting' && t.status === 'pending' && t.assigned_to === adminUserId && (t.description || '').includes('allday') && new Date(t.due_at).toDateString() === apptDay);
+      if (dayBlocked) { showToast('That day is blocked off. Pick another day.', 'error'); setApptSaving(false); return; }
 
       // Cancel any existing pending tasks for this lead so it stops appearing in the
       // booker's rundown (Anthony's callback gets cleared when he books an appt).
@@ -5835,21 +5857,16 @@ export default function LandLeadsAdminPage() {
           const todayStr = new Date().toDateString();
           const monthLabel = calMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
           const totalThisMonth = cells.filter(Boolean).reduce((n, d) => n + (byDay[d.toDateString()]?.length || 0), 0);
-          const selMeetings = (byDay[calSelectedDay] || []).slice().sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+          const selDayBlocked = (byDay[calSelectedDay] || []).some(t => (t.description || '').includes('allday'));
+          const selMeetings = (byDay[calSelectedDay] || []).slice().filter(t => !(t.description || '').includes('allday')).sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
           const selLabel = new Date(calSelectedDay).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
           const shiftMonth = (delta) => setCalMonth(new Date(calMonth.getFullYear(), calMonth.getMonth() + delta, 1));
           const fmtTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
           return (
             <div className="space-y-6">
-              <div className="bg-gradient-to-br from-green-500/10 to-emerald-600/5 border border-green-500/40 rounded-xl p-6 flex items-start justify-between gap-4 flex-wrap">
-                <div>
-                  <h2 className="text-2xl font-bold text-green-300">Mapped &amp; Appointment Set</h2>
-                  <p className="text-slate-400 text-sm mt-1">Confirmed, mapped, and on the calendar. {totalThisMonth} appointment{totalThisMonth === 1 ? '' : 's'} in {monthLabel}. Appointments stay 30 min apart.</p>
-                </div>
-                <button onClick={() => { setBlockDate(calSelectedDay ? new Date(calSelectedDay).toISOString().slice(0, 10) : ''); setBlockModalOpen(true); }} className="flex-shrink-0 text-sm font-semibold px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 inline-flex items-center gap-1.5">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" /></svg>
-                  Block off time
-                </button>
+              <div className="bg-gradient-to-br from-green-500/10 to-emerald-600/5 border border-green-500/40 rounded-xl p-6">
+                <h2 className="text-2xl font-bold text-green-300">Mapped &amp; Appointment Set</h2>
+                <p className="text-slate-400 text-sm mt-1">Confirmed, mapped, and on the calendar. {totalThisMonth} appointment{totalThisMonth === 1 ? '' : 's'} in {monthLabel}. Appointments stay 30 min apart.</p>
               </div>
 
               <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
@@ -5876,16 +5893,19 @@ export default function LandLeadsAdminPage() {
                     {cells.map((d, idx) => {
                       if (!d) return <div key={`e${idx}`} />;
                       const ds = d.toDateString();
-                      const dayMeetings = (byDay[ds] || []).slice().sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+                      const allDayMeetings = (byDay[ds] || []).slice().sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+                      const dayBlocked = allDayMeetings.some(t => (t.description || '').includes('allday'));
+                      const dayMeetings = allDayMeetings.filter(t => !(t.description || '').includes('allday'));
                       const isToday = ds === todayStr;
                       const isSel = ds === calSelectedDay;
                       return (
                         <button
                           key={ds}
                           onClick={() => setCalSelectedDay(ds)}
-                          className={`relative min-h-[92px] rounded-lg p-1.5 text-left align-top transition border flex flex-col ${isSel ? 'border-blue-500 bg-blue-500/15' : isToday ? 'border-slate-500 bg-slate-700/40' : 'border-slate-700/40 hover:bg-slate-700/40'}`}
+                          className={`relative min-h-[92px] rounded-lg p-1.5 text-left align-top transition border flex flex-col ${dayBlocked ? 'border-red-500/60 bg-red-500/15' : isSel ? 'border-blue-500 bg-blue-500/15' : isToday ? 'border-slate-500 bg-slate-700/40' : 'border-slate-700/40 hover:bg-slate-700/40'}`}
                         >
-                          <span className={`text-xs mb-1 ${isToday ? 'text-blue-300 font-bold' : 'text-slate-400'}`}>{d.getDate()}</span>
+                          <span className={`text-xs mb-1 ${dayBlocked ? 'text-red-300 font-semibold' : isToday ? 'text-blue-300 font-bold' : 'text-slate-400'}`}>{d.getDate()}</span>
+                          {dayBlocked && <span className="text-[10px] font-bold uppercase text-red-300 mb-0.5">Blocked</span>}
                           <div className="flex flex-col gap-0.5 overflow-hidden">
                             {dayMeetings.slice(0, 3).map(t => {
                               const lead = allLeads.find(l => l.id === t.lead_id);
@@ -5908,8 +5928,13 @@ export default function LandLeadsAdminPage() {
 
                 {/* Selected day's appointments */}
                 <div className="xl:col-span-2">
-                  <h3 className="text-lg font-bold text-white mb-1">{selLabel}</h3>
-                  <p className="text-sm text-slate-400 mb-4">{selMeetings.length} appointment{selMeetings.length === 1 ? '' : 's'}</p>
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <h3 className="text-lg font-bold text-white">{selLabel}</h3>
+                    <button onClick={() => toggleDayBlock(calSelectedDay)} className={`text-xs font-semibold px-2.5 py-1 rounded-lg ${selDayBlocked ? 'bg-red-500/20 text-red-300 border border-red-500/40 hover:bg-red-500/30' : 'bg-slate-700/60 text-slate-300 hover:bg-slate-600/60'}`}>
+                      {selDayBlocked ? 'Unblock day' : 'Block this day'}
+                    </button>
+                  </div>
+                  <p className="text-sm text-slate-400 mb-4">{selDayBlocked ? 'Blocked, no appointments can be booked. ' : ''}{selMeetings.length} appointment{selMeetings.length === 1 ? '' : 's'}</p>
                   {selMeetings.length === 0 ? (
                     <div className="text-center py-10 text-slate-500 border border-dashed border-slate-700 rounded-xl">No appointments this day.</div>
                   ) : (
