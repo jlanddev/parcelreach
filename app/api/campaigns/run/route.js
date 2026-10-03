@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { sendMessage } from '@/lib/projectBlue';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
-import { enrollLead } from '@/lib/campaignEnroll';
+import { enrollLead, leadsForRule } from '@/lib/campaignEnroll';
+import { fillTokens } from '@/lib/messageTokens';
 
 const DAY = 86400000;
 
@@ -55,9 +56,12 @@ async function run(request) {
       if (perLeadSent.has(item.lead_id)) { skipped++; continue; }
       const { data: enr } = await supabase.from('campaign_enrollments').select('status').eq('id', item.enrollment_id).maybeSingle();
       if (enr && enr.status !== 'active') { if (!dryRun) await mark(supabase, item.id, 'cancelled'); skipped++; continue; }
-      const { data: lead } = await supabase.from('leads').select('full_name, name, phone, sms_opt_out, last_contact_at, last_contact_dir').eq('id', item.lead_id).maybeSingle();
+      const { data: lead } = await supabase.from('leads').select('full_name, name, phone, sms_opt_out, last_contact_at, last_contact_dir, property_county, county, form_data').eq('id', item.lead_id).maybeSingle();
       if (!lead?.phone) { if (!dryRun) await mark(supabase, item.id, 'failed'); failed++; continue; }
       if (lead.sms_opt_out) { if (!dryRun) await mark(supabase, item.id, 'cancelled'); skipped++; continue; }
+      // Safety net: re-run token fill so no raw {{...}} can ever go out, even if a
+      // queued message somehow still has one. Already-filled text is left as-is.
+      const outMsg = fillTokens(item.message, lead);
 
       // One automated text per lead per day. If we already texted them today
       // (Central), push this to tomorrow instead of stacking a second one.
@@ -74,17 +78,17 @@ async function run(request) {
 
       perLeadSent.add(item.lead_id);
       if (dryRun) {
-        preview.push({ lead_id: item.lead_id, name: lead.full_name || lead.name || 'Lead', phone: lead.phone, message: item.message });
+        preview.push({ lead_id: item.lead_id, name: lead.full_name || lead.name || 'Lead', phone: lead.phone, message: outMsg });
         continue;
       }
 
-      await sendMessage({ to: lead.phone, message: item.message });
+      await sendMessage({ to: lead.phone, message: outMsg });
 
       const nowIso = new Date().toISOString();
-      const row = { lead_id: item.lead_id, activity_type: 'TEXT', direction: 'OUTBOUND', outcome: 'SENT', message_content: item.message, created_at: nowIso };
+      const row = { lead_id: item.lead_id, activity_type: 'TEXT', direction: 'OUTBOUND', outcome: 'SENT', message_content: outMsg, created_at: nowIso };
       const { error } = await supabase.from('activities').insert({ ...row, read_at: nowIso });
       if (error) await supabase.from('activities').insert(row);
-      await supabase.from('leads').update({ last_activity_at: nowIso, last_contact_at: nowIso, last_contact_dir: 'outbound', last_contact_channel: 'text', last_contact_preview: String(item.message).slice(0, 200) }).eq('id', item.lead_id);
+      await supabase.from('leads').update({ last_activity_at: nowIso, last_contact_at: nowIso, last_contact_dir: 'outbound', last_contact_channel: 'text', last_contact_preview: String(outMsg).slice(0, 200) }).eq('id', item.lead_id);
       await mark(supabase, item.id, 'sent');
       sent++;
     } catch (e) {
@@ -141,14 +145,13 @@ async function run(request) {
         }
       }
       if (!pick) continue;
-      const { data: lead } = await supabase.from('leads').select('full_name, name, phone, sms_opt_out').eq('id', m.lead_id).maybeSingle();
+      const { data: lead } = await supabase.from('leads').select('full_name, name, phone, sms_opt_out, property_county, county, form_data').eq('id', m.lead_id).maybeSingle();
       if (!lead?.phone || lead.sms_opt_out) continue;
       perLeadSent.add(m.lead_id);
-      const first = String(lead.full_name || lead.name || 'there').trim().split(/\s+/)[0];
       const abbr = (String(m.description || '').match(/·\s*(ET|CT|MT|PT)/i) || [])[1];
       const tz = TZ_BY_ABBR[(abbr || 'CT').toUpperCase()] || 'America/Chicago';
       const tLabel = new Date(m.due_at).toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' });
-      const msg = String(pick.message || DEFAULT_REM[0].message).replace(/\{\{\s*first\s*\}\}/gi, first).replace(/\{\{\s*time\s*\}\}/gi, tLabel);
+      const msg = fillTokens(pick.message || DEFAULT_REM[0].message, lead, { time: tLabel });
       if (dryRun) { preview.push({ lead_id: m.lead_id, name: lead.full_name || lead.name || 'Lead', phone: lead.phone, message: `[REMINDER] ${msg}` }); continue; }
       await sendMessage({ to: lead.phone, message: msg });
       const ri = new Date().toISOString();
@@ -178,35 +181,9 @@ async function run(request) {
       if (!stageM && !ruleM) continue;
       const rule = stageM ? 'stage' : (ruleM[1].toLowerCase() === 'untouched' ? 'nocontact' : ruleM[1].toLowerCase());
       const days = Math.max(1, Number((stageM ? stageM[2] : ruleM[2])) || 30);
-      const cutoff = new Date(Date.now() - days * DAY).toISOString();
+      const cand = (await leadsForRule(supabase, { rule, stage: stageM?.[1], days })).slice(0, 40);
 
-      let cand = [];
-      if (rule === 'nocontact') {
-        ({ data: cand } = await supabase.from('leads')
-          .select('id, full_name, name, phone, sms_opt_out, status')
-          .lt('last_contact_at', cutoff).limit(40));
-      } else if (rule === 'nocall') {
-        ({ data: cand } = await supabase.from('leads')
-          .select('id, full_name, name, phone, sms_opt_out, status')
-          .lt('last_call_at', cutoff).lt('created_at', cutoff).limit(40));
-      } else if (rule === 'stage') {
-        ({ data: cand } = await supabase.from('leads')
-          .select('id, full_name, name, phone, sms_opt_out, status')
-          .eq('pipeline_status', stageM[1].toUpperCase()).lt('last_activity_at', cutoff).limit(40));
-      } else if (rule === 'notext') {
-        // Leads with no OUTBOUND text in the window: take leads old enough to matter,
-        // then drop any that appear in the recent-outbound-text set.
-        const { data: recent } = await supabase.from('activities')
-          .select('lead_id').eq('activity_type', 'TEXT').eq('direction', 'OUTBOUND').gte('created_at', cutoff).limit(5000);
-        const textedRecently = new Set((recent || []).map(r => r.lead_id));
-        const { data: pool } = await supabase.from('leads')
-          .select('id, full_name, name, phone, sms_opt_out, status')
-          .lt('created_at', cutoff).limit(200);
-        cand = (pool || []).filter(l => !textedRecently.has(l.id)).slice(0, 40);
-      }
-
-      for (const lead of cand || []) {
-        if (!lead.phone || lead.sms_opt_out || lead.status === 'archived') continue;
+      for (const lead of cand) {
         const { data: ex } = await supabase.from('campaign_enrollments')
           .select('id').eq('lead_id', lead.id).eq('campaign_id', camp.id).maybeSingle();
         if (ex) continue;

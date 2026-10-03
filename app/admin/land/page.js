@@ -9725,7 +9725,7 @@ export default function LandLeadsAdminPage() {
                   ))}
                 </div>
                 <button onClick={addReminder} className="mt-3 text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">+ Add another reminder</button>
-                <p className="mt-2 text-xs text-slate-500">Use <code>{'{{first}}'}</code> for the first name and <code>{'{{time}}'}</code> for the appointment time.</p>
+                <p className="mt-2 text-xs text-slate-500">Use <code>{'{{first}}'}</code> (first name), <code>{'{{county}}'}</code> (their county), and <code>{'{{time}}'}</code> (appointment time). They fill from the lead card, and a blank field never shows raw <code>{'{{ }}'}</code>.</p>
               </div>
 
               {(() => {

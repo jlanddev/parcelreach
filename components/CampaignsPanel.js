@@ -8,9 +8,14 @@ import { supabase } from '@/lib/supabase';
 // sending stays OFF until CAMPAIGNS_LIVE=true is set in the environment; until
 // then "Preview sends" shows the dry-run.
 
-const BLANK_STEP = () => ({ day: 0, type: 'text', message: '', label: '' });
+const BLANK_STEP = () => ({ delayMin: 0, type: 'text', message: '', label: '' });
 // The appointment-reminders automation is stored as a campaign with this name.
 const REMINDER_CAMPAIGN_NAME = 'Appointment Reminders';
+// Step timing helpers: delayMin (minutes after enrollment) is the source of truth.
+const stepOffsetMin = (s) => (s && s.delayMin != null) ? Number(s.delayMin) : (Number(s?.day) || 0) * 1440;
+const splitDelay = (min) => { min = Number(min) || 0; if (min === 0) return { amount: 0, unit: 'min' }; if (min % 1440 === 0) return { amount: min / 1440, unit: 'day' }; if (min % 60 === 0) return { amount: min / 60, unit: 'hour' }; return { amount: min, unit: 'min' }; };
+const toMin = (amount, unit) => { const a = Number(amount) || 0; return unit === 'day' ? a * 1440 : unit === 'hour' ? a * 60 : a; };
+const offsetLabel = (min) => { min = Number(min) || 0; if (min === 0) return 'Right away'; if (min < 60) return `${min} min`; if (min < 1440) { const h = min / 60; return `${Number.isInteger(h) ? h : h.toFixed(1)} hr`; } const d = min / 1440; return `Day ${Number.isInteger(d) ? d : d.toFixed(1)}`; };
 
 export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCard, scheduledTasks = [], onOpenLead, onManageReminders, stages = [] }) {
   const [campaigns, setCampaigns] = useState(null);
@@ -62,13 +67,14 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
 
   const firstStage = stages[0]?.value || 'NEW';
   const startNew = () => { setEditing({ id: null, name: '', description: '', steps: [BLANK_STEP()], active: true, kind: 'manual', autoRule: 'nocontact', autoDays: 30, autoStage: firstStage }); setShowCreate(true); };
-  const startEdit = (cp) => { const a = parseAuto(cp.description); setEditing({ id: cp.id, name: cp.name, description: descClean(cp.description), steps: (Array.isArray(cp.steps) && cp.steps.length ? cp.steps : [BLANK_STEP()]).map(s => ({ day: s.day ?? 0, type: s.type || 'text', message: s.message || '', label: s.label || '' })), active: cp.active !== false, kind: a ? 'drip' : 'manual', autoRule: a?.rule || 'nocontact', autoDays: a?.days ?? 30, autoStage: a?.stage || firstStage }); setShowCreate(true); };
+  const startEdit = (cp) => { const a = parseAuto(cp.description); setEditing({ id: cp.id, name: cp.name, description: descClean(cp.description), steps: (Array.isArray(cp.steps) && cp.steps.length ? cp.steps : [BLANK_STEP()]).map(s => ({ delayMin: stepOffsetMin(s), type: s.type || 'text', message: s.message || '', label: s.label || '' })), active: cp.active !== false, kind: a ? 'drip' : 'manual', autoRule: a?.rule || 'nocontact', autoDays: a?.days ?? 30, autoStage: a?.stage || firstStage }); setShowCreate(true); };
 
   const saveCampaign = async () => {
     if (!editing?.name.trim()) { say('Name is required', 'error'); return; }
     setBusy(true);
     const steps = editing.steps.map(s => {
-      const base = { day: Number(s.day) || 0, type: s.type };
+      const delayMin = Number(s.delayMin) || 0;
+      const base = { delayMin, day: Math.round(delayMin / 1440), type: s.type }; // keep day for legacy readers
       if (s.type === 'call') base.label = s.label || 'Call';
       else base.message = s.message || '';
       return base;
@@ -111,16 +117,24 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     } catch (e) { say('Enroll failed: ' + e.message, 'error'); }
     setBusy(false);
   };
-  const scanSilent = async (cp) => {
-    if (!window.confirm(`Find inflow leads with no reply in 7 days and enroll them into "${cp.name}" (they move out of inflow onto the drip)?`)) return;
+  // Immediately pull in everyone matching a bulk-drip rule (don't wait for the
+  // 30-min scheduler tick). Confirms the count first so there are no surprises.
+  const populateNow = async (cp) => {
+    const a = parseAuto(cp.description);
+    if (!a) { say('This campaign has no auto rule', 'error'); return; }
     setBusy(true);
     try {
-      const res = await fetch('/api/campaigns/enroll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ campaignId: cp.id, rule: 'silent-inflow', days: 7, moveOut: true, userId: currentUserId }) });
-      const j = await res.json();
-      if (!j.ok) throw new Error(j.error || 'failed');
-      say(`Scanned ${j.considered}, enrolled ${j.enrolled}, ${j.queued} texts queued`);
+      const body = { campaignId: cp.id, rule: a.rule, days: a.days, userId: currentUserId };
+      if (a.rule === 'stage') body.stage = a.stage;
+      const c = await fetch('/api/campaigns/enroll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, countOnly: true }) }).then(r => r.json());
+      if (!c.ok) throw new Error(c.error || 'failed');
+      if (!c.wouldAdd) { say(`No new leads match right now${c.alreadyIn ? ` (${c.alreadyIn} already in)` : ''}`, 'error'); setBusy(false); return; }
+      if (!window.confirm(`Add ${c.wouldAdd} lead${c.wouldAdd === 1 ? '' : 's'} to "${cp.name}" now? They start the drip from day 1.`)) { setBusy(false); return; }
+      const res = await fetch('/api/campaigns/enroll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
+      if (!res.ok) throw new Error(res.error || 'failed');
+      say(`Added ${res.enrolled}, ${res.queued} texts queued`);
       load();
-    } catch (e) { say('Scan failed: ' + e.message, 'error'); }
+    } catch (e) { say('Populate failed: ' + e.message, 'error'); }
     setBusy(false);
   };
   const sendTest = async () => {
@@ -166,7 +180,9 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   const stepSummary = (steps) => {
     if (!Array.isArray(steps) || !steps.length) return 'No steps';
     const t = steps.filter(s => s.type !== 'call').length, c = steps.filter(s => s.type === 'call').length;
-    return `${steps.length} steps · ${t} text${t === 1 ? '' : 's'}, ${c} call${c === 1 ? '' : 's'} · over ${Math.max(...steps.map(s => Number(s.day) || 0))} days`;
+    const maxMin = Math.max(0, ...steps.map(s => stepOffsetMin(s)));
+    const span = maxMin < 1440 ? offsetLabel(maxMin).toLowerCase() : `${Math.round(maxMin / 1440)} days`;
+    return `${steps.length} steps · ${t} text${t === 1 ? '' : 's'}, ${c} call${c === 1 ? '' : 's'} · over ${span}`;
   };
 
   // Needs-attention count for a campaign: due calls + leads who replied and owe us.
@@ -218,7 +234,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
             </div>
             <div className="flex items-center gap-2">
               <button onClick={() => { setEnrollFor(openCampaign); setEnrollSel(new Set()); setEnrollSearch(''); }} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white">Enroll leads</button>
-              <button onClick={() => scanSilent(openCampaign)} disabled={busy} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 disabled:opacity-50">Scan silent (7d)</button>
+              {autoSummary(openCampaign.description) && <button onClick={() => populateNow(openCampaign)} disabled={busy} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/40 disabled:opacity-50">Populate now</button>}
               <button onClick={() => startEdit(openCampaign)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">Edit sequence</button>
             </div>
           </div>
@@ -252,7 +268,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
         <div className="space-y-2">
           {(Array.isArray(openCampaign.steps) ? openCampaign.steps : []).map((s, i) => (
             <div key={i} className="flex items-start gap-3">
-              <span className="flex-shrink-0 text-xs font-bold text-slate-400 w-14">Day {s.day ?? 0}</span>
+              <span className="flex-shrink-0 text-xs font-bold text-slate-400 w-16">{offsetLabel(stepOffsetMin(s))}</span>
               <span className={`flex-shrink-0 text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${s.type === 'call' ? 'bg-amber-500/20 text-amber-300' : 'bg-cyan-500/20 text-cyan-300'}`}>{s.type === 'call' ? 'Call' : 'Text'}</span>
               <span className="text-sm text-slate-200">{s.type === 'call' ? (s.label || 'Call') : s.message}</span>
             </div>
@@ -312,7 +328,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
       <div>
         <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400 mb-3">Enrolled leads ({enrolledLeads.length})</h3>
         {enrolledLeads.length === 0 ? (
-          <div className="text-center py-12 text-slate-500 border border-dashed border-slate-700 rounded-xl">No leads enrolled yet. Use "Enroll leads" or "Scan silent".</div>
+          <div className="text-center py-12 text-slate-500 border border-dashed border-slate-700 rounded-xl">No leads enrolled yet. Use "Enroll leads"{autoSummary(openCampaign.description) ? ' or "Populate now"' : ''}.</div>
         ) : renderLeadCard ? (
           <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">{enrolledLeads.map(l => <div key={l.id}>{renderLeadCard(l)}</div>)}</div>
         ) : (
@@ -410,7 +426,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 <button onClick={() => { setEnrollFor(cp); setEnrollSel(new Set()); setEnrollSearch(''); }} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-rose-600/20 text-rose-200 border border-rose-500/40 hover:bg-rose-600/40">Enroll leads</button>
-                <button onClick={() => scanSilent(cp)} disabled={busy} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700/60 text-slate-200 hover:bg-slate-600/60 disabled:opacity-50">Scan silent inflow (7d)</button>
+                {autoSummary(cp.description) && <button onClick={() => populateNow(cp)} disabled={busy} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600/20 text-indigo-200 border border-indigo-500/40 hover:bg-indigo-600/40 disabled:opacity-50">Populate now</button>}
                 <button onClick={() => startEdit(cp)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700/60 text-slate-200 hover:bg-slate-600/60">Edit steps</button>
                 <button onClick={() => deleteCampaign(cp)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700/40 text-slate-400 hover:text-red-300">Delete</button>
               </div>
@@ -470,13 +486,22 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
                 )}
               </div>
 
-              <div className="text-xs text-slate-400">Steps. Day = how many days after enrollment. Use <code>{'{{first}}'}</code> for the seller's first name.</div>
+              <div className="text-xs text-slate-400">Steps. Each one goes out a set time after enrollment (minutes, hours, or days). Use <code>{'{{first}}'}</code> and <code>{'{{county}}'}</code>; they fill from the lead card.</div>
               <div className="space-y-2">
-                {editing.steps.map((s, i) => (
+                {editing.steps.map((s, i) => {
+                  const { amount, unit } = splitDelay(stepOffsetMin(s));
+                  return (
                   <div key={i} className="bg-slate-900/50 border border-slate-700 rounded-lg p-2.5 flex gap-2 items-start">
-                    <div className="flex flex-col items-center">
-                      <label className="text-[10px] text-slate-500 uppercase">Day</label>
-                      <input type="number" min="0" value={s.day} onChange={e => { const st = [...editing.steps]; st[i] = { ...s, day: e.target.value }; setEditing({ ...editing, steps: st }); }} className="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-sm text-center" />
+                    <div className="flex flex-col">
+                      <label className="text-[10px] text-slate-500 uppercase">After</label>
+                      <div className="flex gap-1">
+                        <input type="number" min="0" value={amount} onChange={e => { const st = [...editing.steps]; st[i] = { ...s, delayMin: toMin(e.target.value, unit) }; setEditing({ ...editing, steps: st }); }} className="w-12 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-sm text-center" />
+                        <select value={unit} onChange={e => { const st = [...editing.steps]; st[i] = { ...s, delayMin: toMin(amount, e.target.value) }; setEditing({ ...editing, steps: st }); }} className="bg-slate-700 border border-slate-600 rounded px-1 py-1 text-white text-xs">
+                          <option value="min">min</option>
+                          <option value="hour">hrs</option>
+                          <option value="day">days</option>
+                        </select>
+                      </div>
                     </div>
                     <div className="flex flex-col">
                       <label className="text-[10px] text-slate-500 uppercase">Type</label>
@@ -493,10 +518,11 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
                     </div>
                     <button onClick={() => setEditing({ ...editing, steps: editing.steps.filter((_, j) => j !== i) })} className="text-slate-500 hover:text-red-300 mt-4">✕</button>
                   </div>
-                ))}
+                  );
+                })}
                 <div className="flex gap-2">
                   <button onClick={() => setEditing({ ...editing, steps: [...editing.steps, BLANK_STEP()] })} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">+ Add step</button>
-                  <button onClick={() => { const maxDay = Math.max(0, ...editing.steps.map(s => Number(s.day) || 0)); const d = maxDay + 30; setEditing({ ...editing, steps: [...editing.steps, { day: d, type: 'text', message: 'Hi {{first}}, just checking in. Still happy to help with your land whenever the timing is right, no rush at all.', label: '' }, { day: d, type: 'call', label: 'Monthly check-in call', message: '' }] }); }} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/40">+ Monthly touch (warm text + call)</button>
+                  <button onClick={() => { const maxMin = Math.max(0, ...editing.steps.map(s => stepOffsetMin(s))); const d = maxMin + 30 * 1440; setEditing({ ...editing, steps: [...editing.steps, { delayMin: d, type: 'text', message: 'Hi {{first}}, just checking in. Still happy to help with your land whenever the timing is right, no rush at all.', label: '' }, { delayMin: d, type: 'call', label: 'Monthly check-in call', message: '' }] }); }} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/40">+ Monthly touch (warm text + call)</button>
                 </div>
               </div>
             </div>

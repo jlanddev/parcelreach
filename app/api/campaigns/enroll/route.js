@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
+import { fillTokens } from '@/lib/messageTokens';
+import { leadsForRule } from '@/lib/campaignEnroll';
 
 // POST /api/campaigns/enroll
 // Body: { campaignId, leadIds?: [uuid], rule?: 'silent-inflow', days?: number, moveOut?: bool }
@@ -10,8 +12,7 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin';
 // enrolls those. With moveOut, enrolled leads leave inflow (status FOLLOW_UP).
 
 const DAY = 86400000;
-const firstNameOf = (l) => String(l.full_name || l.name || '').trim().split(/\s+/)[0] || 'there';
-const fill = (msg, l) => String(msg || '').replace(/\{\{\s*first\s*\}\}/gi, firstNameOf(l)).replace(/\{\{\s*sender\s*\}\}/gi, 'Jordan');
+const fill = (msg, l) => fillTokens(msg, l);
 
 export async function POST(request) {
   try {
@@ -27,7 +28,7 @@ export async function POST(request) {
     // Resolve the lead set.
     let leads = [];
     if (Array.isArray(body.leadIds) && body.leadIds.length) {
-      const { data } = await sb.from('leads').select('id, full_name, name, phone, pipeline_status, status').in('id', body.leadIds);
+      const { data } = await sb.from('leads').select('id, full_name, name, phone, pipeline_status, status, property_county, county, form_data').in('id', body.leadIds);
       leads = data || [];
     } else if (body.rule === 'silent-inflow') {
       const days = Number(body.days) > 0 ? Number(body.days) : 7;
@@ -35,14 +36,28 @@ export async function POST(request) {
       const inflow = ['NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'];
       // texted them, last contact was outbound, and nothing since the cutoff
       const { data } = await sb.from('leads')
-        .select('id, full_name, name, phone, pipeline_status, status, last_contact_at, last_contact_dir')
+        .select('id, full_name, name, phone, pipeline_status, status, last_contact_at, last_contact_dir, property_county, county, form_data')
         .in('pipeline_status', inflow)
         .eq('last_contact_dir', 'outbound')
         .lt('last_contact_at', cutoff)
         .limit(500);
       leads = (data || []).filter(l => l.status !== 'archived' && l.phone);
+    } else if (['nocontact', 'notext', 'nocall', 'stage'].includes(body.rule)) {
+      leads = await leadsForRule(sb, { rule: body.rule, stage: body.stage, days: body.days });
     } else {
       return NextResponse.json({ ok: false, error: 'Provide leadIds or rule' }, { status: 400 });
+    }
+
+    // Count-only mode: how many leads would be added (minus those already in),
+    // without changing anything. Used by the "Populate now" confirm dialog.
+    if (body.countOnly) {
+      const ids = leads.map(l => l.id);
+      let alreadyIn = 0;
+      if (ids.length) {
+        const { data: existing } = await sb.from('campaign_enrollments').select('lead_id').eq('campaign_id', campaignId).in('lead_id', ids);
+        alreadyIn = (existing || []).length;
+      }
+      return NextResponse.json({ ok: true, considered: leads.length, wouldAdd: Math.max(0, leads.length - alreadyIn), alreadyIn });
     }
 
     let enrolled = 0, already = 0, queued = 0, calls = 0;
@@ -62,8 +77,8 @@ export async function POST(request) {
       const textRows = [];
       for (let i = 0; i < steps.length; i++) {
         const step = steps[i];
-        const dayOffset = Number(step.day) || 0;
-        const dueAt = new Date(Date.now() + dayOffset * DAY).toISOString();
+        const offMin = step.delayMin != null ? Number(step.delayMin) : (Number(step.day) || 0) * 1440;
+        const dueAt = new Date(Date.now() + offMin * 60000).toISOString();
         if (step.type === 'call') {
           const callRow = {
             lead_id: lead.id, task_type: 'callback', title: step.label || `Follow-up call: ${campaign.name}`,
