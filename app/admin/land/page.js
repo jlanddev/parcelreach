@@ -42,6 +42,28 @@ const STAGE_LABEL_SHORT = (s) => ({
 // UTC parsing so it isn't re-read as local time (adds the tz offset otherwise).
 const parseTs = (s) => new Date(/Z|[+-]\d\d:?\d\d$/.test(s || '') ? s : (s || '') + 'Z');
 
+// Appointment timezones the seller could be in (booker must pick one).
+const APPT_TZS = [
+  { id: 'America/New_York', label: 'Eastern (EST/EDT)', abbr: 'ET' },
+  { id: 'America/Chicago', label: 'Central (CST/CDT)', abbr: 'CT' },
+  { id: 'America/Denver', label: 'Mountain (MST/MDT)', abbr: 'MT' },
+  { id: 'America/Los_Angeles', label: 'Pacific (PST/PDT)', abbr: 'PT' },
+];
+const tzAbbr = (id) => (APPT_TZS.find(t => t.id === id)?.abbr) || 'CT';
+// Convert a wall-clock date+time in a given IANA tz to a UTC ISO string
+// (DST-correct), so 9:30 Eastern and 9:30 Central never land on the same instant.
+const zonedToUtcISO = (dateStr, timeStr, tz) => {
+  const [y, mo, d] = (dateStr || '').split('-').map(Number);
+  const [h, mi] = (timeStr || '').split(':').map(Number);
+  if (!y || !mo || !d || Number.isNaN(h) || Number.isNaN(mi)) return new Date(`${dateStr}T${timeStr}`).toISOString();
+  const guess = Date.UTC(y, mo - 1, d, h, mi);
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
+    .formatToParts(new Date(guess)).map(p => [p.type, p.value]));
+  const shownHour = parts.hour === '24' ? 0 : Number(parts.hour);
+  const shown = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), shownHour, Number(parts.minute));
+  return new Date(guess + (guess - shown)).toISOString();
+};
+
 export default function LandLeadsAdminPage() {
   const router = useRouter();
   const [organizations, setOrganizations] = useState([]);
@@ -900,7 +922,26 @@ export default function LandLeadsAdminPage() {
   const [apptDate, setApptDate] = useState('');
   const [apptTime, setApptTime] = useState('');
   const [apptNote, setApptNote] = useState('');
+  const [apptTz, setApptTz] = useState('America/Chicago'); // seller's timezone, required
   const [apptSaving, setApptSaving] = useState(false);
+  // Block off personal time (e.g. engineering meeting) so no appt can be booked over it.
+  const [blockModalOpen, setBlockModalOpen] = useState(false);
+  const [blockDate, setBlockDate] = useState('');
+  const [blockTime, setBlockTime] = useState('');
+  const [blockTz, setBlockTz] = useState('America/Chicago');
+  const [blockLabel, setBlockLabel] = useState('');
+  const submitBlock = async () => {
+    if (!blockDate || !blockTime) { showToast('Date and time required', 'error'); return; }
+    const dueAt = zonedToUtcISO(blockDate, blockTime, blockTz);
+    const { data, error } = await supabase.from('scheduled_tasks').insert({
+      assigned_to: adminUserId, created_by: currentUserId, task_type: 'meeting',
+      title: `BLOCKED — ${blockLabel || 'Unavailable'}`, description: `Blocked time · ${tzAbbr(blockTz)}`,
+      due_at: dueAt, status: 'pending', priority: 'high',
+    }).select().single();
+    if (error) { showToast('Could not block time', 'error'); return; }
+    if (data) setScheduledTasks(prev => [...prev, data]);
+    showToast('Time blocked off'); setBlockModalOpen(false); setBlockLabel('');
+  };
 
   // Session Analytics states
   const [analyticsSubTab, setAnalyticsSubTab] = useState('live-feed');
@@ -2124,11 +2165,26 @@ export default function LandLeadsAdminPage() {
       showToast('Date and time are required', 'error');
       return;
     }
+    if (!apptTz) { showToast("Pick the seller's timezone", 'error'); return; }
     setApptSaving(true);
     try {
       const lead = allLeads.find(l => l.id === apptModalLeadId);
       const leadName = lead?.full_name || lead?.name || 'Lead';
-      const dueAt = new Date(`${apptDate}T${apptTime}`).toISOString();
+      const dueAt = zonedToUtcISO(apptDate, apptTime, apptTz);
+
+      // Keep at least 30 minutes between Jordan's appointments (and around any
+      // blocked-off time). Block the booking if it lands too close to another.
+      const newMs = new Date(dueAt).getTime();
+      const conflict = (scheduledTasks || []).find(t =>
+        t.task_type === 'meeting' && t.status === 'pending' && t.assigned_to === adminUserId
+        && t.lead_id !== apptModalLeadId && Math.abs(new Date(t.due_at).getTime() - newMs) < 30 * 60000);
+      if (conflict) {
+        const ct = new Date(conflict.due_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        const what = /^BLOCKED/i.test(conflict.title || '') ? 'blocked time' : (conflict.title || 'another appointment');
+        showToast(`Too close to ${what} at ${ct}. Keep at least 30 minutes between.`, 'error');
+        setApptSaving(false);
+        return;
+      }
 
       // Cancel any existing pending tasks for this lead so it stops appearing in the
       // booker's rundown (Anthony's callback gets cleared when he books an appt).
@@ -2144,7 +2200,7 @@ export default function LandLeadsAdminPage() {
         created_by: currentUserId,
         task_type: 'meeting',
         title: `Appointment with ${leadName}`,
-        description: apptNote || `Booked by ${currentUserName}`,
+        description: `${apptNote || `Booked by ${currentUserName}`} · ${tzAbbr(apptTz)}`,
         due_at: dueAt,
         priority: 'high',
         status: 'pending'
@@ -2186,7 +2242,7 @@ export default function LandLeadsAdminPage() {
         setSelectedLead(prev => ({ ...prev, pipeline_status: 'APPT_SET_FOR_JORDAN', status: 'appt_set_for_jordan', current_owner_id: adminUserId }));
       }
 
-      showToast(`Appt booked for Jordan on ${apptDate} ${apptTime}`, 'success', leadName);
+      showToast(`Appt booked for Jordan on ${apptDate} ${apptTime} ${tzAbbr(apptTz)}`, 'success', leadName);
       setApptModalOpen(false);
       setApptModalLeadId(null);
     } catch (err) {
@@ -5785,9 +5841,15 @@ export default function LandLeadsAdminPage() {
           const fmtTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
           return (
             <div className="space-y-6">
-              <div className="bg-gradient-to-br from-green-500/10 to-emerald-600/5 border border-green-500/40 rounded-xl p-6">
-                <h2 className="text-2xl font-bold text-green-300">Mapped &amp; Appointment Set</h2>
-                <p className="text-slate-400 text-sm mt-1">Confirmed, mapped, and on the calendar. {totalThisMonth} appointment{totalThisMonth === 1 ? '' : 's'} in {monthLabel}.</p>
+              <div className="bg-gradient-to-br from-green-500/10 to-emerald-600/5 border border-green-500/40 rounded-xl p-6 flex items-start justify-between gap-4 flex-wrap">
+                <div>
+                  <h2 className="text-2xl font-bold text-green-300">Mapped &amp; Appointment Set</h2>
+                  <p className="text-slate-400 text-sm mt-1">Confirmed, mapped, and on the calendar. {totalThisMonth} appointment{totalThisMonth === 1 ? '' : 's'} in {monthLabel}. Appointments stay 30 min apart.</p>
+                </div>
+                <button onClick={() => { setBlockDate(calSelectedDay ? new Date(calSelectedDay).toISOString().slice(0, 10) : ''); setBlockModalOpen(true); }} className="flex-shrink-0 text-sm font-semibold px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 inline-flex items-center gap-1.5">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" /></svg>
+                  Block off time
+                </button>
               </div>
 
               <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
@@ -5853,8 +5915,18 @@ export default function LandLeadsAdminPage() {
                   ) : (
                     <div className="space-y-4">
                       {selMeetings.map(t => {
+                        const isBlock = /^BLOCKED/i.test(t.title || '');
                         const lead = allLeads.find(l => l.id === t.lead_id) || rawLeads.find(l => l.id === t.lead_id);
                         const who = t.assigned_to && usersById[t.assigned_to] ? usersById[t.assigned_to].split(' ')[0] : null;
+                        if (isBlock) {
+                          return (
+                            <div key={t.id} className="flex items-center gap-3 rounded-lg border border-slate-600 bg-slate-700/40 px-3 py-2.5">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-600/60 text-slate-200 text-sm font-semibold">{fmtTime(t.due_at)}</span>
+                              <span className="text-sm text-slate-300">{(t.title || '').replace(/^BLOCKED\s*[—-]\s*/i, '') || 'Blocked'} <span className="text-slate-500">· blocked</span></span>
+                              <button onClick={async () => { await supabase.from('scheduled_tasks').update({ status: 'cancelled' }).eq('id', t.id); setScheduledTasks(prev => prev.filter(x => x.id !== t.id)); }} className="ml-auto text-xs text-slate-400 hover:text-red-300">Remove</button>
+                            </div>
+                          );
+                        }
                         return (
                           <div key={t.id}>
                             <div className="flex items-center gap-2 mb-2">
@@ -9275,6 +9347,18 @@ export default function LandLeadsAdminPage() {
             </div>
 
             <div className="mb-4">
+              <label className="block text-sm font-medium text-slate-300 mb-2">Seller's timezone <span className="text-rose-400">(required)</span></label>
+              <select
+                value={apptTz}
+                onChange={(e) => setApptTz(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white"
+              >
+                {APPT_TZS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+              </select>
+              <p className="text-xs text-slate-500 mt-1">The time above is in this timezone. Appointments must be at least 30 minutes apart.</p>
+            </div>
+
+            <div className="mb-4">
               <label className="block text-sm font-medium text-slate-300 mb-2">Note for Jordan (optional)</label>
               <textarea
                 value={apptNote}
@@ -9300,6 +9384,37 @@ export default function LandLeadsAdminPage() {
               >
                 Cancel
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Block off time modal */}
+      {blockModalOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setBlockModalOpen(false)}>
+          <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-white mb-1">Block off time</h3>
+            <p className="text-sm text-slate-400 mb-4">Mark yourself unavailable (engineering meeting, etc.). No appointment can be booked within 30 minutes of it.</p>
+            <input value={blockLabel} onChange={(e) => setBlockLabel(e.target.value)} placeholder="What is it? (e.g. Engineering meeting)" className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white mb-3" />
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Date</label>
+                <input type="date" value={blockDate} onChange={(e) => setBlockDate(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Time</label>
+                <input type="time" value={blockTime} onChange={(e) => setBlockTime(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white" />
+              </div>
+            </div>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-slate-300 mb-2">Timezone</label>
+              <select value={blockTz} onChange={(e) => setBlockTz(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white">
+                {APPT_TZS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+              </select>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={submitBlock} className="flex-1 bg-slate-600 hover:bg-slate-500 text-white font-semibold py-2 px-4 rounded-lg">Block it off</button>
+              <button onClick={() => setBlockModalOpen(false)} className="bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 px-4 rounded-lg">Cancel</button>
             </div>
           </div>
         </div>
