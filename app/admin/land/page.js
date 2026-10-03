@@ -962,21 +962,26 @@ export default function LandLeadsAdminPage() {
   };
 
   // ---- Appointment reminder settings (editable; read by the campaign scheduler) ----
-  const DEFAULT_REMINDER = { enabled: true, hoursBefore: 3, message: 'Hi {{first}}, this is Jordan with Haven Ground. Reminder of our appointment today at {{time}} to talk about your land. Looking forward to it. Reply STOP to opt out.' };
+  const DEFAULT_REMINDER = { enabled: true, hoursBefore: 3, message: 'Hi {{first}}, this is Jordan with Haven Ground. Reminder of our appointment today at {{time}} to talk about your land. Looking forward to it!' };
   const [reminderCfg, setReminderCfg] = useState(DEFAULT_REMINDER);
   const [reminderOpen, setReminderOpen] = useState(false);
   const [reminderSaving, setReminderSaving] = useState(false);
   useEffect(() => {
     (async () => {
-      try { const { data } = await supabase.from('app_settings').select('value').eq('key', 'appointment_reminder').maybeSingle(); if (data?.value) setReminderCfg(prev => ({ ...prev, ...data.value })); } catch { /* table may not exist yet */ }
+      try { const { data } = await supabase.from('campaigns').select('steps').eq('name', '__settings:appointment_reminder').maybeSingle(); if (data?.steps?.[0]) setReminderCfg(prev => ({ ...prev, ...data.steps[0] })); } catch { /* ignore */ }
     })();
   }, []);
   const saveReminderCfg = async () => {
     setReminderSaving(true);
-    const { error } = await supabase.from('app_settings').upsert({ key: 'appointment_reminder', value: reminderCfg, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+    try {
+      const { data: ex } = await supabase.from('campaigns').select('id').eq('name', '__settings:appointment_reminder').maybeSingle();
+      let error;
+      if (ex?.id) ({ error } = await supabase.from('campaigns').update({ steps: [reminderCfg] }).eq('id', ex.id));
+      else ({ error } = await supabase.from('campaigns').insert({ name: '__settings:appointment_reminder', description: 'App setting (not a campaign)', steps: [reminderCfg], active: false }));
+      if (error) throw error;
+      showToast('Reminder settings saved'); setReminderOpen(false);
+    } catch (e) { showToast('Could not save reminder settings', 'error'); }
     setReminderSaving(false);
-    if (error) { showToast('Could not save (run the app_settings SQL first)', 'error'); return; }
-    showToast('Reminder settings saved'); setReminderOpen(false);
   };
 
   // ---- Appointment outcomes (complete / reschedule / no-show) ----

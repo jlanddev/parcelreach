@@ -30,7 +30,8 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
 
   const load = async () => {
     const { data: camps } = await supabase.from('campaigns').select('*').order('created_at', { ascending: true });
-    setCampaigns(camps || []);
+    // Hide the hidden settings row (used to store the appointment reminder config).
+    setCampaigns((camps || []).filter(c => !String(c.name || '').startsWith('__settings')));
     const { data: enr } = await supabase.from('campaign_enrollments').select('lead_id, campaign_id, status');
     const { data: q } = await supabase.from('campaign_queue').select('campaign_id, status');
     const c = {};
@@ -113,7 +114,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     if (!testPhone.trim()) { say('Enter a phone number', 'error'); return; }
     setBusy(true);
     try {
-      const res = await fetch('/api/campaigns/test-send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: testPhone.trim(), message: 'Test from ParcelReach campaigns, this is Jordan. Reply STOP to opt out.' }) });
+      const res = await fetch('/api/campaigns/test-send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: testPhone.trim(), message: 'Test from Haven Ground campaigns, this is Jordan.' }) });
       const j = await res.json();
       if (!j.ok) throw new Error(j.error || 'failed');
       say('Test text sent, check that phone');

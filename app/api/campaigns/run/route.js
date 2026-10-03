@@ -99,12 +99,13 @@ async function run(request) {
   // Message + lead time are editable in the app_settings row 'appointment_reminder'. ----
   let reminded = 0;
   try {
-    const DEFAULT_REM = { enabled: true, hoursBefore: 3, message: 'Hi {{first}}, this is Jordan with Haven Ground. Reminder of our appointment today at {{time}} to talk about your land. Looking forward to it. Reply STOP to opt out.' };
+    const DEFAULT_REM = { enabled: true, hoursBefore: 3, message: 'Hi {{first}}, this is Jordan with Haven Ground. Reminder of our appointment today at {{time}} to talk about your land. Looking forward to it!' };
     let remCfg = DEFAULT_REM;
     try {
-      const { data: s } = await supabase.from('app_settings').select('value').eq('key', 'appointment_reminder').maybeSingle();
-      if (s?.value) remCfg = { ...DEFAULT_REM, ...s.value };
-    } catch { /* table may not exist yet; use defaults */ }
+      // Stored as a hidden row in the campaigns table (no extra table needed).
+      const { data: s } = await supabase.from('campaigns').select('steps').eq('name', '__settings:appointment_reminder').maybeSingle();
+      if (s?.steps && Array.isArray(s.steps) && s.steps[0]) remCfg = { ...DEFAULT_REM, ...s.steps[0] };
+    } catch { /* use defaults */ }
     const hoursBefore = Number(remCfg.hoursBefore) > 0 ? Number(remCfg.hoursBefore) : 3;
     const TZ_BY_ABBR = { ET: 'America/New_York', CT: 'America/Chicago', MT: 'America/Denver', PT: 'America/Los_Angeles' };
     const soon = new Date(Date.now() + hoursBefore * 3600 * 1000).toISOString();
