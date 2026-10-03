@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { sendMessage } from '@/lib/projectBlue';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
+import { enrollLead } from '@/lib/campaignEnroll';
+
+const DAY = 86400000;
 
 // Campaign scheduler tick. Sends any drip texts that are due, logs them to the
 // lead timeline (same as a manual text), and marks the queue item done. Call
@@ -155,7 +158,37 @@ async function run(request) {
     }
   } catch (e) { console.error('[campaign run] reminders failed', e?.message); }
 
-  return NextResponse.json({ ok: true, live, dryRun, considered: (due || []).length, wouldSend: preview.length, preview: dryRun ? preview.slice(0, 50) : undefined, sent, reminded, skipped, failed });
+  // ---- Rule-based auto-enroll: any active campaign whose description carries
+  // [auto:untouched:N] pulls in anybody we haven't touched (in or out) in N+ days
+  // and isn't already enrolled, then expands its steps for them. Capped per run so
+  // a big backlog trickles in over several ticks instead of all at once. ----
+  let autoEnrolled = 0; const autoPreview = [];
+  try {
+    const { data: camps } = await supabase.from('campaigns')
+      .select('id, name, steps, description, active').eq('active', true);
+    for (const camp of camps || []) {
+      if (String(camp.name || '').startsWith('__settings') || camp.name === 'Appointment Reminders') continue;
+      const m = String(camp.description || '').match(/\[auto:untouched:(\d+)\]/i);
+      if (!m) continue;
+      const days = Math.max(1, Number(m[1]) || 30);
+      const cutoff = new Date(Date.now() - days * DAY).toISOString();
+      const { data: cand } = await supabase.from('leads')
+        .select('id, full_name, name, phone, last_contact_at, sms_opt_out, status')
+        .lt('last_contact_at', cutoff)
+        .limit(40);
+      for (const lead of cand || []) {
+        if (!lead.phone || lead.sms_opt_out || lead.status === 'archived') continue;
+        const { data: ex } = await supabase.from('campaign_enrollments')
+          .select('id').eq('lead_id', lead.id).eq('campaign_id', camp.id).maybeSingle();
+        if (ex) continue;
+        if (dryRun) { autoEnrolled++; autoPreview.push({ campaign: camp.name, lead_id: lead.id, name: lead.full_name || lead.name || 'Lead' }); continue; }
+        const r = await enrollLead(supabase, camp, lead);
+        if (r.enrolled) autoEnrolled++;
+      }
+    }
+  } catch (e) { console.error('[campaign run] auto-enroll failed', e?.message); }
+
+  return NextResponse.json({ ok: true, live, dryRun, considered: (due || []).length, wouldSend: preview.length, preview: dryRun ? preview.slice(0, 50) : undefined, sent, reminded, skipped, failed, autoEnrolled, autoEnrollPreview: dryRun ? autoPreview.slice(0, 50) : undefined });
 }
 
 export async function POST(request) { return run(request); }

@@ -17,6 +17,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   const [counts, setCounts] = useState({}); // campaignId -> { active, pending }
   const [openCampaign, setOpenCampaign] = useState(null); // campaign being viewed in detail
   const [enrolledIds, setEnrolledIds] = useState(new Set());
+  const [detailQueue, setDetailQueue] = useState([]); // text queue for the open campaign
   const [enrollByCampaign, setEnrollByCampaign] = useState({}); // campaignId -> Set(leadId)
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
@@ -50,14 +51,17 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   const openDetail = async (cp) => {
     setOpenCampaign(cp);
     setEnrolledIds(new Set());
+    setDetailQueue([]);
     const { data } = await supabase.from('campaign_enrollments').select('lead_id, status').eq('campaign_id', cp.id).eq('status', 'active');
     setEnrolledIds(new Set((data || []).map(e => e.lead_id)));
+    const { data: q } = await supabase.from('campaign_queue').select('id, lead_id, message, due_at, status, processed_at').eq('campaign_id', cp.id).eq('type', 'text').order('due_at', { ascending: true }).limit(200);
+    setDetailQueue(q || []);
   };
   // refresh enrolled set when campaigns reload while a detail is open
   useEffect(() => { if (openCampaign) { const cp = (campaigns || []).find(c => c.id === openCampaign.id); if (cp) openDetail(cp); } /* eslint-disable-next-line */ }, [campaigns]);
 
-  const startNew = () => { setEditing({ id: null, name: '', description: '', steps: [BLANK_STEP()], active: true }); setShowCreate(true); };
-  const startEdit = (cp) => { setEditing({ id: cp.id, name: cp.name, description: cp.description || '', steps: (Array.isArray(cp.steps) && cp.steps.length ? cp.steps : [BLANK_STEP()]).map(s => ({ day: s.day ?? 0, type: s.type || 'text', message: s.message || '', label: s.label || '' })), active: cp.active !== false }); setShowCreate(true); };
+  const startNew = () => { setEditing({ id: null, name: '', description: '', steps: [BLANK_STEP()], active: true, autoEnroll: false, autoDays: 30 }); setShowCreate(true); };
+  const startEdit = (cp) => { const days = autoDaysOf(cp.description); setEditing({ id: cp.id, name: cp.name, description: descClean(cp.description), steps: (Array.isArray(cp.steps) && cp.steps.length ? cp.steps : [BLANK_STEP()]).map(s => ({ day: s.day ?? 0, type: s.type || 'text', message: s.message || '', label: s.label || '' })), active: cp.active !== false, autoEnroll: days != null, autoDays: days ?? 30 }); setShowCreate(true); };
 
   const saveCampaign = async () => {
     if (!editing?.name.trim()) { say('Name is required', 'error'); return; }
@@ -68,7 +72,9 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
       else base.message = s.message || '';
       return base;
     });
-    const payload = { name: editing.name.trim(), description: editing.description.trim(), steps, active: editing.active };
+    let desc = descClean(editing.description);
+    if (editing.autoEnroll) { const d = Math.max(1, Number(editing.autoDays) || 30); desc = `${desc} [auto:untouched:${d}]`.trim(); }
+    const payload = { name: editing.name.trim(), description: desc, steps, active: editing.active };
     let err;
     if (editing.id) ({ error: err } = await supabase.from('campaigns').update(payload).eq('id', editing.id));
     else ({ error: err } = await supabase.from('campaigns').insert(payload));
@@ -133,6 +139,10 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     setBusy(false);
   };
 
+  // Auto-enroll rule stored as a [auto:untouched:N] marker in the description.
+  const descClean = (d) => String(d || '').replace(/\s*\[auto:untouched:\d+\]\s*/i, '').trim();
+  const autoDaysOf = (d) => { const m = String(d || '').match(/\[auto:untouched:(\d+)\]/i); return m ? Number(m[1]) : null; };
+
   const stepSummary = (steps) => {
     if (!Array.isArray(steps) || !steps.length) return 'No steps';
     const t = steps.filter(s => s.type !== 'call').length, c = steps.filter(s => s.type === 'call').length;
@@ -178,7 +188,8 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
               <h2 className="text-2xl font-bold text-rose-300">{openCampaign.name}</h2>
-              {openCampaign.description && <p className="text-slate-400 text-sm mt-1">{openCampaign.description}</p>}
+              {descClean(openCampaign.description) && <p className="text-slate-400 text-sm mt-1">{descClean(openCampaign.description)}</p>}
+              {autoDaysOf(openCampaign.description) != null && <p className="text-indigo-300 text-xs mt-1 font-semibold">Auto-enroll on: pulls in anybody we haven't contacted in {autoDaysOf(openCampaign.description)} days.</p>}
               <div className="mt-2 flex items-center gap-4 text-sm text-slate-300">
                 <span><span className="font-bold text-white">{enrolledLeads.length}</span> enrolled</span>
                 <span><span className="font-bold text-white">{campaignCalls.length}</span> calls to make</span>
@@ -228,6 +239,54 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
           ))}
         </div>
       </div>
+
+      {/* Delivery: exactly what's going out, what's scheduled, what already sent */}
+      {(() => {
+        const q = detailQueue || [];
+        const sent = q.filter(x => x.status === 'sent');
+        const pending = q.filter(x => x.status === 'pending');
+        const nowT = Date.now();
+        const label = (x) => {
+          if (x.status === 'sent') return { t: 'sent ✓', c: 'bg-emerald-500/20 text-emerald-300' };
+          if (x.status === 'cancelled') return { t: 'stopped', c: 'bg-slate-700 text-slate-400' };
+          if (x.status === 'failed') return { t: 'failed', c: 'bg-red-500/20 text-red-300' };
+          if (new Date(x.due_at).getTime() <= nowT) return { t: 'sending', c: 'bg-amber-500/20 text-amber-300' };
+          return { t: 'scheduled', c: 'bg-slate-700 text-slate-400' };
+        };
+        const rows = [...pending.filter(x => new Date(x.due_at).getTime() <= nowT), ...pending.filter(x => new Date(x.due_at).getTime() > nowT), ...sent.slice().reverse()].slice(0, 60);
+        return (
+          <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-5">
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400">What's going out</h3>
+              <span className="text-xs text-slate-500"><span className="text-emerald-300 font-semibold">{sent.length}</span> sent · <span className="text-white font-semibold">{pending.length}</span> scheduled</span>
+            </div>
+            {rows.length === 0 ? (
+              <div className="text-sm text-slate-500">Nothing queued yet. Enroll leads (or turn on auto-add) and texts will line up here.</div>
+            ) : (
+              <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                {rows.map(x => {
+                  const lead = leadsById[x.lead_id];
+                  const nm = lead?.full_name || lead?.name || 'Lead';
+                  const lab = label(x);
+                  return (
+                    <button key={x.id} onClick={() => lead && onOpenLead && onOpenLead(lead)} className="w-full text-left bg-slate-900/40 border border-slate-700/40 rounded-lg px-3 py-2 hover:bg-slate-800/60 flex items-start gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-white truncate">{nm}</span>
+                          <span className={`flex-shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full ${lab.c}`}>{lab.t}</span>
+                        </div>
+                        <div className="text-xs text-slate-400 truncate mt-0.5">{x.message}</div>
+                      </div>
+                      <span className="flex-shrink-0 text-xs text-slate-500">{x.status === 'sent' && x.processed_at ? fmtWhen(x.processed_at) : fmtWhen(x.due_at)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <p className="mt-2 text-xs text-slate-500">"Sending" means it's due now and goes on the next scheduler run. Every sent text also shows in the lead's message thread.</p>
+          </div>
+        );
+      })()}
 
       {/* Enrolled leads */}
       <div>
@@ -317,8 +376,11 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
                     <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full ${cp.active ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-600/40 text-slate-400'}`}>{cp.active ? 'Active' : 'Paused'}</span>
                     {campaignNotif(cp) > 0 && <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[11px] font-bold">{campaignNotif(cp)}</span>}
                   </div>
-                  {cp.description && <p className="text-sm text-slate-400 mt-1">{cp.description}</p>}
-                  <p className="text-xs text-slate-500 mt-2">{stepSummary(cp.steps)}</p>
+                  {descClean(cp.description) && <p className="text-sm text-slate-400 mt-1">{descClean(cp.description)}</p>}
+                  <div className="flex items-center gap-2 flex-wrap mt-2">
+                    <p className="text-xs text-slate-500">{stepSummary(cp.steps)}</p>
+                    {autoDaysOf(cp.description) != null && <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300">Auto-adds quiet {autoDaysOf(cp.description)}d leads</span>}
+                  </div>
                 </div>
                 <button onClick={() => toggleActive(cp)} className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 flex-shrink-0">{cp.active ? 'Pause' : 'Activate'}</button>
               </div>
@@ -350,6 +412,25 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
             <div className="p-4 space-y-3 overflow-y-auto">
               <input value={editing.name} onChange={e => setEditing({ ...editing, name: e.target.value })} placeholder="Campaign name" className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white placeholder-slate-500" />
               <input value={editing.description} onChange={e => setEditing({ ...editing, description: e.target.value })} placeholder="Short description (optional)" className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white placeholder-slate-500 text-sm" />
+
+              {/* Auto-enroll rule: drip to anybody who's gone quiet */}
+              <div className="bg-indigo-500/10 border border-indigo-500/40 rounded-lg p-3">
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input type="checkbox" checked={!!editing.autoEnroll} onChange={e => setEditing({ ...editing, autoEnroll: e.target.checked })} className="mt-0.5 w-4 h-4 accent-indigo-500" />
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold text-indigo-200">Auto-add anybody who's gone quiet</div>
+                    <div className="text-xs text-indigo-200/70 mt-0.5">The scheduler keeps pulling leads we haven't contacted in a while onto this drip, automatically, so nobody falls through the cracks. Enroll once and it runs itself.</div>
+                    {editing.autoEnroll && (
+                      <div className="flex items-center gap-2 mt-2 text-sm text-indigo-100">
+                        <span>If no contact in</span>
+                        <input type="number" min="1" value={editing.autoDays} onChange={e => setEditing({ ...editing, autoDays: e.target.value })} className="w-16 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-center" />
+                        <span>days, start this campaign.</span>
+                      </div>
+                    )}
+                  </div>
+                </label>
+              </div>
+
               <div className="text-xs text-slate-400">Steps. Day = how many days after enrollment. Use <code>{'{{first}}'}</code> for the seller's first name.</div>
               <div className="space-y-2">
                 {editing.steps.map((s, i) => (
