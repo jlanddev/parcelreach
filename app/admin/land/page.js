@@ -6006,7 +6006,13 @@ export default function LandLeadsAdminPage() {
         {/* PIPELINE BUCKETS, Appointment Set / Offer Made / Agreement Sent / Signed Contract / Closed Deal */}
         {/* FOLLOW-UP CAMPAIGNS (engine built in Phase 2) */}
         {activeTab === 'campaigns' && (
-          <CampaignsPanel leads={allLeads} currentUserId={currentUserId} renderLeadCard={renderLeadCard} scheduledTasks={scheduledTasks} onOpenLead={navigateToLeadCard} onManageReminders={() => setReminderOpen(true)} stages={PIPELINE_STATUSES} />
+          <CampaignsPanel leads={allLeads} currentUserId={currentUserId} renderLeadCard={renderLeadCard} scheduledTasks={scheduledTasks} onOpenLead={navigateToLeadCard} onManageReminders={() => setReminderOpen(true)} stages={PIPELINE_STATUSES} stageGroups={[
+            { key: 'ppc-inflow', label: 'PPC Inflow', statuses: ['NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'] },
+            { key: 'appointment-set', label: 'Mapped & Appointment Set', statuses: ['APPT_SET_FOR_JORDAN'] },
+            { key: 'offer-curated', label: 'Offer Curated', statuses: ['OFFER_CURATED'] },
+            { key: 'offer-made', label: 'Offer Made', statuses: ['OFFER_SENT', 'NEGOTIATING'] },
+            { key: 'nurture', label: 'Nurture', statuses: ['NURTURE'] },
+          ]} />
         )}
 
         {/* MAPPED & APPOINTMENT SET, physician's-office month calendar */}

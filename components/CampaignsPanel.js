@@ -34,7 +34,7 @@ const splitDelay = (min) => { min = Number(min) || 0; if (min === 0) return { am
 const toMin = (amount, unit) => { const a = Number(amount) || 0; return unit === 'day' ? a * 1440 : unit === 'hour' ? a * 60 : a; };
 const offsetLabel = (min) => { min = Number(min) || 0; if (min === 0) return 'Right away'; if (min < 60) return `${min} min`; if (min < 1440) { const h = min / 60; return `${Number.isInteger(h) ? h : h.toFixed(1)} hr`; } const d = min / 1440; return `Day ${Number.isInteger(d) ? d : d.toFixed(1)}`; };
 
-export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCard, scheduledTasks = [], onOpenLead, onManageReminders, stages = [] }) {
+export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCard, scheduledTasks = [], onOpenLead, onManageReminders, stages = [], stageGroups = [] }) {
   const [campaigns, setCampaigns] = useState(null);
   const [counts, setCounts] = useState({}); // campaignId -> { active, pending }
   const [openCampaign, setOpenCampaign] = useState(null); // campaign being viewed in detail
@@ -95,9 +95,11 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   // refresh enrolled set when campaigns reload while a detail is open
   useEffect(() => { if (openCampaign) { const cp = (campaigns || []).find(c => c.id === openCampaign.id); if (cp) openDetail(cp); } /* eslint-disable-next-line */ }, [campaigns]);
 
-  const safeStages = (stages || []).filter(s => !ALWAYS_EXCLUDED.includes(s.value));
-  const allSafe = safeStages.map(s => s.value);
-  const defaultStages = allSafe.filter(v => DEFAULT_STAGES.includes(v));
+  // Targeting is by main CRM tab (a group of pipeline statuses), not raw statuses.
+  const safeGroups = (stageGroups || []).map(g => ({ ...g, statuses: (g.statuses || []).filter(v => !ALWAYS_EXCLUDED.includes(v)) })).filter(g => g.statuses.length);
+  const allSafe = [...new Set(safeGroups.flatMap(g => g.statuses))];
+  const defaultStages = (safeGroups.find(g => g.key === 'ppc-inflow')?.statuses) || (safeGroups[0]?.statuses || []);
+  const groupLabels = (statusList) => safeGroups.filter(g => g.statuses.some(v => (statusList || []).includes(v))).map(g => g.label);
   const startNew = () => { setEditing({ id: null, name: '', description: '', steps: [BLANK_STEP()], active: true, kind: 'manual', autoRule: 'nocontact', autoDays: 30, autoStages: defaultStages }); setAiGoal(""); setAiFeedback(""); setAiDrafted(false); setTemplateFor(null); setShowCreate(true); };
   const startEdit = (cp) => { const a = parseAuto(cp.description); setEditing({ id: cp.id, name: cp.name, description: descClean(cp.description), steps: (Array.isArray(cp.steps) && cp.steps.length ? cp.steps : [BLANK_STEP()]).map(s => ({ delayMin: stepOffsetMin(s), type: s.type || 'text', message: s.message || '', label: s.label || '' })), active: cp.active !== false, kind: a ? 'drip' : 'manual', autoRule: a?.rule || 'nocontact', autoDays: a?.days ?? 30, autoStages: (a?.stages?.length ? a.stages.filter(v => allSafe.includes(v)) : allSafe) }); setAiGoal(""); setAiFeedback(""); setAiDrafted(false); setTemplateFor(null); setShowCreate(true); };
 
@@ -235,12 +237,12 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     return null;
   };
   const descClean = (d) => String(d || '').replace(/\s*\[auto:[^\]]+\]\s*/i, '').trim();
-  const stageLabels = (vals) => (vals || []).map(v => stages.find(s => s.value === v)?.label || v).join(', ');
   const autoSummary = (d) => {
     const a = parseAuto(d);
     if (!a) return null;
-    const where = a.stages?.length ? ` in ${stageLabels(a.stages)}` : '';
-    return `Auto-adds${where ? where.replace(' in ', ' ') : ''} leads who ${RULE_LABELS[a.rule]} in ${a.days}d`;
+    const labels = a.stages?.length ? groupLabels(a.stages) : [];
+    const where = labels.length ? `${labels.join(' / ')} ` : '';
+    return `Auto-adds ${where}leads who ${RULE_LABELS[a.rule]} in ${a.days}d`;
   };
 
   const stepSummary = (steps) => {
@@ -546,25 +548,25 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
                     </div>
                     <div>
                       <div className="flex items-center justify-between">
-                        <div className="text-sm font-semibold text-indigo-200">Only these stages</div>
+                        <div className="text-sm font-semibold text-indigo-200">Which CRM tabs?</div>
                         <div className="flex gap-2">
                           <button type="button" onClick={() => setEditing({ ...editing, autoStages: allSafe })} className="text-[10px] text-indigo-300 hover:text-white">All</button>
                           <button type="button" onClick={() => setEditing({ ...editing, autoStages: [] })} className="text-[10px] text-indigo-300 hover:text-white">None</button>
                         </div>
                       </div>
-                      <div className="text-xs text-indigo-200/70 mb-1.5">Pick which part of the pipeline this targets, e.g. just PPC Inflow.</div>
+                      <div className="text-xs text-indigo-200/70 mb-1.5">Pick which tabs this pulls from, e.g. PPC Inflow and Offer Curated.</div>
                       <div className="grid grid-cols-2 gap-1">
-                        {safeStages.map(s => {
-                          const on = (editing.autoStages || []).includes(s.value);
+                        {safeGroups.map(g => {
+                          const on = g.statuses.every(v => (editing.autoStages || []).includes(v));
                           return (
-                            <label key={s.value} className={`flex items-center gap-2 rounded px-2 py-1 text-xs cursor-pointer ${on ? 'bg-indigo-600/30 text-white' : 'bg-slate-800/60 text-slate-300'}`}>
-                              <input type="checkbox" checked={on} onChange={() => setEditing(prev => { const cur = new Set(prev.autoStages || []); on ? cur.delete(s.value) : cur.add(s.value); return { ...prev, autoStages: [...cur] }; })} className="accent-indigo-500" />
-                              {s.label}
+                            <label key={g.key} className={`flex items-center gap-2 rounded px-2 py-1 text-xs cursor-pointer ${on ? 'bg-indigo-600/30 text-white' : 'bg-slate-800/60 text-slate-300'}`}>
+                              <input type="checkbox" checked={on} onChange={() => setEditing(prev => { const cur = new Set(prev.autoStages || []); if (on) g.statuses.forEach(v => cur.delete(v)); else g.statuses.forEach(v => cur.add(v)); return { ...prev, autoStages: [...cur] }; })} className="accent-indigo-500" />
+                              {g.label}
                             </label>
                           );
                         })}
                       </div>
-                      {(editing.autoStages || []).length === 0 && <p className="text-[11px] text-amber-300 mt-1">Pick at least one stage or nobody will enroll.</p>}
+                      {(editing.autoStages || []).length === 0 && <p className="text-[11px] text-amber-300 mt-1">Pick at least one tab or nobody will enroll.</p>}
                     </div>
                     <p className="text-xs text-indigo-200/70">Under contract and closed/dead deals, and anyone who has replied, are never included (even if their stage is checked). Runs a small batch per tick, so it trickles instead of blasting.</p>
                   </div>
