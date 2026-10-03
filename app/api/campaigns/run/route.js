@@ -95,7 +95,35 @@ async function run(request) {
     } catch { /* non-fatal */ }
   }
 
-  return NextResponse.json({ ok: true, live, dryRun, considered: (due || []).length, wouldSend: preview.length, preview: dryRun ? preview.slice(0, 50) : undefined, sent, skipped, failed });
+  // ---- Appointment reminders: text the seller ~3h before their meeting, once. ----
+  let reminded = 0;
+  try {
+    const TZ_BY_ABBR = { ET: 'America/New_York', CT: 'America/Chicago', MT: 'America/Denver', PT: 'America/Los_Angeles' };
+    const soon = new Date(Date.now() + 3 * 3600 * 1000).toISOString();
+    const { data: meetings } = await supabase.from('scheduled_tasks')
+      .select('id, lead_id, due_at, description, title')
+      .eq('task_type', 'meeting').eq('status', 'pending')
+      .gte('due_at', now).lte('due_at', soon).limit(50);
+    for (const m of meetings || []) {
+      if ((m.description || '').includes('[reminded]')) continue;
+      if (/^BLOCKED/i.test(m.title || '') || !m.lead_id) continue;
+      const { data: lead } = await supabase.from('leads').select('full_name, name, phone, sms_opt_out').eq('id', m.lead_id).maybeSingle();
+      if (!lead?.phone || lead.sms_opt_out) continue;
+      const first = String(lead.full_name || lead.name || 'there').trim().split(/\s+/)[0];
+      const abbr = (String(m.description || '').match(/·\s*(ET|CT|MT|PT)/i) || [])[1];
+      const tz = TZ_BY_ABBR[(abbr || 'CT').toUpperCase()] || 'America/Chicago';
+      const tLabel = new Date(m.due_at).toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' });
+      const msg = `Hi ${first}, this is Jordan with Haven Ground. Reminder of our appointment today at ${tLabel} to talk about your land. Looking forward to it. Reply STOP to opt out.`;
+      if (dryRun) { preview.push({ lead_id: m.lead_id, name: lead.full_name || lead.name || 'Lead', phone: lead.phone, message: `[REMINDER] ${msg}` }); continue; }
+      await sendMessage({ to: lead.phone, message: msg });
+      const ri = new Date().toISOString();
+      await supabase.from('activities').insert({ lead_id: m.lead_id, activity_type: 'TEXT', direction: 'OUTBOUND', outcome: 'SENT', message_content: msg, created_at: ri, read_at: ri }).then(() => {}, () => {});
+      await supabase.from('scheduled_tasks').update({ description: `${m.description || ''} [reminded]`.trim() }).eq('id', m.id);
+      reminded++;
+    }
+  } catch (e) { console.error('[campaign run] reminders failed', e?.message); }
+
+  return NextResponse.json({ ok: true, live, dryRun, considered: (due || []).length, wouldSend: preview.length, preview: dryRun ? preview.slice(0, 50) : undefined, sent, reminded, skipped, failed });
 }
 
 export async function POST(request) { return run(request); }

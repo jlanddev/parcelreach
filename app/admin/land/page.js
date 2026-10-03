@@ -961,6 +961,42 @@ export default function LandLeadsAdminPage() {
     showToast('Day blocked off');
   };
 
+  // ---- Appointment outcomes (complete / reschedule / no-show) ----
+  const [outcomeFor, setOutcomeFor] = useState(null); // meeting task id with the complete panel open
+  const [outcomeNotes, setOutcomeNotes] = useState('');
+  const completeAppt = async (task, nextStatus) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (outcomeNotes.trim()) {
+        await supabase.from('lead_notes').insert({ lead_id: task.lead_id, user_id: user?.id || null, content: `[APPOINTMENT COMPLETED] ${outcomeNotes.trim()}`, mentioned_users: [] });
+      }
+      await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', task.id);
+      await supabase.from('leads').update({ pipeline_status: nextStatus, status: nextStatus.toLowerCase(), last_activity_at: new Date().toISOString() }).eq('id', task.lead_id);
+      setScheduledTasks(prev => prev.filter(t => t.id !== task.id));
+      setRawLeads(prev => prev.map(l => l.id === task.lead_id ? { ...l, pipeline_status: nextStatus } : l));
+      setOutcomeFor(null); setOutcomeNotes('');
+      showToast('Appointment completed', 'success');
+    } catch (e) { showToast('Could not complete appointment', 'error'); }
+  };
+  const rescheduleAppt = (task) => {
+    setApptModalLeadId(task.lead_id);
+    setApptDate(''); setApptTime('');
+    setApptModalOpen(true);
+  };
+  const noShowAppt = async (task) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      await supabase.from('lead_notes').insert({ lead_id: task.lead_id, user_id: user?.id || null, content: '[NO-SHOW] Seller missed the appointment. Text + call to reschedule.', mentioned_users: [] });
+      await supabase.from('scheduled_tasks').update({ status: 'cancelled', completed_at: new Date().toISOString() }).eq('id', task.id);
+      await supabase.from('leads').update({ pipeline_status: 'FOLLOW_UP', status: 'follow_up', last_activity_at: new Date().toISOString() }).eq('id', task.lead_id);
+      const cb = { lead_id: task.lead_id, assigned_to: adminUserId || user?.id || null, created_by: user?.id || null, task_type: 'callback', title: 'Reschedule (no-show)', description: 'Missed appointment, text + call to reschedule', due_at: new Date(Date.now() + 3600000).toISOString(), status: 'pending', priority: 'high' };
+      const { data: cbRow } = await supabase.from('scheduled_tasks').insert(cb).select().single();
+      setScheduledTasks(prev => prev.filter(t => t.id !== task.id).concat(cbRow ? [cbRow] : []));
+      setRawLeads(prev => prev.map(l => l.id === task.lead_id ? { ...l, pipeline_status: 'FOLLOW_UP' } : l));
+      showToast('Marked no-show, moved to Follow-Up to reschedule', 'success');
+    } catch (e) { showToast('Could not mark no-show', 'error'); }
+  };
+
   // Session Analytics states
   const [analyticsSubTab, setAnalyticsSubTab] = useState('live-feed');
   const [liveSessions, setLiveSessions] = useState([]);
@@ -5867,6 +5903,7 @@ export default function LandLeadsAdminPage() {
               <div className="bg-gradient-to-br from-green-500/10 to-emerald-600/5 border border-green-500/40 rounded-xl p-6">
                 <h2 className="text-2xl font-bold text-green-300">Mapped &amp; Appointment Set</h2>
                 <p className="text-slate-400 text-sm mt-1">Confirmed, mapped, and on the calendar. {totalThisMonth} appointment{totalThisMonth === 1 ? '' : 's'} in {monthLabel}. Appointments stay 30 min apart.</p>
+                <p className="text-slate-500 text-xs mt-1">Sellers get a reminder text ~3 hours before their appointment (once live). On each appointment: <span className="text-emerald-400">Complete</span> to add notes and advance the stage, <span className="text-slate-300">Reschedule</span>, or <span className="text-red-400">No-show</span> to move them to Follow-Up with a reschedule task.</p>
               </div>
 
               <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
@@ -5952,6 +5989,7 @@ export default function LandLeadsAdminPage() {
                             </div>
                           );
                         }
+                        const missed = new Date(t.due_at) < new Date();
                         return (
                           <div key={t.id}>
                             <div className="flex items-center gap-2 mb-2">
@@ -5960,9 +5998,28 @@ export default function LandLeadsAdminPage() {
                                 {fmtTime(t.due_at)}
                               </span>
                               {who && <span className="text-xs text-slate-400">with {who}</span>}
+                              {missed && <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 border border-red-500/40">Missed</span>}
                             </div>
                             {lead ? renderLeadCard(lead) : (
                               <div className="text-sm text-slate-500 border border-slate-700 rounded-lg p-3">{t.title || 'Appointment'} (lead not found)</div>
+                            )}
+                            {/* Outcome actions */}
+                            <div className="flex flex-wrap gap-2 mt-2">
+                              <button onClick={() => { setOutcomeFor(outcomeFor === t.id ? null : t.id); setOutcomeNotes(''); }} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-600/40">✓ Complete</button>
+                              <button onClick={() => rescheduleAppt(t)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700/60 text-slate-200 hover:bg-slate-600/60">Reschedule</button>
+                              <button onClick={() => noShowAppt(t)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-600/15 text-red-300 border border-red-500/40 hover:bg-red-600/30">No-show</button>
+                            </div>
+                            {outcomeFor === t.id && (
+                              <div className="mt-2 bg-slate-900/60 border border-slate-700 rounded-lg p-3">
+                                <textarea value={outcomeNotes} onChange={(e) => setOutcomeNotes(e.target.value)} rows={2} placeholder="How did it go? Notes from the appointment..." className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm mb-2" />
+                                <div className="text-xs text-slate-400 mb-1.5">Move to:</div>
+                                <div className="flex flex-wrap gap-2">
+                                  <button onClick={() => completeAppt(t, 'OFFER_SENT')} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white">Offer Made</button>
+                                  <button onClick={() => completeAppt(t, 'OFFER_CURATED')} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white">Offer Curated</button>
+                                  <button onClick={() => completeAppt(t, 'FOLLOW_UP')} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-600 hover:bg-slate-500 text-white">Follow-Up</button>
+                                  <button onClick={() => completeAppt(t, 'LOST')} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">Lost</button>
+                                </div>
+                              </div>
                             )}
                           </div>
                         );
