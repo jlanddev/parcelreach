@@ -327,6 +327,7 @@ export default function LandLeadsAdminPage() {
   };
   const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [detailsModalOpen, setDetailsModalOpen] = useState(false);
+  const [cardModalLead, setCardModalLead] = useState(null); // show the full lead CARD in a modal when it can't be scrolled to inline
   const [highlightLeadId, setHighlightLeadId] = useState(null); // briefly ring the card we jumped to
   const [selectedLead, setSelectedLead] = useState(null);
   const [selectedOrgsForAssignment, setSelectedOrgsForAssignment] = useState([]);
@@ -1333,10 +1334,11 @@ export default function LandLeadsAdminPage() {
       if (++tries < 8) {
         setTimeout(find, 200);
       } else {
-        // Could not locate the card anywhere it renders, open the lead so the
-        // click always lands somewhere useful.
+        // Could not locate the card inline (past pagination, or collapsed as a
+        // duplicate). Show the full lead CARD in a modal so you can always act on
+        // it (status dropdown, Move to Dead, etc.), never the bare edit form.
         setHighlightLeadId(null);
-        openLeadDetails(lead);
+        setCardModalLead(lead);
       }
     };
     setTimeout(find, 180);
@@ -9707,6 +9709,21 @@ export default function LandLeadsAdminPage() {
           </div>
         </div>
       )}
+
+      {/* Full lead CARD in a modal (fallback when it can't be scrolled to inline) */}
+      {cardModalLead && (() => {
+        const live = allLeads.find(l => l.id === cardModalLead.id) || rawLeads.find(l => l.id === cardModalLead.id) || cardModalLead;
+        return (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-start justify-center p-4 overflow-y-auto" onClick={() => setCardModalLead(null)}>
+            <div className="w-full max-w-xl my-8" onClick={(e) => e.stopPropagation()}>
+              <div className="flex justify-end mb-2">
+                <button onClick={() => setCardModalLead(null)} className="text-slate-300 hover:text-white text-sm font-semibold px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700">✕ Close</button>
+              </div>
+              {renderLeadCard(live)}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Appointment Reminders editor (opened from the Follow-Up Campaigns list) */}
       {reminderOpen && (
