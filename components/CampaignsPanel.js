@@ -73,14 +73,28 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     setCampaigns((camps || []).filter(c => !String(c.name || '').startsWith('__settings')));
     const { data: enr } = await supabase.from('campaign_enrollments').select('lead_id, campaign_id, status, created_at');
     const { data: q } = await supabase.from('campaign_queue').select('campaign_id, status');
+    // Pull the REAL contact status of every enrolled lead (not the de-duplicated
+    // in-memory list, which can miss the exact record that got the reply).
+    const enrolledIds = [...new Set((enr || []).map(e => e.lead_id))];
+    const contactById = {};
+    for (let i = 0; i < enrolledIds.length; i += 300) {
+      const { data: ld } = await supabase.from('leads').select('id, last_contact_dir, last_contact_at').in('id', enrolledIds.slice(i, i + 300));
+      (ld || []).forEach(l => { contactById[l.id] = l; });
+    }
+    const didReply = (e) => {
+      if (e.status === 'replied') return true; // send loop already flagged it
+      const lc = contactById[e.lead_id];
+      return !!(lc && String(lc.last_contact_dir || '').toLowerCase() === 'inbound' && lc.last_contact_at && new Date(lc.last_contact_at) >= new Date(e.created_at));
+    };
     const c = {};
     const byCamp = {};
     const atByCamp = {};     // active enrollments only (for needs-attention)
     const atByCampAll = {};  // every enrollment ever (for response stats)
-    (camps || []).forEach(cp => { c[cp.id] = { active: 0, pending: 0, sent: 0 }; });
+    (camps || []).forEach(cp => { c[cp.id] = { active: 0, pending: 0, sent: 0, replied: 0 }; });
     (enr || []).forEach(e => {
       if (!c[e.campaign_id]) return;
       (atByCampAll[e.campaign_id] = atByCampAll[e.campaign_id] || {})[e.lead_id] = e.created_at;
+      if (didReply(e)) c[e.campaign_id].replied += 1;
       if (e.status === 'active') { c[e.campaign_id].active += 1; (byCamp[e.campaign_id] = byCamp[e.campaign_id] || new Set()).add(e.lead_id); (atByCamp[e.campaign_id] = atByCamp[e.campaign_id] || {})[e.lead_id] = e.created_at; }
     });
     (q || []).forEach(x => { if (!c[x.campaign_id]) return; if (x.status === 'pending') c[x.campaign_id].pending += 1; else if (x.status === 'sent') c[x.campaign_id].sent += 1; });
@@ -89,11 +103,8 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     setEnrollAtByCampaign(atByCamp);
     setEnrollAtAllByCampaign(atByCampAll);
   };
-  // Count leads in a campaign who have replied to us since we enrolled them.
-  const campaignReplies = (cpId) => {
-    const atMap = enrollAtAllByCampaign[cpId] || {};
-    return Object.keys(atMap).filter(id => repliedAfterEnroll(leadsById[id], atMap[id])).length;
-  };
+  // Replies are counted in load() straight from the enrolled leads' contact status.
+  const campaignReplies = (cpId) => counts[cpId]?.replied || 0;
   // A reply only "needs attention" if it came AFTER we enrolled them (replies from
   // before the campaign are just their old thread history, not a campaign response).
   const repliedAfterEnroll = (lead, enrolledAt) => lead && String(lead.last_contact_dir || '').toLowerCase() === 'inbound' && lead.last_contact_at && (!enrolledAt || new Date(lead.last_contact_at) >= new Date(enrolledAt));
@@ -443,7 +454,11 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
       {openCampaign ? detailView : (<>
       <div className="bg-gradient-to-br from-rose-500/10 to-rose-600/5 border border-rose-500/40 rounded-xl p-6 flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h2 className="text-2xl font-bold text-rose-300">Follow-Up Campaigns</h2>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-2xl font-bold text-rose-300">Follow-Up Campaigns</h2>
+            {isLive === true && <span title="Automated sending is on: up to 8/run, every 30 min, 10am-8pm Central" className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> Live</span>}
+            {isLive === false && <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300">Safe mode (off)</span>}
+          </div>
           <p className="text-slate-400 text-sm mt-1">Drip sequences that keep silent leads warm. Create a campaign, enroll leads, and preview exactly what goes out.</p>
         </div>
         <div className="flex items-center gap-2">
@@ -452,12 +467,8 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
         </div>
       </div>
 
-      {/* Live / safe-mode banner (reflects real CAMPAIGNS_LIVE state) */}
-      {isLive ? (
-        <div className="bg-emerald-500/10 border border-emerald-500/40 rounded-xl px-4 py-3 text-sm text-emerald-200">
-          <p><span className="font-semibold">● LIVE — automated texts are sending.</span> They drip: up to {maxPerRun} per run, every 30 min, 10am-8pm Central only, one per lead per day. Under-contract/closed deals and anyone who replied are skipped. Use <span className="font-semibold">Preview sends</span> to see the next batch before it goes.</p>
-        </div>
-      ) : (
+      {/* Only warn when OFF; when live, the small header pill is enough. */}
+      {isLive === false && (
         <div className="bg-amber-500/10 border border-amber-500/40 rounded-xl px-4 py-3 text-sm text-amber-200">
           <p><span className="font-semibold">Sending is in safe mode (off).</span> Nothing goes out until it's turned live. Use <span className="font-semibold">Preview sends</span> to see exactly what would go. Quiet hours (10am-8pm Central), {maxPerRun}/run throttle, one per lead per day, and skip-on-reply are always enforced.</p>
         </div>
