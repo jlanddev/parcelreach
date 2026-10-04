@@ -467,6 +467,44 @@ export default function LandLeadsAdminPage() {
     };
   }, []);
 
+  // LIVE UPDATES (no refresh needed): new leads appear, status/field edits by
+  // anyone show up, notes/comments reload, and scheduled tasks stay in sync, all
+  // in real time. Requires the tables to be in the supabase_realtime publication.
+  useEffect(() => {
+    const ch = supabase
+      .channel('crm-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, (payload) => {
+        setRawLeads((prev) => {
+          if (payload.eventType === 'DELETE') return prev.filter((l) => l.id !== payload.old?.id);
+          const row = payload.new;
+          if (!row?.id) return prev;
+          const idx = prev.findIndex((l) => l.id === row.id);
+          if (idx === -1) return [{ ...row }, ...prev]; // brand-new lead, live
+          const next = [...prev];
+          // Keep the partner-push chips we overlaid from the dedicated table.
+          next[idx] = { ...next[idx], ...row, partner_pushes: next[idx].partner_pushes || row.partner_pushes };
+          return next;
+        });
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lead_notes' }, () => {
+        setNotesRefresh((t) => t + 1);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'scheduled_tasks' }, (payload) => {
+        setScheduledTasks((prev) => {
+          if (payload.eventType === 'DELETE') return prev.filter((t) => t.id !== payload.old?.id);
+          const row = payload.new;
+          if (!row?.id) return prev;
+          // The in-memory list holds only pending tasks (matches the initial query).
+          if (row.status && row.status !== 'pending') return prev.filter((t) => t.id !== row.id);
+          const idx = prev.findIndex((t) => t.id === row.id);
+          if (idx === -1) return [...prev, row];
+          const next = [...prev]; next[idx] = { ...next[idx], ...row }; return next;
+        });
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, []);
+
   // Card summaries (Last Contacted + on-card snippet + unread) come straight
   // from Project Blue's recent-message feed in one call, so they always match
   // reality regardless of where a text was sent from. Unread is tracked per
