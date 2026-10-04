@@ -25,21 +25,23 @@ async function run(request) {
   }
   const supabase = supabaseAdmin();
 
-  // SAFETY: nothing is sent for real unless CAMPAIGNS_LIVE === 'true'. Otherwise
-  // (or with ?dry=1) this runs in DRY-RUN: it computes exactly what WOULD go out,
-  // changes nothing, and returns the preview. Flip the env var to go live.
-  const live = process.env.CAMPAIGNS_LIVE === 'true';
-  const dryRun = !live || url.searchParams.get('dry') === '1';
+  const previewOnly = url.searchParams.get('dry') === '1';
 
-  // Quiet hours (TCPA): only send 10am to 8pm Central (inside legal 8am-9pm in
-  // every US timezone). Enforced only on real sends; a dry-run previews anytime.
-  if (!dryRun) {
-    const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: 'numeric', hour12: false, hourCycle: 'h23' }).formatToParts(new Date());
-    const chHour = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
-    if (chHour < 10 || chHour >= 20) {
-      return NextResponse.json({ ok: true, live, skipped: 'quiet hours (10am-8pm Central only)', hour: chHour, sent: 0 });
-    }
-  }
+  // Quiet hours (TCPA): real sends only 10am-8pm Central (inside legal everywhere).
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: 'numeric', hour12: false, hourCycle: 'h23' }).formatToParts(new Date());
+  const chHour = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
+  const quiet = chHour < 10 || chHour >= 20;
+
+  // TWO SEPARATE GATES:
+  // - BULK DRIP + auto-enroll: only real when CAMPAIGNS_LIVE === 'true'. This is
+  //   the big risky one, kept behind the env flag.
+  // - APPOINTMENT REMINDERS: transactional, low volume, tied to a booked meeting.
+  //   They send on any real scheduled tick (outside quiet hours) whenever the
+  //   reminder campaign is active, REGARDLESS of CAMPAIGNS_LIVE, so pausing the
+  //   drip never silences appointment reminders.
+  const live = process.env.CAMPAIGNS_LIVE === 'true';
+  const dryRun = previewOnly || !live || quiet;        // bulk drip / auto-enroll
+  const remindersDry = previewOnly || quiet;            // appointment reminders
 
   // DRIP THROTTLE: never fire a big burst (carriers flag high velocity as spam).
   // Only a handful go out per run; the rest stay pending for the next tick. With
@@ -53,14 +55,16 @@ async function run(request) {
     .order('due_at', { ascending: true }).limit(100);
 
   let sent = 0, skipped = 0, failed = 0; const preview = [];
-  const perLeadSent = new Set(); // at most ONE message per person per run
+  const perLeadSent = new Set();  // leads we REALLY texted this run (drip + reminder share it)
+  const previewLeads = new Set(); // leads already shown in the dry preview
   for (const item of due || []) {
     try {
       // Throttle: once we've fired the per-run cap, stop; the rest wait for the next tick.
       if ((dryRun ? preview.length : sent) >= MAX_PER_RUN) break;
-      // Never stack multiple texts on one person in a single run: if they already
-      // have a message going this run, leave the rest pending for later days.
-      if (perLeadSent.has(item.lead_id)) { skipped++; continue; }
+      // One message per person per run. In dry mode nothing is really sent, so
+      // only dedup the preview (perLeadSent must reflect REAL sends only, so it
+      // doesn't wrongly block this lead's appointment reminder below).
+      if (dryRun ? previewLeads.has(item.lead_id) : perLeadSent.has(item.lead_id)) { skipped++; continue; }
       const { data: enr } = await supabase.from('campaign_enrollments').select('status').eq('id', item.enrollment_id).maybeSingle();
       if (enr && enr.status !== 'active') { if (!dryRun) await mark(supabase, item.id, 'cancelled'); skipped++; continue; }
       const { data: lead } = await supabase.from('leads').select('full_name, name, phone, sms_opt_out, pipeline_status, last_contact_at, last_contact_dir, property_county, county, form_data').eq('id', item.lead_id).maybeSingle();
@@ -97,12 +101,13 @@ async function run(request) {
         }
       }
 
-      perLeadSent.add(item.lead_id);
       if (dryRun) {
+        previewLeads.add(item.lead_id);
         preview.push({ lead_id: item.lead_id, name: lead.full_name || lead.name || 'Lead', phone: lead.phone, message: outMsg });
         continue;
       }
 
+      perLeadSent.add(item.lead_id); // real send only
       await sendMessage({ to: lead.phone, message: outMsg });
 
       const nowIso = new Date().toISOString();
@@ -173,7 +178,7 @@ async function run(request) {
       const tz = TZ_BY_ABBR[(abbr || 'CT').toUpperCase()] || 'America/Chicago';
       const tLabel = new Date(m.due_at).toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' });
       const msg = fillTokens(pick.message || DEFAULT_REM[0].message, lead, { time: tLabel });
-      if (dryRun) { preview.push({ lead_id: m.lead_id, name: lead.full_name || lead.name || 'Lead', phone: lead.phone, message: `[REMINDER] ${msg}` }); continue; }
+      if (remindersDry) { preview.push({ lead_id: m.lead_id, name: lead.full_name || lead.name || 'Lead', phone: lead.phone, message: `[REMINDER] ${msg}` }); continue; }
       await sendMessage({ to: lead.phone, message: msg });
       const ri = new Date().toISOString();
       await supabase.from('activities').insert({ lead_id: m.lead_id, activity_type: 'TEXT', direction: 'OUTBOUND', outcome: 'SENT', message_content: msg, created_at: ri, read_at: ri }).then(() => {}, () => {});
