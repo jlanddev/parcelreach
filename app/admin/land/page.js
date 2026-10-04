@@ -1305,43 +1305,17 @@ export default function LandLeadsAdminPage() {
   // view and flash a ring. Retries because the tab needs a beat to render; if
   // the card still can't be found, falls back to opening the lead details so
   // the click never silently does nothing.
+  // Clicking any lead (notification, message row, campaign item) ALWAYS opens the
+  // full lead card in a modal, so you can act on it (status dropdown -> Dead,
+  // Messages, Call, offer) every time. Reliable regardless of pagination, tab
+  // filters, or duplicate records, which the old scroll-to-card approach missed.
   const navigateToLeadCard = (lead) => {
     if (!lead?.id) return;
     setConversationLead(null);
     setNotesModalLead(null);
     setDetailsModalOpen(false);
-    // Clear filters that could hide the card in its tab.
-    setPipelineSearch('');
-    setPpcSearch('');
-    setPipelineMapped(false);
-    const dest = tabForLead(lead);
-    // On the appointment calendar, select the day this lead's meeting sits on so
-    // its card is actually rendered (cards only show for the selected day).
-    if (dest === 'appointment-set') {
-      const mtg = (scheduledTasks || []).find(t => t.task_type === 'meeting' && t.lead_id === lead.id && t.due_at);
-      if (mtg) { const d = new Date(mtg.due_at); setCalMonth(new Date(d.getFullYear(), d.getMonth(), 1)); setCalSelectedDay(d.toDateString()); }
-    }
-    setActiveTab(dest);
-    setHighlightLeadId(lead.id);
-    let tries = 0;
-    const find = () => {
-      const el = document.getElementById(`lead-card-${lead.id}`);
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        setTimeout(() => setHighlightLeadId(null), 2600);
-        return;
-      }
-      if (++tries < 8) {
-        setTimeout(find, 200);
-      } else {
-        // Could not locate the card inline (past pagination, or collapsed as a
-        // duplicate). Show the full lead CARD in a modal so you can always act on
-        // it (status dropdown, Move to Dead, etc.), never the bare edit form.
-        setHighlightLeadId(null);
-        setCardModalLead(lead);
-      }
-    };
-    setTimeout(find, 180);
+    const fresh = (allLeads || []).find(l => l.id === lead.id) || (rawLeads || []).find(l => l.id === lead.id) || lead;
+    setCardModalLead(fresh);
   };
 
   // --- Offer, direction, and Follow-Up handlers -------------------------------
