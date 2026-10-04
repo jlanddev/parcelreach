@@ -64,6 +64,20 @@ const zonedToUtcISO = (dateStr, timeStr, tz) => {
   return new Date(guess + (guess - shown)).toISOString();
 };
 
+// A lead-card text field that keeps its value in LOCAL state while you type (so
+// typing is instant) and only saves to the DB once, on blur or Enter. This fixes
+// the lag where every keystroke wrote to Supabase and re-rendered the whole page.
+function LeadField({ initial, onSave, as = 'input', className, placeholder, rows, inputMode, type }) {
+  const [v, setV] = useState(initial ?? '');
+  const dirty = useRef(false);
+  useEffect(() => { if (!dirty.current) setV(initial ?? ''); }, [initial]);
+  const commit = () => { if (!dirty.current) return; dirty.current = false; const val = v; if ((val ?? '') !== (initial ?? '')) onSave(val); };
+  const onChange = (e) => { dirty.current = true; setV(e.target.value); };
+  const stop = (e) => e.stopPropagation();
+  if (as === 'textarea') return <textarea value={v} onChange={onChange} onBlur={commit} onClick={stop} rows={rows} placeholder={placeholder} className={className} />;
+  return <input value={v} onChange={onChange} onBlur={commit} onClick={stop} onKeyDown={(e) => { if (e.key === 'Enter' && as !== 'textarea') e.currentTarget.blur(); }} type={type} inputMode={inputMode} placeholder={placeholder} className={className} />;
+}
+
 export default function LandLeadsAdminPage() {
   const router = useRouter();
   const [organizations, setOrganizations] = useState([]);
@@ -4217,18 +4231,9 @@ export default function LandLeadsAdminPage() {
 
                       {/* Owner Name & Time */}
                       <div className="mb-4">
-                        <input
-                          type="text"
-                          value={lead.name || lead.full_name || ''}
-                          onChange={async (e) => {
-                            const { error } = await supabase
-                              .from('leads')
-                              .update({ name: e.target.value, full_name: e.target.value })
-                              .eq('id', lead.id);
-                            if (!error) {
-                              setRawLeads(allLeads.map(l => l.id === lead.id ? {...l, name: e.target.value, full_name: e.target.value} : l));
-                            }
-                          }}
+                        <LeadField
+                          initial={lead.name || lead.full_name || ''}
+                          onSave={(val) => patchLead(lead.id, { name: val, full_name: val })}
                           className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-2 text-white font-semibold text-lg focus:outline-none focus:border-blue-500/50"
                           placeholder="Owner name"
                         />
@@ -4238,88 +4243,30 @@ export default function LandLeadsAdminPage() {
                     {/* Property Location */}
                     <div className="space-y-2 mb-3 pb-3 border-b border-slate-700/50">
                       <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Property Location</div>
-                      <input
-                        type="text"
-                        value={lead.form_data?.streetAddress || lead.street_address || lead.address || ''}
-                        onChange={async (e) => {
-                          const updatedFormData = { ...lead.form_data, streetAddress: e.target.value };
-                          const { error } = await supabase
-                            .from('leads')
-                            .update({
-                              form_data: updatedFormData,
-                              street_address: e.target.value,
-                              address: e.target.value
-                            })
-                            .eq('id', lead.id);
-                          if (!error) {
-                            setRawLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, street_address: e.target.value, address: e.target.value} : l));
-                          }
-                        }}
+                      <LeadField
+                        initial={lead.form_data?.streetAddress || lead.street_address || lead.address || ''}
+                        onSave={(val) => patchLead(lead.id, { form_data: { ...lead.form_data, streetAddress: val }, street_address: val, address: val })}
                         className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50"
                         placeholder="Street address"
                       />
                       <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={lead.form_data?.propertyCounty || lead.property_county || lead.county || ''}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={async (e) => {
-                            const updatedFormData = { ...lead.form_data, propertyCounty: e.target.value };
-                            const { error } = await supabase
-                              .from('leads')
-                              .update({
-                                form_data: updatedFormData,
-                                property_county: e.target.value,
-                                county: e.target.value
-                              })
-                              .eq('id', lead.id);
-                            if (!error) {
-                              setRawLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, property_county: e.target.value, county: e.target.value} : l));
-                            }
-                          }}
+                        <LeadField
+                          initial={lead.form_data?.propertyCounty || lead.property_county || lead.county || ''}
+                          onSave={(val) => patchLead(lead.id, { form_data: { ...lead.form_data, propertyCounty: val }, property_county: val, county: val })}
                           className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50"
                           placeholder="County"
                         />
-                        <input
-                          type="text"
-                          value={lead.form_data?.propertyState || lead.property_state || lead.state || ''}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={async (e) => {
-                            const updatedFormData = { ...lead.form_data, propertyState: e.target.value };
-                            const { error } = await supabase
-                              .from('leads')
-                              .update({
-                                form_data: updatedFormData,
-                                property_state: e.target.value,
-                                state: e.target.value
-                              })
-                              .eq('id', lead.id);
-                            if (!error) {
-                              setRawLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, property_state: e.target.value, state: e.target.value} : l));
-                            }
-                          }}
+                        <LeadField
+                          initial={lead.form_data?.propertyState || lead.property_state || lead.state || ''}
+                          onSave={(val) => patchLead(lead.id, { form_data: { ...lead.form_data, propertyState: val }, property_state: val, state: val })}
                           className="w-20 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50"
                           placeholder="State"
                         />
                       </div>
-                      <input
-                        type="text"
-                        value={lead.form_data?.acres || lead.acres || lead.acreage || ''}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={async (e) => {
-                          const updatedFormData = { ...lead.form_data, acres: e.target.value };
-                          const { error } = await supabase
-                            .from('leads')
-                            .update({
-                              form_data: updatedFormData,
-                              acres: parseFloat(e.target.value) || null,
-                              acreage: parseFloat(e.target.value) || null
-                            })
-                            .eq('id', lead.id);
-                          if (!error) {
-                            setRawLeads(allLeads.map(l => l.id === lead.id ? {...l, form_data: updatedFormData, acres: parseFloat(e.target.value) || null, acreage: parseFloat(e.target.value) || null} : l));
-                          }
-                        }}
+                      <LeadField
+                        initial={lead.form_data?.acres || lead.acres || lead.acreage || ''}
+                        inputMode="decimal"
+                        onSave={(val) => patchLead(lead.id, { form_data: { ...lead.form_data, acres: val }, acres: parseFloat(val) || null, acreage: parseFloat(val) || null })}
                         className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm font-semibold text-orange-400 focus:outline-none focus:border-blue-500/50"
                         placeholder="Acres"
                       />
@@ -4388,19 +4335,10 @@ export default function LandLeadsAdminPage() {
                         <svg className="w-4 h-4 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                         </svg>
-                        <input
+                        <LeadField
                           type="email"
-                          value={lead.email || lead.owner_email || ''}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={async (e) => {
-                            const { error } = await supabase
-                              .from('leads')
-                              .update({ email: e.target.value, owner_email: e.target.value })
-                              .eq('id', lead.id);
-                            if (!error) {
-                              setRawLeads(allLeads.map(l => l.id === lead.id ? {...l, email: e.target.value, owner_email: e.target.value} : l));
-                            }
-                          }}
+                          initial={lead.email || lead.owner_email || ''}
+                          onSave={(val) => patchLead(lead.id, { email: val, owner_email: val })}
                           className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-slate-300 focus:outline-none focus:border-blue-500/50"
                           placeholder="Email"
                         />
@@ -4409,19 +4347,10 @@ export default function LandLeadsAdminPage() {
                         <svg className="w-4 h-4 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
                         </svg>
-                        <input
+                        <LeadField
                           type="tel"
-                          value={lead.phone || lead.owner_phone || ''}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={async (e) => {
-                            const { error } = await supabase
-                              .from('leads')
-                              .update({ phone: e.target.value, owner_phone: e.target.value })
-                              .eq('id', lead.id);
-                            if (!error) {
-                              setRawLeads(allLeads.map(l => l.id === lead.id ? {...l, phone: e.target.value, owner_phone: e.target.value} : l));
-                            }
-                          }}
+                          initial={lead.phone || lead.owner_phone || ''}
+                          onSave={(val) => patchLead(lead.id, { phone: val, owner_phone: val })}
                           className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-slate-300 focus:outline-none focus:border-blue-500/50"
                           placeholder="Phone"
                         />
@@ -6193,7 +6122,7 @@ export default function LandLeadsAdminPage() {
                             </div>
                             {outcomeFor === t.id && (
                               <div className="mt-2 bg-slate-900/60 border border-slate-700 rounded-lg p-3">
-                                <textarea value={outcomeNotes} onChange={(e) => setOutcomeNotes(e.target.value)} rows={2} placeholder="How did it go? Notes from the appointment..." className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm mb-2" />
+                                <textarea value={outcomeNotes} onChange={(e) => setOutcomeNotes(e.target.value)} rows={6} placeholder="How did it go? Notes from the appointment..." className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm mb-2 resize-y min-h-[120px] max-h-[60vh] overflow-y-auto" />
                                 <div className="text-xs text-slate-400 mb-1.5">Move to:</div>
                                 <div className="flex flex-wrap gap-2">
                                   <button onClick={() => completeAppt(t, 'OFFER_SENT')} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white">Offer Made</button>
