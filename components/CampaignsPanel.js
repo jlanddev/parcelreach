@@ -58,6 +58,11 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   const [enrollSel, setEnrollSel] = useState(() => new Set());
   const [preview, setPreview] = useState(null);
   const [testPhone, setTestPhone] = useState('');
+  const [isLive, setIsLive] = useState(null); // null=unknown, true/false from /status
+  const [maxPerRun, setMaxPerRun] = useState(8);
+  useEffect(() => {
+    fetch('/api/campaigns/status').then(r => r.json()).then(j => { if (j?.ok) { setIsLive(!!j.live); setMaxPerRun(j.maxPerRun || 8); } }).catch(() => {});
+  }, []);
 
   const say = (msg, kind = 'success') => { setToast({ msg, kind }); setTimeout(() => setToast(null), 2800); };
 
@@ -391,7 +396,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
                 })}
               </div>
             )}
-            <p className="mt-2 text-xs text-slate-500">"Due" means it's queued and would go on the next run, but nothing actually sends while sending is in safe mode (off). Every real send also shows in the lead's message thread.</p>
+            <p className="mt-2 text-xs text-slate-500">{isLive ? `"Sent ✓" already went out. "Due"/"Scheduled" go out on upcoming runs (up to ${maxPerRun} per run, every 30 min, 10am-8pm Central), so they trickle. Counts are for THIS campaign only.` : '"Due" means it\'s queued and would go on the next run, but nothing sends while sending is in safe mode (off). Counts are for THIS campaign only.'} Every real send also shows in the lead\'s message thread.</p>
           </div>
         );
       })()}
@@ -429,13 +434,21 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
         </div>
       </div>
 
-      {/* Live/dry-run banner */}
-      <div className="bg-amber-500/10 border border-amber-500/40 rounded-xl px-4 py-3 text-sm text-amber-200">
-        <p><span className="font-semibold">Sending is in safe mode (dry-run).</span> No automated texts go out until <code className="text-amber-100">CAMPAIGNS_LIVE=true</code> is set in Netlify. Use <span className="font-semibold">Preview sends</span> to see exactly what would go. Quiet hours (10am-8pm Central), one text per lead per day, opt-out, and auto-stop on reply are always enforced.</p>
-        <div className="mt-2 flex items-center gap-2 flex-wrap">
-          <span className="text-xs text-amber-100/80">Test sending works, text your own phone:</span>
-          <input value={testPhone} onChange={e => setTestPhone(e.target.value)} placeholder="(555) 555-5555" className="bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1 text-white text-sm w-40" />
-          <button onClick={sendTest} disabled={busy} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white disabled:opacity-50">Send test text</button>
+      {/* Live / safe-mode banner (reflects real CAMPAIGNS_LIVE state) */}
+      {isLive ? (
+        <div className="bg-emerald-500/10 border border-emerald-500/40 rounded-xl px-4 py-3 text-sm text-emerald-200">
+          <p><span className="font-semibold">● LIVE — automated texts are sending.</span> They drip: up to {maxPerRun} per run, every 30 min, 10am-8pm Central only, one per lead per day. Under-contract/closed deals and anyone who replied are skipped. Use <span className="font-semibold">Preview sends</span> to see the next batch before it goes.</p>
+        </div>
+      ) : (
+        <div className="bg-amber-500/10 border border-amber-500/40 rounded-xl px-4 py-3 text-sm text-amber-200">
+          <p><span className="font-semibold">Sending is in safe mode (off).</span> Nothing goes out until it's turned live. Use <span className="font-semibold">Preview sends</span> to see exactly what would go. Quiet hours (10am-8pm Central), {maxPerRun}/run throttle, one per lead per day, and skip-on-reply are always enforced.</p>
+        </div>
+      )}
+      <div className="bg-slate-800/40 border border-slate-700 rounded-xl px-4 py-2.5 text-sm">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-slate-400">Test sending, text your own phone:</span>
+          <input value={testPhone} onChange={e => setTestPhone(e.target.value)} placeholder="(555) 555-5555" className="bg-slate-900 border border-slate-600 rounded-lg px-2.5 py-1 text-white text-sm w-40" />
+          <button onClick={sendTest} disabled={busy} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white disabled:opacity-50">Send test text</button>
         </div>
       </div>
 
