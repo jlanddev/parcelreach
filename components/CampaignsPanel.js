@@ -113,13 +113,13 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   // refresh enrolled set when campaigns reload while a detail is open
   useEffect(() => { if (openCampaign) { const cp = (campaigns || []).find(c => c.id === openCampaign.id); if (cp) openDetail(cp); } /* eslint-disable-next-line */ }, [campaigns]);
 
-  // Targeting is by main CRM tab (a group of pipeline statuses), not raw statuses.
-  const safeGroups = (stageGroups || []).map(g => ({ ...g, statuses: (g.statuses || []).filter(v => !ALWAYS_EXCLUDED.includes(v)) })).filter(g => g.statuses.length);
-  const allSafe = [...new Set(safeGroups.flatMap(g => g.statuses))];
-  const defaultStages = (safeGroups.find(g => g.key === 'ppc-inflow')?.statuses) || (safeGroups[0]?.statuses || []);
-  const groupLabels = (statusList) => safeGroups.filter(g => g.statuses.some(v => (statusList || []).includes(v))).map(g => g.label);
+  // Targeting is by main CRM TAB KEY (offer-aware on the server), not raw statuses.
+  const safeGroups = stageGroups || [];
+  const allSafe = safeGroups.map(g => g.key);
+  const defaultStages = allSafe.includes('ppc-inflow') ? ['ppc-inflow'] : allSafe.slice(0, 1);
+  const groupLabels = (keys) => safeGroups.filter(g => (keys || []).includes(g.key)).map(g => g.label);
   const startNew = () => { setEditing({ id: null, name: '', description: '', steps: [BLANK_STEP()], active: true, kind: 'manual', autoRule: 'nocontact', autoDays: 30, autoStages: defaultStages }); setAiGoal(""); setAiFeedback(""); setAiMessages([]); setAiDrafted(false); setTemplateFor(null); setShowCreate(true); };
-  const startEdit = (cp) => { const a = parseAuto(cp.description); setEditing({ id: cp.id, name: cp.name, description: descClean(cp.description), steps: (Array.isArray(cp.steps) && cp.steps.length ? cp.steps : [BLANK_STEP()]).map(s => ({ delayMin: stepOffsetMin(s), type: s.type || 'text', message: s.message || '', label: s.label || '' })), active: cp.active !== false, kind: a ? 'drip' : 'manual', autoRule: a?.rule || 'nocontact', autoDays: a?.days ?? 30, autoStages: (a?.stages?.length ? a.stages.filter(v => allSafe.includes(v)) : allSafe) }); setAiGoal(""); setAiFeedback(""); setAiMessages([]); setAiDrafted(false); setTemplateFor(null); setShowCreate(true); };
+  const startEdit = (cp) => { const a = parseAuto(cp.description); setEditing({ id: cp.id, name: cp.name, description: descClean(cp.description), steps: (Array.isArray(cp.steps) && cp.steps.length ? cp.steps : [BLANK_STEP()]).map(s => ({ delayMin: stepOffsetMin(s), type: s.type || 'text', message: s.message || '', label: s.label || '' })), active: cp.active !== false, kind: a ? 'drip' : 'manual', autoRule: a?.rule || 'nocontact', autoDays: a?.days ?? 30, autoStages: (a?.tabs?.length ? a.tabs : defaultStages) }); setAiGoal(""); setAiFeedback(""); setAiMessages([]); setAiDrafted(false); setTemplateFor(null); setShowCreate(true); };
 
   const saveCampaign = async () => {
     if (!editing?.name.trim()) { say('Name is required', 'error'); return; }
@@ -135,9 +135,9 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     if (editing.kind === 'drip') {
       const d = Math.max(1, Number(editing.autoDays) || 30);
       const sel = (editing.autoStages || []).filter(v => allSafe.includes(v));
-      // Only encode a stage list if it's a real subset; empty or "all safe" => no filter.
-      const stagePart = (sel.length && sel.length < allSafe.length) ? ':' + sel.join(',') : '';
-      desc = `${desc} [auto:${editing.autoRule}:${d}${stagePart}]`.trim();
+      // Encode the chosen CRM tab keys. Empty or "all tabs" => no filter (all).
+      const tabPart = (sel.length && sel.length < allSafe.length) ? ':' + sel.join(',') : '';
+      desc = `${desc} [auto:${editing.autoRule}:${d}${tabPart}]`.trim();
     }
     const payload = { name: editing.name.trim(), description: desc, steps, active: editing.active };
     let err;
@@ -211,7 +211,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     if (!a) { say('This campaign has no auto rule', 'error'); return; }
     setBusy(true);
     try {
-      const body = { campaignId: cp.id, rule: a.rule, days: a.days, stages: a.stages || [], userId: currentUserId };
+      const body = { campaignId: cp.id, rule: a.rule, days: a.days, tabs: a.tabs || [], userId: currentUserId };
       const c = await fetch('/api/campaigns/enroll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, countOnly: true }) }).then(r => r.json());
       if (!c.ok) throw new Error(c.error || 'failed');
       if (!c.wouldAdd) { say(`No new leads match right now${c.alreadyIn ? ` (${c.alreadyIn} already in)` : ''}`, 'error'); setBusy(false); return; }
@@ -250,17 +250,21 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   const RULE_LABELS = { nocontact: "haven't been contacted (text or call)", notext: "haven't been texted", nocall: "haven't been called" };
   const parseAuto = (d) => {
     const s = String(d || '');
-    let m = s.match(/\[auto:stage:([A-Za-z_]+):(\d+)\]/i);
-    if (m) return { rule: 'nocontact', days: Number(m[2]), stages: [m[1].toUpperCase()] };
-    m = s.match(/\[auto:(nocontact|notext|nocall|untouched):(\d+)(?::([A-Za-z_,]+))?\]/i);
-    if (m) return { rule: m[1].toLowerCase() === 'untouched' ? 'nocontact' : m[1].toLowerCase(), days: Number(m[2]), stages: m[3] ? m[3].toUpperCase().split(',').filter(Boolean) : [] };
+    let m = s.match(/\[auto:stage:([A-Za-z_]+):(\d+)\]/i); // legacy single-status marker
+    if (m) return { rule: 'nocontact', days: Number(m[2]), tabs: [] };
+    m = s.match(/\[auto:(nocontact|notext|nocall|untouched):(\d+)(?::([A-Za-z0-9_,-]+))?\]/i);
+    if (m) {
+      const toks = m[3] ? m[3].toLowerCase().split(',').filter(Boolean) : [];
+      const tabs = toks.filter(t => allSafe.includes(t)); // keep only valid tab keys
+      return { rule: m[1].toLowerCase() === 'untouched' ? 'nocontact' : m[1].toLowerCase(), days: Number(m[2]), tabs };
+    }
     return null;
   };
   const descClean = (d) => String(d || '').replace(/\s*\[auto:[^\]]+\]\s*/i, '').trim();
   const autoSummary = (d) => {
     const a = parseAuto(d);
     if (!a) return null;
-    const labels = a.stages?.length ? groupLabels(a.stages) : [];
+    const labels = a.tabs?.length ? groupLabels(a.tabs) : [];
     const where = labels.length ? `${labels.join(' / ')} ` : '';
     return `Auto-adds ${where}leads who ${RULE_LABELS[a.rule]} in ${a.days}d`;
   };
@@ -589,10 +593,10 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
                       <div className="text-xs text-indigo-200/70 mb-1.5">Pick which tabs this pulls from, e.g. PPC Inflow and Offer Curated.</div>
                       <div className="grid grid-cols-2 gap-1">
                         {safeGroups.map(g => {
-                          const on = g.statuses.every(v => (editing.autoStages || []).includes(v));
+                          const on = (editing.autoStages || []).includes(g.key);
                           return (
                             <label key={g.key} className={`flex items-center gap-2 rounded px-2 py-1 text-xs cursor-pointer ${on ? 'bg-indigo-600/30 text-white' : 'bg-slate-800/60 text-slate-300'}`}>
-                              <input type="checkbox" checked={on} onChange={() => setEditing(prev => { const cur = new Set(prev.autoStages || []); if (on) g.statuses.forEach(v => cur.delete(v)); else g.statuses.forEach(v => cur.add(v)); return { ...prev, autoStages: [...cur] }; })} className="accent-indigo-500" />
+                              <input type="checkbox" checked={on} onChange={() => setEditing(prev => { const cur = new Set(prev.autoStages || []); on ? cur.delete(g.key) : cur.add(g.key); return { ...prev, autoStages: [...cur] }; })} className="accent-indigo-500" />
                               {g.label}
                             </label>
                           );

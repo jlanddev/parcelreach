@@ -203,13 +203,15 @@ async function run(request) {
     for (const camp of camps || []) {
       if (String(camp.name || '').startsWith('__settings') || camp.name === 'Appointment Reminders') continue;
       const desc = String(camp.description || '');
-      const stageM = desc.match(/\[auto:stage:([A-Za-z_]+):(\d+)\]/i); // legacy single-stage marker
-      const ruleM = desc.match(/\[auto:(nocontact|notext|nocall|untouched):(\d+)(?::([A-Za-z_,]+))?\]/i);
+      const stageM = desc.match(/\[auto:stage:([A-Za-z_]+):(\d+)\]/i); // legacy single-status marker
+      const ruleM = desc.match(/\[auto:(nocontact|notext|nocall|untouched):(\d+)(?::([A-Za-z0-9_,-]+))?\]/i);
       if (!stageM && !ruleM) continue;
       const rule = stageM ? 'nocontact' : (ruleM[1].toLowerCase() === 'untouched' ? 'nocontact' : ruleM[1].toLowerCase());
       const days = Math.max(1, Number((stageM ? stageM[2] : ruleM[2])) || 30);
-      const stageFilter = stageM ? [stageM[1].toUpperCase()] : (ruleM[3] ? ruleM[3].toUpperCase().split(',').filter(Boolean) : []);
-      const cand = (await leadsForRule(supabase, { rule, stages: stageFilter, days })).slice(0, 40);
+      // Tokens after the days are CRM tab keys (new) or raw statuses (legacy);
+      // leadsForRule figures out which and filters offer-aware for tab keys.
+      const tokens = stageM ? [stageM[1]] : (ruleM[3] ? ruleM[3].split(',').filter(Boolean) : []);
+      const cand = (await leadsForRule(supabase, { rule, tabs: tokens, stages: tokens, days })).slice(0, 40);
 
       for (const lead of cand) {
         const { data: ex } = await supabase.from('campaign_enrollments')
