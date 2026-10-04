@@ -41,7 +41,8 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   const [enrolledIds, setEnrolledIds] = useState(new Set());
   const [detailQueue, setDetailQueue] = useState([]); // text queue for the open campaign
   const [enrolledAtById, setEnrolledAtById] = useState({}); // leadId -> enrollment time (open campaign)
-  const [enrollAtByCampaign, setEnrollAtByCampaign] = useState({}); // campaignId -> { leadId: enrolledAt }
+  const [enrollAtByCampaign, setEnrollAtByCampaign] = useState({}); // campaignId -> { leadId: enrolledAt } (active)
+  const [enrollAtAllByCampaign, setEnrollAtAllByCampaign] = useState({}); // campaignId -> { leadId: enrolledAt } (all)
   const [templateFor, setTemplateFor] = useState(null); // step index whose template list is open
   const [aiGoal, setAiGoal] = useState(''); // AI builder: describe the campaign
   const [aiFeedback, setAiFeedback] = useState(''); // follow-up tweak request
@@ -74,13 +75,24 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     const { data: q } = await supabase.from('campaign_queue').select('campaign_id, status');
     const c = {};
     const byCamp = {};
-    const atByCamp = {};
-    (camps || []).forEach(cp => { c[cp.id] = { active: 0, pending: 0 }; });
-    (enr || []).forEach(e => { if (e.status === 'active' && c[e.campaign_id]) { c[e.campaign_id].active += 1; (byCamp[e.campaign_id] = byCamp[e.campaign_id] || new Set()).add(e.lead_id); (atByCamp[e.campaign_id] = atByCamp[e.campaign_id] || {})[e.lead_id] = e.created_at; } });
-    (q || []).forEach(x => { if (x.status === 'pending' && c[x.campaign_id]) c[x.campaign_id].pending += 1; });
+    const atByCamp = {};     // active enrollments only (for needs-attention)
+    const atByCampAll = {};  // every enrollment ever (for response stats)
+    (camps || []).forEach(cp => { c[cp.id] = { active: 0, pending: 0, sent: 0 }; });
+    (enr || []).forEach(e => {
+      if (!c[e.campaign_id]) return;
+      (atByCampAll[e.campaign_id] = atByCampAll[e.campaign_id] || {})[e.lead_id] = e.created_at;
+      if (e.status === 'active') { c[e.campaign_id].active += 1; (byCamp[e.campaign_id] = byCamp[e.campaign_id] || new Set()).add(e.lead_id); (atByCamp[e.campaign_id] = atByCamp[e.campaign_id] || {})[e.lead_id] = e.created_at; }
+    });
+    (q || []).forEach(x => { if (!c[x.campaign_id]) return; if (x.status === 'pending') c[x.campaign_id].pending += 1; else if (x.status === 'sent') c[x.campaign_id].sent += 1; });
     setCounts(c);
     setEnrollByCampaign(byCamp);
     setEnrollAtByCampaign(atByCamp);
+    setEnrollAtAllByCampaign(atByCampAll);
+  };
+  // Count leads in a campaign who have replied to us since we enrolled them.
+  const campaignReplies = (cpId) => {
+    const atMap = enrollAtAllByCampaign[cpId] || {};
+    return Object.keys(atMap).filter(id => repliedAfterEnroll(leadsById[id], atMap[id])).length;
   };
   // A reply only "needs attention" if it came AFTER we enrolled them (replies from
   // before the campaign are just their old thread history, not a campaign response).
@@ -303,10 +315,12 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
               <h2 className="text-2xl font-bold text-rose-300">{openCampaign.name}</h2>
               {descClean(openCampaign.description) && <p className="text-slate-400 text-sm mt-1">{descClean(openCampaign.description)}</p>}
               {autoSummary(openCampaign.description) && <p className="text-indigo-300 text-xs mt-1 font-semibold">Auto-enroll on: {autoSummary(openCampaign.description)}.</p>}
-              <div className="mt-2 flex items-center gap-4 text-sm text-slate-300">
-                <span><span className="font-bold text-white">{enrolledLeads.length}</span> enrolled</span>
+              <div className="mt-2 flex items-center gap-4 text-sm text-slate-300 flex-wrap">
+                <span><span className="font-bold text-emerald-300">{counts[openCampaign.id]?.sent || 0}</span> sent</span>
+                <span className="text-cyan-300"><span className="font-bold">{campaignReplies(openCampaign.id)}</span> replied</span>
+                <span><span className="font-bold text-white">{counts[openCampaign.id]?.pending || 0}</span> queued</span>
+                <span><span className="font-bold text-white">{enrolledLeads.length}</span> active</span>
                 <span><span className="font-bold text-white">{campaignCalls.length}</span> calls to make</span>
-                {repliesWaiting > 0 && <span className="text-cyan-300"><span className="font-bold">{repliesWaiting}</span> replied, owe a response</span>}
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -505,9 +519,11 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
                 </div>
                 <button onClick={() => toggleActive(cp)} className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 flex-shrink-0">{cp.active ? 'Pause' : 'Activate'}</button>
               </div>
-              <div className="mt-3 flex items-center gap-4 text-sm">
-                <span className="text-slate-300"><span className="font-bold text-white">{counts[cp.id]?.active || 0}</span> enrolled</span>
-                <span className="text-slate-300"><span className="font-bold text-white">{counts[cp.id]?.pending || 0}</span> texts queued</span>
+              <div className="mt-3 flex items-center gap-4 text-sm flex-wrap">
+                <span className="text-slate-300"><span className="font-bold text-emerald-300">{counts[cp.id]?.sent || 0}</span> sent</span>
+                <span className="text-slate-300"><span className="font-bold text-cyan-300">{campaignReplies(cp.id)}</span> replied</span>
+                <span className="text-slate-300"><span className="font-bold text-white">{counts[cp.id]?.pending || 0}</span> queued</span>
+                <span className="text-slate-400"><span className="font-bold text-slate-200">{counts[cp.id]?.active || 0}</span> active</span>
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 <button onClick={() => { setEnrollFor(cp); setEnrollSel(new Set()); setEnrollSearch(''); }} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-rose-600/20 text-rose-200 border border-rose-500/40 hover:bg-rose-600/40">Enroll leads</button>

@@ -738,6 +738,18 @@ export default function LandLeadsAdminPage() {
     try { localStorage.setItem('pr_tab_seen', JSON.stringify(next)); } catch {}
     return next;
   });
+  // Per-notification dismissal: clear one row independently (not just the whole tab).
+  // Keyed by person + event time, so a NEWER message from the same person still shows.
+  const [dismissedEvents, setDismissedEvents] = useState(() => {
+    if (typeof window === 'undefined') return new Set();
+    try { return new Set(JSON.parse(localStorage.getItem('pr_tab_dismissed') || '[]')); } catch { return new Set(); }
+  });
+  const evKey = (lead, ts) => `${(lead.phone || '').replace(/\D/g, '').slice(-10) || lead.id}:${Math.round(Number(ts) || 0)}`;
+  const dismissEvent = (lead, ts) => setDismissedEvents(prev => {
+    const next = new Set(prev); next.add(evKey(lead, ts));
+    try { localStorage.setItem('pr_tab_dismissed', JSON.stringify([...next])); } catch {}
+    return next;
+  });
   // Build the "what's new" event list for a tab: which leads changed since it was
   // last seen, and WHAT changed (new lead / new message / reached out / updated).
   const _up = (l) => (l.pipeline_status || l.status || '').toUpperCase();
@@ -788,14 +800,21 @@ export default function LandLeadsAdminPage() {
     'lost': { kind: 'Marked lost', color: 'text-zinc-300', dot: 'bg-zinc-400' },
   };
   const eventKind = (l, seen) => {
+    // Dead / closed / lost / passed / nurture / archived leads never notify. Moving
+    // a sold lead to Dead (or any terminal stage) clears its notification everywhere.
+    const st = (l.pipeline_status || l.status || '').toUpperCase();
+    if ((l.status || '').toLowerCase() === 'archived' || ['DEAD', 'LOST', 'CLOSED', 'WE_PASSED', 'NURTURE'].includes(st)) return null;
     const created = l.created_at ? parseTs(l.created_at).getTime() : 0;
     const contact = l.last_contact_at ? parseTs(l.last_contact_at).getTime() : 0;
     // Only two notifications, and both CLEAR the moment we act:
     //  - a reply we haven't answered yet (last contact is inbound), and
     //  - a brand-new lead we haven't reached out to yet (no contact at all).
     // Once we text back / reach out, last_contact flips to outbound and both go away.
-    if (contact > seen && l.last_contact_dir === 'inbound') return { kind: 'New message', ts: contact, color: 'text-cyan-300', dot: 'bg-cyan-400' };
-    if (created > seen && !l.last_contact_at) return { kind: 'New lead', ts: created, color: 'text-emerald-300', dot: 'bg-emerald-400' };
+    const calledAt = l.last_call_at ? parseTs(l.last_call_at).getTime() : 0;
+    // A reply is "answered" (notification clears) once we text back (last contact
+    // flips outbound) OR call them at/after their message.
+    if (contact > seen && l.last_contact_dir === 'inbound' && !(calledAt >= contact)) return { kind: 'New message', ts: contact, color: 'text-cyan-300', dot: 'bg-cyan-400' };
+    if (created > seen && !l.last_contact_at && !calledAt) return { kind: 'New lead', ts: created, color: 'text-emerald-300', dot: 'bg-emerald-400' };
     return null;
   };
   // Why a lead needs a touch right now (or null). Order 0 = most urgent.
@@ -838,7 +857,7 @@ export default function LandLeadsAdminPage() {
     for (const l of (allLeads || [])) {
       if (!leadInTabC(l, tab)) continue;
       const e = eventKind(l, seen, tab);
-      if (e) out.push({ lead: l, ...e });
+      if (e && !dismissedEvents.has(evKey(l, e.ts))) out.push({ lead: l, ...e });
     }
     out.sort((a, b) => b.ts - a.ts);
     // Collapse duplicate lead records for the same person (same phone) to one row.
@@ -4994,13 +5013,16 @@ export default function LandLeadsAdminPage() {
               </div>
               <div className="max-h-56 overflow-y-auto divide-y divide-slate-700/50">
                 {events.slice(0, 25).map(ev => (
-                  <button key={ev.lead.id} onClick={() => navigateToLeadCard(ev.lead)} className="w-full text-left px-4 py-2.5 hover:bg-slate-700/40 flex items-center gap-3">
-                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${ev.dot}`} />
-                    <span className={`text-xs font-semibold uppercase tracking-wide flex-shrink-0 ${ev.color}`}>{ev.kind}</span>
-                    <span className="text-sm text-white truncate">{ev.lead.full_name || ev.lead.name || 'Lead'}</span>
-                    {(ev.lead.last_contact_preview && ev.kind === 'New message') && <span className="text-xs text-slate-400 truncate hidden md:inline">“{ev.lead.last_contact_preview}”</span>}
-                    <span className="ml-auto text-xs text-slate-500 flex-shrink-0">{fmt(ev.ts)}</span>
-                  </button>
+                  <div key={ev.lead.id} className="w-full px-4 py-2.5 hover:bg-slate-700/40 flex items-center gap-3">
+                    <button onClick={() => navigateToLeadCard(ev.lead)} className="flex-1 min-w-0 text-left flex items-center gap-3">
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${ev.dot}`} />
+                      <span className={`text-xs font-semibold uppercase tracking-wide flex-shrink-0 ${ev.color}`}>{ev.kind}</span>
+                      <span className="text-sm text-white truncate">{ev.lead.full_name || ev.lead.name || 'Lead'}</span>
+                      {(ev.lead.last_contact_preview && ev.kind === 'New message') && <span className="text-xs text-slate-400 truncate hidden md:inline">“{ev.lead.last_contact_preview}”</span>}
+                      <span className="ml-auto text-xs text-slate-500 flex-shrink-0">{fmt(ev.ts)}</span>
+                    </button>
+                    <button onClick={() => dismissEvent(ev.lead, ev.ts)} title="Clear this notification" className="flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center text-slate-500 hover:text-white hover:bg-slate-600/60">✕</button>
+                  </div>
                 ))}
               </div>
             </div>
