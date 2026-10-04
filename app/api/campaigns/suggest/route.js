@@ -9,8 +9,9 @@ export async function POST(request) {
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return NextResponse.json({ ok: false, error: 'AI not configured' }, { status: 500 });
-    const { goal, feedback, current } = await request.json();
-    if ((!goal || !String(goal).trim()) && (!feedback || !String(feedback).trim())) {
+    const { goal, feedback, current, messages } = await request.json();
+    const hasHistory = Array.isArray(messages) && messages.length;
+    if (!hasHistory && (!goal || !String(goal).trim()) && (!feedback || !String(feedback).trim())) {
       return NextResponse.json({ ok: false, error: 'Describe what you want the campaign to do.' }, { status: 400 });
     }
 
@@ -25,7 +26,7 @@ Write a short, effective sequence of steps. Each step is either a TEXT the syste
 - A CALL step has no message, just a short label like "Call to reconnect".
 - Never use em dashes or en dashes. Use commas, periods, or parentheses.
 
-If a CURRENT DRAFT and a CHANGE REQUEST are provided, REVISE the current draft to do exactly what the change asks (e.g. "make the first message ask if they already sold it"), keeping the parts that already work and only changing what is needed. Return the full updated sequence.
+This is a CONVERSATION. The user will give you follow-up change requests one after another. Treat EVERY instruction you have been given so far as still in force, and apply them all together, cumulatively. A new change request ADDS to the earlier ones, it does not replace them: never undo a change the user asked for earlier unless they explicitly tell you to. Example: if they told you earlier "we are the value, do not ask if they are open to it, we provide the offer," then every later revision must keep that framing. Re-read the whole conversation and honor all of it. Return the full updated sequence each time.
 
 Respond with ONLY a JSON object, no prose, no code fences:
 {
@@ -43,17 +44,25 @@ Respond with ONLY a JSON object, no prose, no code fences:
       message: s.message || '', label: s.label || '',
     })) : null;
 
-    let user;
-    if (currentSteps && feedback && String(feedback).trim()) {
-      user = `Here is the CURRENT DRAFT of the campaign:\n${JSON.stringify({ name: current.name || '', description: current.description || '', steps: currentSteps }, null, 2)}\n\n${goal ? `Original goal: "${String(goal).trim()}"\n\n` : ''}CHANGE REQUEST from the user: "${String(feedback).trim()}"\n\nReturn the full revised campaign.`;
+    // Build the conversation. Prefer the full history the client sends (true
+    // memory across revisions); fall back to a single message for old callers.
+    let convo;
+    if (hasHistory) {
+      convo = messages
+        .filter(x => x && (x.role === 'user' || x.role === 'assistant') && typeof x.content === 'string' && x.content.trim())
+        .slice(-20)
+        .map(x => ({ role: x.role, content: x.content }));
+      if (!convo.length || convo[0].role !== 'user') convo.unshift({ role: 'user', content: `Design the campaign for this goal:\n"${String(goal || '').trim()}"` });
+    } else if (currentSteps && feedback && String(feedback).trim()) {
+      convo = [{ role: 'user', content: `Here is the CURRENT DRAFT of the campaign:\n${JSON.stringify({ name: current.name || '', description: current.description || '', steps: currentSteps }, null, 2)}\n\n${goal ? `Original goal: "${String(goal).trim()}"\n\n` : ''}CHANGE REQUEST from the user: "${String(feedback).trim()}"\n\nReturn the full revised campaign.` }];
     } else {
-      user = `Design the campaign for this goal:\n"${String(goal || feedback).trim()}"`;
+      convo = [{ role: 'user', content: `Design the campaign for this goal:\n"${String(goal || feedback).trim()}"` }];
     }
 
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1200, temperature: 0.4, system, messages: [{ role: 'user', content: user }] }),
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1200, temperature: 0.4, system, messages: convo }),
     });
     const data = await res.json();
     if (!res.ok) return NextResponse.json({ ok: false, error: data.error?.message || 'AI error' }, { status: 502 });
@@ -73,7 +82,9 @@ Respond with ONLY a JSON object, no prose, no code fences:
     }).filter((s) => s.type === 'call' || s.message);
 
     if (!steps.length) return NextResponse.json({ ok: false, error: 'No steps generated, try rewording the goal.' }, { status: 502 });
-    return NextResponse.json({ ok: true, name: noDash(parsed.name || '').slice(0, 80), description: noDash(parsed.description || '').slice(0, 200), steps });
+    // `assistant` is the raw model reply; the client appends it to the running
+    // conversation so the next revision remembers everything said so far.
+    return NextResponse.json({ ok: true, name: noDash(parsed.name || '').slice(0, 80), description: noDash(parsed.description || '').slice(0, 200), steps, assistant: text });
   } catch (err) {
     console.error('[campaigns suggest]', err);
     return NextResponse.json({ ok: false, error: err.message || 'Failed' }, { status: 500 });

@@ -45,6 +45,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   const [templateFor, setTemplateFor] = useState(null); // step index whose template list is open
   const [aiGoal, setAiGoal] = useState(''); // AI builder: describe the campaign
   const [aiFeedback, setAiFeedback] = useState(''); // follow-up tweak request
+  const [aiMessages, setAiMessages] = useState([]); // running conversation with Claude (memory)
   const [aiDrafted, setAiDrafted] = useState(false); // a draft exists, show refine box
   const [aiBusy, setAiBusy] = useState(false);
   const [enrollByCampaign, setEnrollByCampaign] = useState({}); // campaignId -> Set(leadId)
@@ -100,8 +101,8 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   const allSafe = [...new Set(safeGroups.flatMap(g => g.statuses))];
   const defaultStages = (safeGroups.find(g => g.key === 'ppc-inflow')?.statuses) || (safeGroups[0]?.statuses || []);
   const groupLabels = (statusList) => safeGroups.filter(g => g.statuses.some(v => (statusList || []).includes(v))).map(g => g.label);
-  const startNew = () => { setEditing({ id: null, name: '', description: '', steps: [BLANK_STEP()], active: true, kind: 'manual', autoRule: 'nocontact', autoDays: 30, autoStages: defaultStages }); setAiGoal(""); setAiFeedback(""); setAiDrafted(false); setTemplateFor(null); setShowCreate(true); };
-  const startEdit = (cp) => { const a = parseAuto(cp.description); setEditing({ id: cp.id, name: cp.name, description: descClean(cp.description), steps: (Array.isArray(cp.steps) && cp.steps.length ? cp.steps : [BLANK_STEP()]).map(s => ({ delayMin: stepOffsetMin(s), type: s.type || 'text', message: s.message || '', label: s.label || '' })), active: cp.active !== false, kind: a ? 'drip' : 'manual', autoRule: a?.rule || 'nocontact', autoDays: a?.days ?? 30, autoStages: (a?.stages?.length ? a.stages.filter(v => allSafe.includes(v)) : allSafe) }); setAiGoal(""); setAiFeedback(""); setAiDrafted(false); setTemplateFor(null); setShowCreate(true); };
+  const startNew = () => { setEditing({ id: null, name: '', description: '', steps: [BLANK_STEP()], active: true, kind: 'manual', autoRule: 'nocontact', autoDays: 30, autoStages: defaultStages }); setAiGoal(""); setAiFeedback(""); setAiMessages([]); setAiDrafted(false); setTemplateFor(null); setShowCreate(true); };
+  const startEdit = (cp) => { const a = parseAuto(cp.description); setEditing({ id: cp.id, name: cp.name, description: descClean(cp.description), steps: (Array.isArray(cp.steps) && cp.steps.length ? cp.steps : [BLANK_STEP()]).map(s => ({ delayMin: stepOffsetMin(s), type: s.type || 'text', message: s.message || '', label: s.label || '' })), active: cp.active !== false, kind: a ? 'drip' : 'manual', autoRule: a?.rule || 'nocontact', autoDays: a?.days ?? 30, autoStages: (a?.stages?.length ? a.stages.filter(v => allSafe.includes(v)) : allSafe) }); setAiGoal(""); setAiFeedback(""); setAiMessages([]); setAiDrafted(false); setTemplateFor(null); setShowCreate(true); };
 
   const saveCampaign = async () => {
     if (!editing?.name.trim()) { say('Name is required', 'error'); return; }
@@ -166,12 +167,14 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     if (!isRefine && !aiGoal.trim()) { say('Describe what you want first', 'error'); return; }
     setAiBusy(true);
     try {
-      const body = isRefine
-        ? { goal: aiGoal.trim(), feedback: aiFeedback.trim(), current: { name: editing.name, description: editing.description, steps: editing.steps } }
-        : { goal: aiGoal.trim() };
-      const res = await fetch('/api/campaigns/suggest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      // Keep the full conversation so every revision remembers earlier instructions.
+      const turn = isRefine ? aiFeedback.trim() : aiGoal.trim();
+      const history = isRefine ? aiMessages : [];
+      const msgs = [...history, { role: 'user', content: turn }];
+      const res = await fetch('/api/campaigns/suggest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: msgs, goal: aiGoal.trim() }) });
       const j = await res.json();
       if (!j.ok) throw new Error(j.error || 'failed');
+      setAiMessages([...msgs, { role: 'assistant', content: j.assistant || JSON.stringify({ name: j.name, description: j.description, steps: j.steps }) }]);
       setEditing(prev => ({
         ...prev,
         name: (isRefine || !prev.name?.trim()) ? (j.name || prev.name) : prev.name,
@@ -355,7 +358,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
           if (x.status === 'sent') return { t: 'sent ✓', c: 'bg-emerald-500/20 text-emerald-300' };
           if (x.status === 'cancelled') return { t: 'stopped', c: 'bg-slate-700 text-slate-400' };
           if (x.status === 'failed') return { t: 'failed', c: 'bg-red-500/20 text-red-300' };
-          if (new Date(x.due_at).getTime() <= nowT) return { t: 'sending', c: 'bg-amber-500/20 text-amber-300' };
+          if (new Date(x.due_at).getTime() <= nowT) return { t: 'due', c: 'bg-amber-500/20 text-amber-300' };
           return { t: 'scheduled', c: 'bg-slate-700 text-slate-400' };
         };
         const rows = [...pending.filter(x => new Date(x.due_at).getTime() <= nowT), ...pending.filter(x => new Date(x.due_at).getTime() > nowT), ...sent.slice().reverse()].slice(0, 60);
@@ -388,7 +391,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
                 })}
               </div>
             )}
-            <p className="mt-2 text-xs text-slate-500">"Sending" means it's due now and goes on the next scheduler run. Every sent text also shows in the lead's message thread.</p>
+            <p className="mt-2 text-xs text-slate-500">"Due" means it's queued and would go on the next run, but nothing actually sends while sending is in safe mode (off). Every real send also shows in the lead's message thread.</p>
           </div>
         );
       })()}
