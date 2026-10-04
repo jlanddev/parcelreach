@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, Component } from 'react';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -63,6 +63,14 @@ const zonedToUtcISO = (dateStr, timeStr, tz) => {
   const shown = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), shownHour, Number(parts.minute));
   return new Date(guess + (guess - shown)).toISOString();
 };
+
+// If the full card ever throws while rendering a particular lead, show a fallback
+// instead of a blank/broken modal, so a click always lands on something usable.
+class CardErrorBoundary extends Component {
+  constructor(p) { super(p); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  render() { return this.state.err ? this.props.fallback : this.props.children; }
+}
 
 // A lead-card text field that keeps its value in LOCAL state while you type (so
 // typing is instant) and only saves to the DB once, on blur or Enter. This fixes
@@ -9622,7 +9630,25 @@ export default function LandLeadsAdminPage() {
               <div className="flex justify-end mb-2">
                 <button onClick={() => setCardModalLead(null)} className="text-slate-300 hover:text-white text-sm font-semibold px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700">✕ Close</button>
               </div>
-              {renderLeadCard(live)}
+              <CardErrorBoundary fallback={(
+                <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 space-y-3">
+                  <div className="text-lg font-bold text-white">{live.full_name || live.name || 'Lead'}</div>
+                  <div className="text-sm text-slate-400">{live.phone || live.owner_phone || ''}</div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Status</label>
+                    <select value={getSmartStatus(live)} onChange={(e) => updateLeadStatus(live.id, e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-600 text-white text-sm">
+                      {PIPELINE_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex gap-2">
+                    {(live.phone || live.owner_phone) && <button onClick={() => { setCardModalLead(null); openConversation(live); }} className="flex-1 px-3 py-2 rounded-lg bg-blue-600/20 text-blue-300 text-sm font-semibold">Messages</button>}
+                    {(live.phone || live.owner_phone) && <button onClick={() => { setCardModalLead(null); setCallLead(live); }} className="flex-1 px-3 py-2 rounded-lg bg-green-600/20 text-green-300 text-sm font-semibold">Call</button>}
+                  </div>
+                  <p className="text-xs text-slate-500">Showing a simple view (the full card hit an error for this lead).</p>
+                </div>
+              )}>
+                {renderLeadCard(live)}
+              </CardErrorBoundary>
             </div>
           </div>
         );
