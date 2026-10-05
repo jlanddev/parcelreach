@@ -558,6 +558,7 @@ export default function LandLeadsAdminPage() {
 
   // Mark a lead's thread viewed (clears its unread badge) and open it.
   const openConversation = (lead) => {
+    setCardModalLead(null); // don't let the card modal cover the thread
     const key = phoneKey(lead?.phone || lead?.owner_phone);
     try {
       const lv = JSON.parse(localStorage.getItem('pb_last_viewed') || '{}');
@@ -9668,8 +9669,9 @@ export default function LandLeadsAdminPage() {
         </div>
       )}
 
-      {/* Full lead CARD in a modal (fallback when it can't be scrolled to inline) */}
-      {cardModalLead && (() => {
+      {/* Full lead CARD in a modal (fallback when it can't be scrolled to inline).
+          Hidden while a conversation/call/notes modal is open so it never covers them. */}
+      {cardModalLead && !conversationLead && !callLead && !notesModalLead && (() => {
         const live = allLeads.find(l => l.id === cardModalLead.id) || rawLeads.find(l => l.id === cardModalLead.id) || cardModalLead;
         return (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-start justify-center p-4 overflow-y-auto" onClick={() => setCardModalLead(null)}>
