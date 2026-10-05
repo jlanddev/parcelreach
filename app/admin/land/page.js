@@ -558,7 +558,6 @@ export default function LandLeadsAdminPage() {
 
   // Mark a lead's thread viewed (clears its unread badge) and open it.
   const openConversation = (lead) => {
-    setCardModalLead(null); // don't let the card modal cover the thread
     const key = phoneKey(lead?.phone || lead?.owner_phone);
     try {
       const lv = JSON.parse(localStorage.getItem('pb_last_viewed') || '{}');
@@ -9669,12 +9668,13 @@ export default function LandLeadsAdminPage() {
         </div>
       )}
 
-      {/* Full lead CARD in a modal (fallback when it can't be scrolled to inline).
-          Hidden while a conversation/call/notes modal is open so it never covers them. */}
-      {cardModalLead && !conversationLead && !callLead && !notesModalLead && (() => {
+      {/* Full lead CARD in a modal. Sits at z-40, BELOW the conversation/call/notes/
+          details modals (z-50+), so clicking Messages/Call/View Details on the card
+          always opens them on top instead of behind it. */}
+      {cardModalLead && (() => {
         const live = allLeads.find(l => l.id === cardModalLead.id) || rawLeads.find(l => l.id === cardModalLead.id) || cardModalLead;
         return (
-          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-start justify-center p-4 overflow-y-auto" onClick={() => setCardModalLead(null)}>
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 flex items-start justify-center p-4 overflow-y-auto" onClick={() => setCardModalLead(null)}>
             <div className="w-full max-w-xl my-8" onClick={(e) => e.stopPropagation()}>
               <div className="flex justify-end mb-2">
                 <button onClick={() => setCardModalLead(null)} className="text-slate-300 hover:text-white text-sm font-semibold px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700">✕ Close</button>
