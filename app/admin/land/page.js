@@ -6163,10 +6163,10 @@ export default function LandLeadsAdminPage() {
                               const lead = allLeads.find(l => l.id === appt.lead_id);
                               const nm = lead?.full_name || lead?.name || 'Appt';
                               return (
-                                <div key={h} title={`${exactTime(appt.due_at)} · ${nm}`} className="rounded-lg px-2 py-1.5 text-left bg-green-500/20 border border-green-500/50 cursor-default">
+                                <button key={h} onClick={() => lead && navigateToLeadCard(lead)} title={`${exactTime(appt.due_at)} · ${nm} (open card)`} className="rounded-lg px-2 py-1.5 text-left bg-green-500/20 border border-green-500/50 hover:bg-green-500/30 transition">
                                   <div className="text-[11px] font-bold text-green-200">{exactTime(appt.due_at)}</div>
                                   <div className="text-[10px] text-green-300/80 truncate">{nm}</div>
-                                </div>
+                                </button>
                               );
                             }
                             return (
