@@ -28,9 +28,19 @@ async function run(request) {
   const previewOnly = url.searchParams.get('dry') === '1';
 
   // Quiet hours (TCPA): real sends only 10am-8pm Central (inside legal everywhere).
-  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: 'numeric', hour12: false, hourCycle: 'h23' }).formatToParts(new Date());
-  const chHour = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
-  const quiet = chHour < 10 || chHour >= 20;
+  // Fail SAFE: if the hour can't be computed for any reason, treat it as quiet.
+  let chHour = -1;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: 'numeric', hour12: false, hourCycle: 'h23' }).formatToParts(new Date());
+    const h = Number(parts.find((p) => p.type === 'hour')?.value);
+    if (Number.isFinite(h)) chHour = h === 24 ? 0 : h;
+  } catch { chHour = -1; }
+  const SEND_START = 10, SEND_END = 20; // 10am - 8pm Central
+  const quiet = chHour < SEND_START || chHour >= SEND_END; // chHour -1 => quiet
+  // FINAL HARD GUARD: no sendMessage anywhere in this run may fire outside the
+  // window, no matter what upstream flags say. Belt-and-suspenders against the
+  // night-send bug. Both the drip and reminder paths call this before sending.
+  const canSendNow = () => !quiet && chHour >= SEND_START && chHour < SEND_END;
 
   // TWO SEPARATE GATES:
   // - BULK DRIP + auto-enroll: only real when CAMPAIGNS_LIVE === 'true'. This is
@@ -107,6 +117,7 @@ async function run(request) {
         continue;
       }
 
+      if (!canSendNow()) { skipped++; continue; } // hard night guard
       perLeadSent.add(item.lead_id); // real send only
       await sendMessage({ to: lead.phone, message: outMsg });
 
@@ -178,7 +189,7 @@ async function run(request) {
       const tz = TZ_BY_ABBR[(abbr || 'CT').toUpperCase()] || 'America/Chicago';
       const tLabel = new Date(m.due_at).toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' });
       const msg = fillTokens(pick.message || DEFAULT_REM[0].message, lead, { time: tLabel });
-      if (remindersDry) { preview.push({ lead_id: m.lead_id, name: lead.full_name || lead.name || 'Lead', phone: lead.phone, message: `[REMINDER] ${msg}` }); continue; }
+      if (remindersDry || !canSendNow()) { preview.push({ lead_id: m.lead_id, name: lead.full_name || lead.name || 'Lead', phone: lead.phone, message: `[REMINDER] ${msg}` }); continue; }
       await sendMessage({ to: lead.phone, message: msg });
       const ri = new Date().toISOString();
       await supabase.from('activities').insert({ lead_id: m.lead_id, activity_type: 'TEXT', direction: 'OUTBOUND', outcome: 'SENT', message_content: msg, created_at: ri, read_at: ri }).then(() => {}, () => {});
@@ -227,7 +238,7 @@ async function run(request) {
     }
   } catch (e) { console.error('[campaign run] auto-enroll failed', e?.message); }
 
-  return NextResponse.json({ ok: true, live, dryRun, considered: (due || []).length, wouldSend: preview.length, preview: dryRun ? preview.slice(0, 50) : undefined, sent, reminded, skipped, failed, autoEnrolled, autoEnrollPreview: dryRun ? autoPreview.slice(0, 50) : undefined });
+  return NextResponse.json({ ok: true, live, dryRun, centralHour: chHour, quiet, considered: (due || []).length, wouldSend: preview.length, preview: dryRun ? preview.slice(0, 50) : undefined, sent, reminded, skipped, failed, autoEnrolled, autoEnrollPreview: dryRun ? autoPreview.slice(0, 50) : undefined });
 }
 
 export async function POST(request) { return run(request); }
