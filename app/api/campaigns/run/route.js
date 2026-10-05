@@ -207,8 +207,17 @@ async function run(request) {
   // Optional stage filter: [auto:<rule>:N:STAGE1,STAGE2] limits to those stages.
   // Protected stages (deals in progress/closed) and repliers are always excluded.
   // Capped per run so a big backlog trickles in over several ticks. ----
+  // Enrollment sends nothing (it just moves leads into the campaign / out of
+  // inflow and queues texts). So it runs whenever we're LIVE, even during quiet
+  // hours, enrolled leads leave inflow tonight and their texts drip tomorrow
+  // morning once quiet hours lift. Only real sending respects quiet hours.
+  const enrollDry = previewOnly || !live;
   let autoEnrolled = 0; const autoPreview = [];
   try {
+    // A lead should never be dripped by two campaigns at once. Pull every lead
+    // already in an active enrollment and skip them across all campaigns.
+    const { data: activeEnr } = await supabase.from('campaign_enrollments').select('lead_id').eq('status', 'active').limit(10000);
+    const alreadyEnrolled = new Set((activeEnr || []).map(e => e.lead_id));
     const { data: camps } = await supabase.from('campaigns')
       .select('id, name, steps, description, active').eq('active', true);
     for (const camp of camps || []) {
@@ -228,17 +237,15 @@ async function run(request) {
       const cand = (await leadsForRule(supabase, { rule, tabs: tokens, stages: tokens, days })).slice(0, AUTO_ENROLL_PER_RUN);
 
       for (const lead of cand) {
-        const { data: ex } = await supabase.from('campaign_enrollments')
-          .select('id').eq('lead_id', lead.id).eq('campaign_id', camp.id).maybeSingle();
-        if (ex) continue;
-        if (dryRun) { autoEnrolled++; autoPreview.push({ campaign: camp.name, lead_id: lead.id, name: lead.full_name || lead.name || 'Lead' }); continue; }
+        if (alreadyEnrolled.has(lead.id)) continue; // already in a campaign
+        if (enrollDry) { autoEnrolled++; autoPreview.push({ campaign: camp.name, lead_id: lead.id, name: lead.full_name || lead.name || 'Lead' }); continue; }
         const r = await enrollLead(supabase, camp, lead);
-        if (r.enrolled) autoEnrolled++;
+        if (r.enrolled) { autoEnrolled++; alreadyEnrolled.add(lead.id); }
       }
     }
   } catch (e) { console.error('[campaign run] auto-enroll failed', e?.message); }
 
-  return NextResponse.json({ ok: true, live, dryRun, centralHour: chHour, quiet, considered: (due || []).length, wouldSend: preview.length, preview: dryRun ? preview.slice(0, 50) : undefined, sent, reminded, skipped, failed, autoEnrolled, autoEnrollPreview: dryRun ? autoPreview.slice(0, 50) : undefined });
+  return NextResponse.json({ ok: true, live, dryRun, centralHour: chHour, quiet, considered: (due || []).length, wouldSend: preview.length, preview: dryRun ? preview.slice(0, 50) : undefined, sent, reminded, skipped, failed, autoEnrolled, autoEnrollPreview: enrollDry ? autoPreview.slice(0, 50) : undefined });
 }
 
 export async function POST(request) { return run(request); }
