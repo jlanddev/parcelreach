@@ -24,7 +24,7 @@ function loadBoards() {
  * send to one, rewrite, send to the next. The composer stays open for that. Each
  * push remembers the exact note that partner received.
  */
-export default function MondayPushButton({ lead, onToast }) {
+export default function MondayPushButton({ lead, onToast, compact = false }) {
   const [boards, setBoards] = useState(boardsCache || []);
   const [loading, setLoading] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
@@ -174,7 +174,22 @@ export default function MondayPushButton({ lead, onToast }) {
   };
 
   return (
-    <div className="relative" onClick={(e) => e.stopPropagation()}>
+    <div className={compact ? 'relative inline-block' : 'relative'} onClick={(e) => e.stopPropagation()}>
+      {compact ? (
+        /* Small card-action button, with a badge for how many partners it's gone to. */
+        <button
+          type="button"
+          onClick={() => openComposer()}
+          title={sent.length ? `Sent to ${sent.length} partner${sent.length === 1 ? '' : 's'}. Send to more or update.` : 'Push this lead to partners'}
+          className="relative px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 text-xs font-medium flex items-center gap-1.5"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+          Partners
+          {sent.length > 0 && (
+            <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-indigo-500 text-white text-[10px] font-bold flex items-center justify-center">{sent.length}</span>
+          )}
+        </button>
+      ) : (<>
       {/* What each partner already received (notes can differ per partner). */}
       {sent.length > 0 && (
         <div className="mb-2 space-y-1">
@@ -210,6 +225,7 @@ export default function MondayPushButton({ lead, onToast }) {
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
         {sent.length ? 'Add summary note' : 'Add summary note'}
       </button>
+      </>)}
 
       {composerOpen && (
         <>

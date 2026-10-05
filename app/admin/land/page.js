@@ -4243,6 +4243,8 @@ export default function LandLeadsAdminPage() {
                                     </div>
                                   )}
                                 </div>
+                                {/* Push to partners, right from the card (same flow as the Partners tab) */}
+                                <MondayPushButton lead={lead} onToast={(m, t) => showToast(m, t)} compact />
                               </div>
                             </div>
                             {last?.message_content && (
