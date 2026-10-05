@@ -4933,7 +4933,7 @@ export default function LandLeadsAdminPage() {
             const countFor = (tab) => {
               if (tab === 'needs-touch') { const n = needsTouchLeads().length; return n ? ` (${n})` : ''; }
               if (tab === 'unassigned') return ` (${unassignedLeads.length})`;
-              if (tab === 'ppc-inflow') return ` (${allLeads.filter(l => ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(up(l)) && l.status !== 'archived' && !inCampaign(l)).length})`;
+              if (tab === 'ppc-inflow') return ` (${allLeads.filter(l => ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(up(l)) && l.status !== 'archived' && !inCampaign(l) && (inflowDays <= 0 || (l.created_at && new Date(l.created_at).getTime() >= Date.now() - inflowDays * 86400000))).length})`;
               if (tab === 'appointment-set') return ` (${(scheduledTasks || []).filter(t => t.task_type === 'meeting').length})`;
               if (tab === 'offer-curated') return ` (${allLeads.filter(l => hasOffer(l) && ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED', 'APPT_SET_FOR_JORDAN'].includes(up(l)) && l.status !== 'archived').length})`;
               if (tab === 'offer-made') return ` (${allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING'].includes(up(l))).length})`;
@@ -5943,7 +5943,7 @@ export default function LandLeadsAdminPage() {
               (() => {
                 // Pipeline funnel tiles. Click any to jump straight to that bucket.
                 const statusOf = (l) => (l.pipeline_status || l.status || '').toUpperCase();
-                const inflow = allLeads.filter(l => ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(statusOf(l)) && l.status !== 'archived' && !inCampaign(l)).length;
+                const inflow = allLeads.filter(l => ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(statusOf(l)) && l.status !== 'archived' && !inCampaign(l) && (inflowDays <= 0 || (l.created_at && new Date(l.created_at).getTime() >= Date.now() - inflowDays * 86400000))).length;
                 const apptSet = (scheduledTasks || []).filter(t => t.task_type === 'meeting').length;
                 const offerCurated = allLeads.filter(l => l.offer_amount != null && Number(l.offer_amount) !== 0 && ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED', 'APPT_SET_FOR_JORDAN'].includes(statusOf(l)) && l.status !== 'archived').length;
                 const offerMade = allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING'].includes(statusOf(l))).length;

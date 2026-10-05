@@ -44,6 +44,10 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   const [enrollAtByCampaign, setEnrollAtByCampaign] = useState({}); // campaignId -> { leadId: enrolledAt } (active)
   const [enrollAtAllByCampaign, setEnrollAtAllByCampaign] = useState({}); // campaignId -> { leadId: enrolledAt } (all)
   const [templateFor, setTemplateFor] = useState(null); // step index whose template list is open
+  // Filters for the enrolled-leads list inside a campaign detail view.
+  const [detailSearch, setDetailSearch] = useState('');
+  const [detailMapped, setDetailMapped] = useState(false);
+  const [detailNeedsResp, setDetailNeedsResp] = useState(false);
   const [aiGoal, setAiGoal] = useState(''); // AI builder: describe the campaign
   const [aiFeedback, setAiFeedback] = useState(''); // follow-up tweak request
   const [aiMessages, setAiMessages] = useState([]); // running conversation with Claude (memory)
@@ -431,14 +435,31 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
       })()}
 
       {/* Enrolled leads */}
+      {(() => {
+        const q = detailSearch.trim().toLowerCase();
+        const shown = enrolledLeads.filter(l => {
+          if (detailMapped && !l.map_uploaded) return false;
+          if (detailNeedsResp && !repliedAfterEnroll(l, enrolledAtById[l.id])) return false;
+          if (q && !([l.full_name, l.name, l.phone, l.property_county, l.county, l.property_state, l.state].filter(Boolean).join(' ').toLowerCase().includes(q))) return false;
+          return true;
+        });
+        const chip = (on) => `px-3 py-1.5 rounded-lg text-xs font-medium border ${on ? 'bg-blue-600/30 border-blue-600/50 text-blue-200' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`;
+        return (
       <div>
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400 mb-3">Enrolled leads ({enrolledLeads.length})</h3>
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400 mb-3">Enrolled leads ({shown.length}{shown.length !== enrolledLeads.length ? ` of ${enrolledLeads.length}` : ''})</h3>
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <input value={detailSearch} onChange={e => setDetailSearch(e.target.value)} placeholder="Search name, phone, county, state…" className="flex-1 min-w-[200px] bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm placeholder-slate-500" />
+          <button onClick={() => setDetailMapped(v => !v)} className={chip(detailMapped)}>{detailMapped ? '✓ ' : ''}Mapped only</button>
+          <button onClick={() => setDetailNeedsResp(v => !v)} className={chip(detailNeedsResp)}>{detailNeedsResp ? '✓ ' : ''}Needs response</button>
+        </div>
         {enrolledLeads.length === 0 ? (
           <div className="text-center py-12 text-slate-500 border border-dashed border-slate-700 rounded-xl">No leads enrolled yet. Use "Enroll leads"{autoSummary(openCampaign.description) ? ' or "Populate now"' : ''}.</div>
+        ) : shown.length === 0 ? (
+          <div className="text-center py-12 text-slate-500 border border-dashed border-slate-700 rounded-xl">No enrolled leads match those filters.</div>
         ) : renderLeadCard ? (
-          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">{enrolledLeads.map(l => <div key={l.id}>{renderLeadCard(l)}</div>)}</div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">{shown.map(l => <div key={l.id}>{renderLeadCard(l)}</div>)}</div>
         ) : (
-          <div className="space-y-2">{enrolledLeads.map(l => (
+          <div className="space-y-2">{shown.map(l => (
             <button key={l.id} onClick={() => onOpenLead && onOpenLead(l)} className="w-full text-left bg-slate-800/60 border border-slate-700/50 rounded-lg px-3 py-2 hover:bg-slate-700/60">
               <div className="text-sm text-white">{l.full_name || l.name}</div>
               <div className="text-xs text-slate-400">{l.phone}{repliedAfterEnroll(l, enrolledAtById[l.id]) ? ' · replied, owe a response' : ''}</div>
@@ -446,6 +467,8 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
           ))}</div>
         )}
       </div>
+        );
+      })()}
     </div>
   ) : null;
 
