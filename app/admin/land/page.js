@@ -860,7 +860,16 @@ export default function LandLeadsAdminPage() {
     'follow-up': { kind: 'Moved to follow-up', color: 'text-rose-300', dot: 'bg-rose-400' },
     'lost': { kind: 'Marked lost', color: 'text-zinc-300', dot: 'bg-zinc-400' },
   };
-  const eventKind = (l, seen) => {
+  // Label for the "arrived in this tab" notification, per tab, so an appointment
+  // that got set reads "New appointment" instead of "New lead" etc.
+  const TAB_NEW_LABEL = {
+    'ppc-inflow': { kind: 'New lead', color: 'text-emerald-300', dot: 'bg-emerald-400' },
+    'appointment-set': { kind: 'New appointment', color: 'text-green-300', dot: 'bg-green-400' },
+    'offer-curated': { kind: 'Offer curated', color: 'text-amber-300', dot: 'bg-amber-400' },
+    'offer-made': { kind: 'Offer made', color: 'text-purple-300', dot: 'bg-purple-400' },
+    'agreement-sent': { kind: 'Contract', color: 'text-emerald-300', dot: 'bg-emerald-400' },
+  };
+  const eventKind = (l, seen, tab) => {
     // Dead / closed / lost / passed / nurture / archived leads never notify. Moving
     // a sold lead to Dead (or any terminal stage) clears its notification everywhere.
     const st = (l.pipeline_status || l.status || '').toUpperCase();
@@ -875,7 +884,7 @@ export default function LandLeadsAdminPage() {
     // A reply is "answered" (notification clears) once we text back (last contact
     // flips outbound) OR call them at/after their message.
     if (contact > seen && l.last_contact_dir === 'inbound' && !(calledAt >= contact)) return { kind: 'New message', ts: contact, color: 'text-cyan-300', dot: 'bg-cyan-400' };
-    if (created > seen && !l.last_contact_at && !calledAt) return { kind: 'New lead', ts: created, color: 'text-emerald-300', dot: 'bg-emerald-400' };
+    if (created > seen && !l.last_contact_at && !calledAt) { const lbl = TAB_NEW_LABEL[tab] || TAB_NEW_LABEL['ppc-inflow']; return { kind: lbl.kind, ts: created, color: lbl.color, dot: lbl.dot }; }
     return null;
   };
   // Why a lead needs a touch right now (or null). Order 0 = most urgent.
