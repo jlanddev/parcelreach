@@ -71,7 +71,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     const { data: camps } = await supabase.from('campaigns').select('*').order('created_at', { ascending: true });
     // Hide the hidden settings row (used to store the appointment reminder config).
     setCampaigns((camps || []).filter(c => !String(c.name || '').startsWith('__settings')));
-    const { data: enr } = await supabase.from('campaign_enrollments').select('lead_id, campaign_id, status, created_at');
+    const { data: enr } = await supabase.from('campaign_enrollments').select('lead_id, campaign_id, status, enrolled_at');
     const { data: q } = await supabase.from('campaign_queue').select('campaign_id, status');
     // Pull the REAL contact status of every enrolled lead (not the de-duplicated
     // in-memory list, which can miss the exact record that got the reply).
@@ -84,7 +84,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     const didReply = (e) => {
       if (e.status === 'replied') return true; // send loop already flagged it
       const lc = contactById[e.lead_id];
-      return !!(lc && String(lc.last_contact_dir || '').toLowerCase() === 'inbound' && lc.last_contact_at && new Date(lc.last_contact_at) >= new Date(e.created_at));
+      return !!(lc && String(lc.last_contact_dir || '').toLowerCase() === 'inbound' && lc.last_contact_at && new Date(lc.last_contact_at) >= new Date(e.enrolled_at));
     };
     const c = {};
     const byCamp = {};
@@ -93,9 +93,9 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     (camps || []).forEach(cp => { c[cp.id] = { active: 0, pending: 0, sent: 0, replied: 0 }; });
     (enr || []).forEach(e => {
       if (!c[e.campaign_id]) return;
-      (atByCampAll[e.campaign_id] = atByCampAll[e.campaign_id] || {})[e.lead_id] = e.created_at;
+      (atByCampAll[e.campaign_id] = atByCampAll[e.campaign_id] || {})[e.lead_id] = e.enrolled_at;
       if (didReply(e)) c[e.campaign_id].replied += 1;
-      if (e.status === 'active') { c[e.campaign_id].active += 1; (byCamp[e.campaign_id] = byCamp[e.campaign_id] || new Set()).add(e.lead_id); (atByCamp[e.campaign_id] = atByCamp[e.campaign_id] || {})[e.lead_id] = e.created_at; }
+      if (e.status === 'active') { c[e.campaign_id].active += 1; (byCamp[e.campaign_id] = byCamp[e.campaign_id] || new Set()).add(e.lead_id); (atByCamp[e.campaign_id] = atByCamp[e.campaign_id] || {})[e.lead_id] = e.enrolled_at; }
     });
     (q || []).forEach(x => { if (!c[x.campaign_id]) return; if (x.status === 'pending') c[x.campaign_id].pending += 1; else if (x.status === 'sent') c[x.campaign_id].sent += 1; });
     setCounts(c);
@@ -115,9 +115,9 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     setOpenCampaign(cp);
     setEnrolledIds(new Set());
     setDetailQueue([]);
-    const { data } = await supabase.from('campaign_enrollments').select('lead_id, status, created_at').eq('campaign_id', cp.id).eq('status', 'active');
+    const { data } = await supabase.from('campaign_enrollments').select('lead_id, status, enrolled_at').eq('campaign_id', cp.id).eq('status', 'active');
     setEnrolledIds(new Set((data || []).map(e => e.lead_id)));
-    setEnrolledAtById(Object.fromEntries((data || []).map(e => [e.lead_id, e.created_at])));
+    setEnrolledAtById(Object.fromEntries((data || []).map(e => [e.lead_id, e.enrolled_at])));
     const { data: q } = await supabase.from('campaign_queue').select('id, lead_id, message, due_at, status, processed_at').eq('campaign_id', cp.id).eq('type', 'text').order('due_at', { ascending: true }).limit(200);
     setDetailQueue(q || []);
   };
