@@ -258,12 +258,12 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   // Auto-enroll rule stored as [auto:<rule>:<days>] with an optional stage filter
   // [auto:<rule>:<days>:STAGE1,STAGE2]. Legacy [auto:untouched:N] => "no contact",
   // legacy [auto:stage:STATUS:N] => contact rule limited to that one stage.
-  const RULE_LABELS = { nocontact: "haven't been contacted (text or call)", notext: "haven't been texted", nocall: "haven't been called", noactivity: "have had no activity at all", noappt: "never booked an appointment" };
+  const RULE_LABELS = { nevercontacted: "we've never talked to at all", nocontact: "haven't been contacted (text or call)", notext: "haven't been texted", nocall: "haven't been called", noactivity: "have had no activity at all", noappt: "never booked an appointment" };
   const parseAuto = (d) => {
     const s = String(d || '');
     let m = s.match(/\[auto:stage:([A-Za-z_]+):(\d+)\]/i); // legacy single-status marker
     if (m) return { rule: 'nocontact', days: Number(m[2]), tabs: [] };
-    m = s.match(/\[auto:(nocontact|notext|nocall|noactivity|noappt|untouched):(\d+)(?::([A-Za-z0-9_,-]+))?\]/i);
+    m = s.match(/\[auto:(nocontact|notext|nocall|noactivity|noappt|nevercontacted|untouched):(\d+)(?::([A-Za-z0-9_,-]+))?\]/i);
     if (m) {
       const toks = m[3] ? m[3].toLowerCase().split(',').filter(Boolean) : [];
       const tabs = toks.filter(t => allSafe.includes(t)); // keep only valid tab keys
@@ -583,6 +583,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
                     <div>
                       <div className="text-sm font-semibold text-indigo-200 mb-1">Who should auto-enroll?</div>
                       <select value={editing.autoRule} onChange={e => setEditing({ ...editing, autoRule: e.target.value })} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-sm">
+                        <option value="nevercontacted">We've never talked to them at all</option>
                         <option value="noappt">Never booked an appointment with us</option>
                         <option value="nocontact">Haven't been contacted (text or call)</option>
                         <option value="noactivity">No activity at all</option>
