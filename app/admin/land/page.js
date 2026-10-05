@@ -4953,7 +4953,11 @@ export default function LandLeadsAdminPage() {
             // Campaigns bubble = due campaign calls + replies from enrolled leads
             // (their notifications route here via notifTab), so campaign responses
             // show up under Follow-Up Campaigns, not PPC Inflow.
-            const newCountFor = (tab) => tab === 'campaigns' ? dueCampaignCalls + tabEventsFor('campaigns').length : tabEventsFor(tab).length;
+            const newCountFor = (tab) => tab === 'campaigns'
+              ? dueCampaignCalls + tabEventsFor('campaigns').length
+              : tab === 'appointment-set'
+                ? tabEventsFor('appointment-set').length + upcomingAppts.length // + imminent appointments (within 30 min)
+                : tabEventsFor(tab).length;
             const Bubble = ({ n }) => n > 0 ? (
               <span className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[11px] font-bold align-middle">{n > 99 ? '99+' : n}</span>
             ) : null;
