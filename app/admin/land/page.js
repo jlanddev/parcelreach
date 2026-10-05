@@ -6157,16 +6157,24 @@ export default function LandLeadsAdminPage() {
                         <div className="grid grid-cols-3 gap-1.5">
                           {HOURS.map(h => {
                             const items = dayItems.filter(t => !(t.description || '').includes('allday') && new Date(t.due_at).getHours() === h);
-                            const appt = items.find(t => !/^BLOCKED/i.test(t.title || ''));
+                            const appts = items.filter(t => !/^BLOCKED/i.test(t.title || '')).sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
                             const block = items.find(t => /^BLOCKED/i.test(t.title || '') && (t.description || '').includes('hourblock'));
-                            if (appt) {
-                              const lead = allLeads.find(l => l.id === appt.lead_id);
-                              const nm = lead?.full_name || lead?.name || 'Appt';
+                            if (appts.length) {
+                              // One hour can hold more than one appointment (e.g. 11:00 and 11:38),
+                              // so list every appointment in the hour, each opening its own card.
                               return (
-                                <button key={h} onClick={() => lead && navigateToLeadCard(lead)} title={`${exactTime(appt.due_at)} · ${nm} (open card)`} className="rounded-lg px-2 py-1.5 text-left bg-green-500/20 border border-green-500/50 hover:bg-green-500/30 transition">
-                                  <div className="text-[11px] font-bold text-green-200">{exactTime(appt.due_at)}</div>
-                                  <div className="text-[10px] text-green-300/80 truncate">{nm}</div>
-                                </button>
+                                <div key={h} className="rounded-lg px-2 py-1.5 bg-green-500/20 border border-green-500/50 space-y-1">
+                                  {appts.map(a => {
+                                    const lead = allLeads.find(l => l.id === a.lead_id);
+                                    const nm = lead?.full_name || lead?.name || 'Appt';
+                                    return (
+                                      <button key={a.id} onClick={() => lead && navigateToLeadCard(lead)} title={`${exactTime(a.due_at)} · ${nm} (open card)`} className="w-full text-left hover:bg-green-500/15 rounded px-0.5">
+                                        <div className="text-[11px] font-bold text-green-200">{exactTime(a.due_at)}</div>
+                                        <div className="text-[10px] text-green-300/80 truncate">{nm}</div>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
                               );
                             }
                             return (
