@@ -224,17 +224,19 @@ async function run(request) {
       if (String(camp.name || '').startsWith('__settings') || camp.name === 'Appointment Reminders') continue;
       const desc = String(camp.description || '');
       const stageM = desc.match(/\[auto:stage:([A-Za-z_]+):(\d+)\]/i); // legacy single-status marker
-      const ruleM = desc.match(/\[auto:(nocontact|notext|nocall|noactivity|noappt|nevercontacted|untouched):(\d+)(?::([A-Za-z0-9_,-]+))?\]/i);
+      // days may be a single number or a range "7..30" (min..max age).
+      const ruleM = desc.match(/\[auto:(nocontact|notext|nocall|noactivity|noappt|nevercontacted|untouched):(\d+)(?:\.\.(\d+))?(?::([A-Za-z0-9_,-]+))?\]/i);
       if (!stageM && !ruleM) continue;
       const rule = stageM ? 'nocontact' : (ruleM[1].toLowerCase() === 'untouched' ? 'nocontact' : ruleM[1].toLowerCase());
       const days = Math.max(1, Number((stageM ? stageM[2] : ruleM[2])) || 30);
+      const maxDays = stageM ? 0 : (ruleM[3] ? Number(ruleM[3]) : 0);
       // Tokens after the days are CRM tab keys (new) or raw statuses (legacy);
       // leadsForRule figures out which and filters offer-aware for tab keys.
-      const tokens = stageM ? [stageM[1]] : (ruleM[3] ? ruleM[3].split(',').filter(Boolean) : []);
+      const tokens = stageM ? [stageM[1]] : (ruleM[4] ? ruleM[4].split(',').filter(Boolean) : []);
       // Enrollment is cheap (just moves leads into the campaign / out of inflow);
       // SENDING stays throttled separately at MAX_PER_RUN. So clear a backlog fast.
       const AUTO_ENROLL_PER_RUN = Math.max(1, Number(process.env.CAMPAIGN_AUTOENROLL_PER_RUN) || 150);
-      const cand = (await leadsForRule(supabase, { rule, tabs: tokens, stages: tokens, days })).slice(0, AUTO_ENROLL_PER_RUN);
+      const cand = (await leadsForRule(supabase, { rule, tabs: tokens, stages: tokens, days, maxDays })).slice(0, AUTO_ENROLL_PER_RUN);
 
       for (const lead of cand) {
         if (alreadyEnrolled.has(lead.id)) continue; // already in a campaign

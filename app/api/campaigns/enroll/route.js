@@ -43,7 +43,7 @@ export async function POST(request) {
         .limit(500);
       leads = (data || []).filter(l => l.status !== 'archived' && l.phone);
     } else if (['nocontact', 'notext', 'nocall', 'noactivity', 'noappt', 'nevercontacted', 'stage'].includes(body.rule)) {
-      leads = await leadsForRule(sb, { rule: body.rule, stage: body.stage, stages: body.stages, tabs: body.tabs, days: body.days });
+      leads = await leadsForRule(sb, { rule: body.rule, stage: body.stage, stages: body.stages, tabs: body.tabs, days: body.days, maxDays: body.maxDays });
     } else {
       return NextResponse.json({ ok: false, error: 'Provide leadIds or rule' }, { status: 400 });
     }

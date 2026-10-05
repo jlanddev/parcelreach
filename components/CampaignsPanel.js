@@ -222,7 +222,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     if (!a) { say('This campaign has no auto rule', 'error'); return; }
     setBusy(true);
     try {
-      const body = { campaignId: cp.id, rule: a.rule, days: a.days, tabs: a.tabs || [], userId: currentUserId };
+      const body = { campaignId: cp.id, rule: a.rule, days: a.days, maxDays: a.maxDays || 0, tabs: a.tabs || [], userId: currentUserId };
       const c = await fetch('/api/campaigns/enroll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, countOnly: true }) }).then(r => r.json());
       if (!c.ok) throw new Error(c.error || 'failed');
       if (!c.wouldAdd) { say(`No new leads match right now${c.alreadyIn ? ` (${c.alreadyIn} already in)` : ''}`, 'error'); setBusy(false); return; }
@@ -263,11 +263,11 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     const s = String(d || '');
     let m = s.match(/\[auto:stage:([A-Za-z_]+):(\d+)\]/i); // legacy single-status marker
     if (m) return { rule: 'nocontact', days: Number(m[2]), tabs: [] };
-    m = s.match(/\[auto:(nocontact|notext|nocall|noactivity|noappt|nevercontacted|untouched):(\d+)(?::([A-Za-z0-9_,-]+))?\]/i);
+    m = s.match(/\[auto:(nocontact|notext|nocall|noactivity|noappt|nevercontacted|untouched):(\d+)(?:\.\.(\d+))?(?::([A-Za-z0-9_,-]+))?\]/i);
     if (m) {
-      const toks = m[3] ? m[3].toLowerCase().split(',').filter(Boolean) : [];
+      const toks = m[4] ? m[4].toLowerCase().split(',').filter(Boolean) : [];
       const tabs = toks.filter(t => allSafe.includes(t)); // keep only valid tab keys
-      return { rule: m[1].toLowerCase() === 'untouched' ? 'nocontact' : m[1].toLowerCase(), days: Number(m[2]), tabs };
+      return { rule: m[1].toLowerCase() === 'untouched' ? 'nocontact' : m[1].toLowerCase(), days: Number(m[2]), maxDays: m[3] ? Number(m[3]) : 0, tabs };
     }
     return null;
   };
