@@ -985,6 +985,7 @@ export default function LandLeadsAdminPage() {
   const [uncontactedOnly, setUncontactedOnly] = useState(false);     // still NEW, never reached
   const [offerSetOnly, setOfferSetOnly] = useState(false);           // has a locked offer
   const [untouchedDays, setUntouchedDays] = useState(0);             // no contact in N+ days (0 = off)
+  const [inflowDays, setInflowDays] = useState(7);                   // PPC Inflow: only leads from the last N days (0 = all)
   const [partnerSearch, setPartnerSearch] = useState('');           // Partners tab lead search
   const [partnerStage, setPartnerStage] = useState('active');       // Partners tab stage filter
   const [partnerDirection, setPartnerDirection] = useState('');     // Partners tab lean/substatus filter
@@ -5968,6 +5969,18 @@ export default function LandLeadsAdminPage() {
               {renderEngagementFilters()}
             </div>
 
+            {/* Working window: inflow defaults to the last 7 days so it stays a tight
+                working queue. Older leads are still here, one click away. */}
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
+              <span className="text-xs text-slate-500 uppercase tracking-wide">Show:</span>
+              {[{ d: 7, label: 'Last 7 days' }, { d: 14, label: 'Last 14 days' }, { d: 30, label: 'Last 30 days' }, { d: 0, label: 'All' }].map(opt => (
+                <button key={opt.d} onClick={() => setInflowDays(opt.d)} className={`px-3 py-1.5 rounded-lg text-sm font-medium border ${inflowDays === opt.d ? 'bg-blue-600/30 border-blue-600/50 text-blue-200' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}>
+                  {opt.label}
+                </button>
+              ))}
+              {inflowDays > 0 && <span className="text-xs text-slate-500">Older leads are hidden from this working view, not deleted. Click "All" to see everything.</span>}
+            </div>
+
             {/* PPC Leads Grid */}
             {(() => {
               const ordered = stableOrder(
@@ -5978,6 +5991,8 @@ export default function LandLeadsAdminPage() {
                   .filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(s) && l.status !== 'archived'; })())
                   // Silently-dripping leads are worked from the campaign; repliers return here.
                   .filter(l => !inCampaign(l))
+                  // Default to the fresh working window (last N days). "All" = 0.
+                  .filter(l => inflowDays <= 0 || (l.created_at && new Date(l.created_at).getTime() >= Date.now() - inflowDays * 86400000))
                   .filter(l => leadMatchesSearch(l, ppcSearch))
                   .filter(l => !pipelineMapped || l.map_uploaded)
                   .filter(passesEngagement),
