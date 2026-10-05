@@ -475,6 +475,35 @@ export default function LandLeadsAdminPage() {
     return () => { supabase.removeChannel(ch); };
   }, []);
 
+  // ---- Internal appointment reminders (for US, not the seller). A ticking clock
+  // drives a banner of appointments starting within 30 min, and fires a one-time
+  // toast ("Appointment with X in N min") as each crosses into the window. ----
+  const [nowTick, setNowTick] = useState(Date.now());
+  useEffect(() => { const iv = setInterval(() => setNowTick(Date.now()), 30000); return () => clearInterval(iv); }, []);
+  const upcomingAppts = useMemo(() => {
+    const now = nowTick;
+    return (scheduledTasks || [])
+      .filter(t => t.task_type === 'meeting' && t.status === 'pending' && t.due_at && !/^BLOCKED/i.test(t.title || '') && t.lead_id)
+      .map(t => ({ task: t, mins: Math.round((parseTs(t.due_at).getTime() - now) / 60000) }))
+      .filter(x => x.mins >= 0 && x.mins <= 30)
+      .sort((a, b) => a.mins - b.mins);
+  }, [scheduledTasks, nowTick]);
+  const apptAlerted = useRef(null);
+  if (apptAlerted.current === null) {
+    try { apptAlerted.current = new Set(JSON.parse(localStorage.getItem('pr_appt_alerted') || '[]')); } catch { apptAlerted.current = new Set(); }
+  }
+  useEffect(() => {
+    for (const { task, mins } of upcomingAppts) {
+      const key = `${task.id}:${parseTs(task.due_at).getTime()}`; // re-alerts if rescheduled
+      if (apptAlerted.current.has(key)) continue;
+      apptAlerted.current.add(key);
+      try { localStorage.setItem('pr_appt_alerted', JSON.stringify([...apptAlerted.current].slice(-200))); } catch {}
+      const lead = (allLeads || []).find(l => l.id === task.lead_id) || (rawLeads || []).find(l => l.id === task.lead_id);
+      const nm = lead?.full_name || lead?.name || 'a seller';
+      showToast(`Appointment with ${nm} in ${mins <= 1 ? 'a few' : mins} min`, 'success', nm);
+    }
+  }, [upcomingAppts]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Live: any new text/call activity refreshes the cards' Last Contacted + unread.
   useEffect(() => {
     const ch = supabase
@@ -5851,6 +5880,25 @@ export default function LandLeadsAdminPage() {
             </div>
           );
         })()}
+
+        {/* Internal appointment reminders, visible on every tab */}
+        {upcomingAppts.length > 0 && (
+          <div className="mb-5 space-y-2">
+            {upcomingAppts.map(({ task, mins }) => {
+              const lead = (allLeads || []).find(l => l.id === task.lead_id) || (rawLeads || []).find(l => l.id === task.lead_id);
+              const nm = lead?.full_name || lead?.name || 'Seller';
+              const when = parseTs(task.due_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+              return (
+                <button key={task.id} onClick={() => lead && navigateToLeadCard(lead)} className="w-full text-left bg-amber-500/15 border border-amber-500/50 rounded-xl px-4 py-3 flex items-center gap-3 hover:bg-amber-500/25 transition">
+                  <svg className="w-5 h-5 text-amber-300 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  <span className="font-semibold text-amber-200">Appointment with {nm} {mins <= 1 ? 'now' : `in ${mins} min`}</span>
+                  <span className="text-amber-200/70 text-sm">· {when}</span>
+                  <span className="ml-auto text-xs text-amber-200/80 font-semibold">Open card →</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {activeTab === 'ppc-inflow' && (
           <div className="space-y-6">
