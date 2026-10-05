@@ -458,11 +458,15 @@ export default function LandLeadsAdminPage() {
   // (the "card moves to the campaign" flow). Kept live via realtime below.
   const [campaignEnrolledIds, setCampaignEnrolledIds] = useState(() => new Set());
   const loadEnrolled = async () => {
-    // "In a campaign" = active drip OR paused because they replied (a human still
-    // works it from the campaign). Both leave PPC Inflow and notify under Campaigns.
-    const { data } = await supabase.from('campaign_enrollments').select('lead_id, status').in('status', ['active', 'replied']);
+    // Only ACTIVELY dripping leads are "in the campaign" (out of inflow). The moment
+    // a lead replies they come back onto the inflow conveyor belt to be worked
+    // (that's handled below by the inbound-reply check, even before the drip stops).
+    const { data } = await supabase.from('campaign_enrollments').select('lead_id, status').eq('status', 'active');
     setCampaignEnrolledIds(new Set((data || []).map(e => e.lead_id)));
   };
+  // A lead sits in the campaign (out of inflow) only while it's dripping AND hasn't
+  // replied. A reply (last_contact_dir inbound) pulls it straight back to inflow.
+  const inCampaign = (l) => campaignEnrolledIds.has(l.id) && String(l.last_contact_dir || '').toLowerCase() !== 'inbound';
   useEffect(() => {
     loadEnrolled();
     const ch = supabase.channel('crm-enrollments-live')
@@ -866,9 +870,9 @@ export default function LandLeadsAdminPage() {
     }
     return ids;
   })();
-  // A lead enrolled in a drip campaign notifies under 'campaigns' (worked from
-  // there), not under its stage tab, so campaign replies don't clutter PPC Inflow.
-  const notifTab = (l) => campaignEnrolledIds.has(l.id) ? 'campaigns' : homeTab(l);
+  // A silently-dripping lead notifies under 'campaigns'; once it replies it's back
+  // in inflow, so its reply shows on the inflow conveyor belt where it gets worked.
+  const notifTab = (l) => inCampaign(l) ? 'campaigns' : homeTab(l);
   const leadInTabC = (l, tab) => primaryLeadIds.has(l.id) && notifTab(l) === tab;
   // Tab-aware: the label reflects what matters in THAT tab (an appointment-set
   // lead that changed reads "Appointment scheduled", not "We reached out").
@@ -4897,7 +4901,7 @@ export default function LandLeadsAdminPage() {
             const countFor = (tab) => {
               if (tab === 'needs-touch') { const n = needsTouchLeads().length; return n ? ` (${n})` : ''; }
               if (tab === 'unassigned') return ` (${unassignedLeads.length})`;
-              if (tab === 'ppc-inflow') return ` (${allLeads.filter(l => ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(up(l)) && l.status !== 'archived' && !campaignEnrolledIds.has(l.id)).length})`;
+              if (tab === 'ppc-inflow') return ` (${allLeads.filter(l => ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(up(l)) && l.status !== 'archived' && !inCampaign(l)).length})`;
               if (tab === 'appointment-set') return ` (${(scheduledTasks || []).filter(t => t.task_type === 'meeting').length})`;
               if (tab === 'offer-curated') return ` (${allLeads.filter(l => hasOffer(l) && ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED', 'APPT_SET_FOR_JORDAN'].includes(up(l)) && l.status !== 'archived').length})`;
               if (tab === 'offer-made') return ` (${allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING'].includes(up(l))).length})`;
@@ -5888,7 +5892,7 @@ export default function LandLeadsAdminPage() {
               (() => {
                 // Pipeline funnel tiles. Click any to jump straight to that bucket.
                 const statusOf = (l) => (l.pipeline_status || l.status || '').toUpperCase();
-                const inflow = allLeads.filter(l => ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(statusOf(l)) && l.status !== 'archived' && !campaignEnrolledIds.has(l.id)).length;
+                const inflow = allLeads.filter(l => ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(statusOf(l)) && l.status !== 'archived' && !inCampaign(l)).length;
                 const apptSet = (scheduledTasks || []).filter(t => t.task_type === 'meeting').length;
                 const offerCurated = allLeads.filter(l => l.offer_amount != null && Number(l.offer_amount) !== 0 && ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED', 'APPT_SET_FOR_JORDAN'].includes(statusOf(l)) && l.status !== 'archived').length;
                 const offerMade = allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING'].includes(statusOf(l))).length;
@@ -5972,8 +5976,8 @@ export default function LandLeadsAdminPage() {
                      OM-Search inflow-stage leads too (they also remain in the Subdivision
                      Inflow tab as a filtered view). */
                   .filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(s) && l.status !== 'archived'; })())
-                  // Leads enrolled in a drip campaign are worked from the campaign, not here.
-                  .filter(l => !campaignEnrolledIds.has(l.id))
+                  // Silently-dripping leads are worked from the campaign; repliers return here.
+                  .filter(l => !inCampaign(l))
                   .filter(l => leadMatchesSearch(l, ppcSearch))
                   .filter(l => !pipelineMapped || l.map_uploaded)
                   .filter(passesEngagement),
