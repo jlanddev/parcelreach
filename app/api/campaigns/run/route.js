@@ -211,7 +211,10 @@ async function run(request) {
       // Tokens after the days are CRM tab keys (new) or raw statuses (legacy);
       // leadsForRule figures out which and filters offer-aware for tab keys.
       const tokens = stageM ? [stageM[1]] : (ruleM[3] ? ruleM[3].split(',').filter(Boolean) : []);
-      const cand = (await leadsForRule(supabase, { rule, tabs: tokens, stages: tokens, days })).slice(0, 40);
+      // Enrollment is cheap (just moves leads into the campaign / out of inflow);
+      // SENDING stays throttled separately at MAX_PER_RUN. So clear a backlog fast.
+      const AUTO_ENROLL_PER_RUN = Math.max(1, Number(process.env.CAMPAIGN_AUTOENROLL_PER_RUN) || 150);
+      const cand = (await leadsForRule(supabase, { rule, tabs: tokens, stages: tokens, days })).slice(0, AUTO_ENROLL_PER_RUN);
 
       for (const lead of cand) {
         const { data: ex } = await supabase.from('campaign_enrollments')
