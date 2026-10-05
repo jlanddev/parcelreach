@@ -9628,26 +9628,59 @@ export default function LandLeadsAdminPage() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">Time</label>
-                <input
-                  type="time"
-                  value={apptTime}
-                  onChange={(e) => setApptTime(e.target.value)}
+                <label className="block text-sm font-medium text-slate-300 mb-2">Seller's timezone <span className="text-rose-400">(required)</span></label>
+                <select
+                  value={apptTz}
+                  onChange={(e) => setApptTz(e.target.value)}
                   className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white"
-                />
+                >
+                  {APPT_TZS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+                </select>
               </div>
             </div>
 
+            {/* Visual day grid: see the day, what's taken, click an open slot. */}
             <div className="mb-4">
-              <label className="block text-sm font-medium text-slate-300 mb-2">Seller's timezone <span className="text-rose-400">(required)</span></label>
-              <select
-                value={apptTz}
-                onChange={(e) => setApptTz(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white"
-              >
-                {APPT_TZS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
-              </select>
-              <p className="text-xs text-slate-500 mt-1">The time above is in this timezone. Appointments must be at least 30 minutes apart.</p>
+              <label className="block text-sm font-medium text-slate-300 mb-2">Pick a time <span className="text-slate-500 font-normal">({tzAbbr(apptTz)})</span></label>
+              {!apptDate ? (
+                <div className="text-sm text-slate-500 border border-dashed border-slate-700 rounded-lg px-3 py-4 text-center">Pick a date first to see open times.</div>
+              ) : (() => {
+                // Existing meetings (appointments + blocks) on this date, in the seller's tz.
+                const fmtTz = (iso) => { try { const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: apptTz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date(iso)).map(x => [x.type, x.value])); return { ymd: `${p.year}-${p.month}-${p.day}`, min: (p.hour === '24' ? 0 : Number(p.hour)) * 60 + Number(p.minute) }; } catch { return null; } };
+                const dayMeetings = (scheduledTasks || [])
+                  .filter(t => t.task_type === 'meeting' && t.status === 'pending' && t.due_at)
+                  .map(t => { const f = fmtTz(t.due_at); return f && f.ymd === apptDate ? { min: f.min, isBlock: /^BLOCKED/i.test(t.title || ''), label: /^BLOCKED/i.test(t.title || '') ? 'Blocked' : (allLeads.find(l => l.id === t.lead_id)?.full_name || allLeads.find(l => l.id === t.lead_id)?.name || 'Appt') } : null; })
+                  .filter(Boolean);
+                const wholeDayBlocked = (scheduledTasks || []).some(t => t.task_type === 'meeting' && t.status === 'pending' && /^BLOCKED/i.test(t.title || '') && (t.description || '').includes('allday') && (() => { const f = fmtTz(t.due_at); return f && f.ymd === apptDate; })());
+                const toHHMM = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+                const to12 = (m) => { const h = Math.floor(m / 60), mm = m % 60; const ap = h >= 12 ? 'PM' : 'AM'; const h12 = h % 12 === 0 ? 12 : h % 12; return `${h12}:${String(mm).padStart(2, '0')} ${ap}`; };
+                const slots = [];
+                for (let m = 8 * 60; m <= 19 * 60 + 30; m += 30) slots.push(m);
+                if (wholeDayBlocked) return <div className="text-sm text-red-300 border border-red-500/40 bg-red-500/10 rounded-lg px-3 py-4 text-center">This whole day is blocked off. Pick another date.</div>;
+                return (
+                  <div className="grid grid-cols-3 gap-1.5 max-h-56 overflow-y-auto p-0.5">
+                    {slots.map(m => {
+                      const conflict = dayMeetings.find(d => Math.abs(d.min - m) < 30); // 30-min spacing
+                      const taken = !!conflict;
+                      const selected = apptTime === toHHMM(m);
+                      return (
+                        <button
+                          key={m}
+                          type="button"
+                          disabled={taken}
+                          onClick={() => setApptTime(toHHMM(m))}
+                          title={taken ? `${conflict.label} at ${to12(conflict.min)}` : ''}
+                          className={`rounded-lg px-2 py-2 text-left border text-xs ${taken ? 'bg-red-500/15 border-red-500/40 text-red-300/80 cursor-not-allowed' : selected ? 'bg-purple-600 border-purple-500 text-white font-semibold' : 'bg-slate-900 border-slate-600 text-slate-200 hover:bg-slate-700'}`}
+                        >
+                          <div className="font-medium">{to12(m)}</div>
+                          <div className={`text-[10px] truncate ${taken ? 'text-red-300/70' : selected ? 'text-purple-100' : 'text-slate-500'}`}>{taken ? conflict.label : 'Open'}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+              <p className="text-xs text-slate-500 mt-2">Red = already booked or blocked (kept 30 min apart). {apptTime ? <span className="text-purple-300">Selected {(() => { const [h, mm] = apptTime.split(':').map(Number); const ap = h >= 12 ? 'PM' : 'AM'; const h12 = h % 12 === 0 ? 12 : h % 12; return `${h12}:${String(mm).padStart(2, '0')} ${ap}`; })()}</span> : 'Click an open slot.'}</p>
             </div>
 
             <div className="mb-4">
