@@ -453,6 +453,21 @@ export default function LandLeadsAdminPage() {
   const [activityLogLoading, setActivityLogLoading] = useState(false);
   const [noteRoster, setNoteRoster] = useState([]); // [{id,name}] taggable teammates
   const [usersById, setUsersById] = useState({}); // userId -> display name
+  // Lead ids that are ACTIVELY enrolled in a drip campaign. Those leads are worked
+  // from the campaign view, so they drop out of PPC Inflow to keep inflow clean
+  // (the "card moves to the campaign" flow). Kept live via realtime below.
+  const [campaignEnrolledIds, setCampaignEnrolledIds] = useState(() => new Set());
+  const loadEnrolled = async () => {
+    const { data } = await supabase.from('campaign_enrollments').select('lead_id, status').eq('status', 'active');
+    setCampaignEnrolledIds(new Set((data || []).map(e => e.lead_id)));
+  };
+  useEffect(() => {
+    loadEnrolled();
+    const ch = supabase.channel('crm-enrollments-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'campaign_enrollments' }, () => loadEnrolled())
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, []);
 
   // Live: any new text/call activity refreshes the cards' Last Contacted + unread.
   useEffect(() => {
@@ -849,7 +864,10 @@ export default function LandLeadsAdminPage() {
     }
     return ids;
   })();
-  const leadInTabC = (l, tab) => primaryLeadIds.has(l.id) && homeTab(l) === tab;
+  // A lead enrolled in a drip campaign notifies under 'campaigns' (worked from
+  // there), not under its stage tab, so campaign replies don't clutter PPC Inflow.
+  const notifTab = (l) => campaignEnrolledIds.has(l.id) ? 'campaigns' : homeTab(l);
+  const leadInTabC = (l, tab) => primaryLeadIds.has(l.id) && notifTab(l) === tab;
   // Tab-aware: the label reflects what matters in THAT tab (an appointment-set
   // lead that changed reads "Appointment scheduled", not "We reached out").
   const STAGE_EVENT = {
@@ -4892,7 +4910,10 @@ export default function LandLeadsAdminPage() {
             // New-activity count per tab (shares the same event engine as the panel).
             // Campaigns bubbles on due campaign CALLS so they get made.
             const dueCampaignCalls = (scheduledTasks || []).filter(t => t.status === 'pending' && (t.source === 'campaign' || /^campaign:/i.test(t.description || '')) && new Date(t.due_at) <= new Date()).length;
-            const newCountFor = (tab) => tab === 'campaigns' ? dueCampaignCalls : tabEventsFor(tab).length;
+            // Campaigns bubble = due campaign calls + replies from enrolled leads
+            // (their notifications route here via notifTab), so campaign responses
+            // show up under Follow-Up Campaigns, not PPC Inflow.
+            const newCountFor = (tab) => tab === 'campaigns' ? dueCampaignCalls + tabEventsFor('campaigns').length : tabEventsFor(tab).length;
             const Bubble = ({ n }) => n > 0 ? (
               <span className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[11px] font-bold align-middle">{n > 99 ? '99+' : n}</span>
             ) : null;
@@ -5949,6 +5970,8 @@ export default function LandLeadsAdminPage() {
                      OM-Search inflow-stage leads too (they also remain in the Subdivision
                      Inflow tab as a filtered view). */
                   .filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(s) && l.status !== 'archived'; })())
+                  // Leads enrolled in a drip campaign are worked from the campaign, not here.
+                  .filter(l => !campaignEnrolledIds.has(l.id))
                   .filter(l => leadMatchesSearch(l, ppcSearch))
                   .filter(l => !pipelineMapped || l.map_uploaded)
                   .filter(passesEngagement),
