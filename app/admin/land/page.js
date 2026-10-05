@@ -6150,6 +6150,7 @@ export default function LandLeadsAdminPage() {
                     const dayItems = byDay[calSelectedDay] || [];
                     const HOURS = []; for (let h = 7; h <= 19; h++) HOURS.push(h);
                     const hourLabel = (h) => new Date(2000, 0, 1, h).toLocaleTimeString([], { hour: 'numeric' });
+                    const exactTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
                     return (
                       <div className="mb-4 bg-slate-800/40 border border-slate-700/50 rounded-xl p-3">
                         <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Tap an hour to block it off</div>
@@ -6162,8 +6163,8 @@ export default function LandLeadsAdminPage() {
                               const lead = allLeads.find(l => l.id === appt.lead_id);
                               const nm = lead?.full_name || lead?.name || 'Appt';
                               return (
-                                <div key={h} title={`${hourLabel(h)} · ${nm}`} className="rounded-lg px-2 py-1.5 text-left bg-green-500/20 border border-green-500/50 cursor-default">
-                                  <div className="text-[11px] font-bold text-green-200">{hourLabel(h)}</div>
+                                <div key={h} title={`${exactTime(appt.due_at)} · ${nm}`} className="rounded-lg px-2 py-1.5 text-left bg-green-500/20 border border-green-500/50 cursor-default">
+                                  <div className="text-[11px] font-bold text-green-200">{exactTime(appt.due_at)}</div>
                                   <div className="text-[10px] text-green-300/80 truncate">{nm}</div>
                                 </div>
                               );
