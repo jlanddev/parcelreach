@@ -480,6 +480,11 @@ export default function LandLeadsAdminPage() {
   // toast ("Appointment with X in N min") as each crosses into the window. ----
   const [nowTick, setNowTick] = useState(Date.now());
   useEffect(() => { const iv = setInterval(() => setNowTick(Date.now()), 30000); return () => clearInterval(iv); }, []);
+  // Ask once for OS notification permission so appointment reminders pop even when
+  // the CRM tab is in the background (not just an on-screen toast you might miss).
+  useEffect(() => {
+    try { if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission().catch(() => {}); } catch {}
+  }, []);
   const upcomingAppts = useMemo(() => {
     const now = nowTick;
     // Use new Date (not parseTs) so this matches exactly how the calendar reads the
@@ -502,7 +507,14 @@ export default function LandLeadsAdminPage() {
       try { localStorage.setItem('pr_appt_alerted', JSON.stringify([...apptAlerted.current].slice(-200))); } catch {}
       const lead = (allLeads || []).find(l => l.id === task.lead_id) || (rawLeads || []).find(l => l.id === task.lead_id);
       const nm = lead?.full_name || lead?.name || 'a seller';
+      const when = new Date(task.due_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
       showToast(`Appointment with ${nm} in ${mins <= 1 ? 'a few' : mins} min`, 'success', nm);
+      // OS-level notification: pops even if the CRM tab is backgrounded.
+      try {
+        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          new Notification(`Appointment in ${mins <= 1 ? 'a few' : mins} min`, { body: `${nm} at ${when}`, tag: key, renotify: true });
+        }
+      } catch {}
     }
   }, [upcomingAppts]); // eslint-disable-line react-hooks/exhaustive-deps
 
