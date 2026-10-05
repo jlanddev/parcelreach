@@ -204,7 +204,7 @@ async function run(request) {
       if (String(camp.name || '').startsWith('__settings') || camp.name === 'Appointment Reminders') continue;
       const desc = String(camp.description || '');
       const stageM = desc.match(/\[auto:stage:([A-Za-z_]+):(\d+)\]/i); // legacy single-status marker
-      const ruleM = desc.match(/\[auto:(nocontact|notext|nocall|untouched):(\d+)(?::([A-Za-z0-9_,-]+))?\]/i);
+      const ruleM = desc.match(/\[auto:(nocontact|notext|nocall|noactivity|noappt|untouched):(\d+)(?::([A-Za-z0-9_,-]+))?\]/i);
       if (!stageM && !ruleM) continue;
       const rule = stageM ? 'nocontact' : (ruleM[1].toLowerCase() === 'untouched' ? 'nocontact' : ruleM[1].toLowerCase());
       const days = Math.max(1, Number((stageM ? stageM[2] : ruleM[2])) || 30);
