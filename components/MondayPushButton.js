@@ -144,19 +144,26 @@ export default function MondayPushButton({ lead, onToast, compact = false }) {
     let latestPushes = null;
     for (const board of targets) {
       try {
-        const res = await fetch('/api/monday/push', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ leadId: lead.id, boardId: board.id, summary: summary.trim(), coordinates: coords.trim(), attachments, forceNew }),
-        });
-        const data = await res.json();
+        // Timeout so a slow/hung Monday push can never freeze the button forever.
+        const ctl = new AbortController();
+        const to = setTimeout(() => ctl.abort(), 90000);
+        let res, data;
+        try {
+          res = await fetch('/api/monday/push', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ leadId: lead.id, boardId: board.id, summary: summary.trim(), coordinates: coords.trim(), attachments, forceNew }),
+            signal: ctl.signal,
+          });
+          data = await res.json();
+        } finally { clearTimeout(to); }
         if (!res.ok || !data.ok) throw new Error(data.error || 'Push failed');
         if (Array.isArray(data.partner_pushes)) latestPushes = data.partner_pushes;
         else latestPushes = [...(latestPushes || sent).filter((p) => String(p.board_id) !== String(board.id)), { board_id: board.id, board_name: board.name, note: summary.trim() }];
         (data.updatedExisting ? updatedNames : newNames).push(board.name);
       } catch (err) {
         failNames.push(board.name);
-        console.warn('[monday push]', board.name, err?.message);
+        console.warn('[monday push]', board.name, err?.name === 'AbortError' ? 'timed out' : err?.message);
       }
     }
     if (latestPushes) setSent(latestPushes);
@@ -264,6 +271,21 @@ export default function MondayPushButton({ lead, onToast, compact = false }) {
             </div>
 
             <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+              {/* Already sent: show which partners have this lead (and the note they got). */}
+              {sent.length > 0 && (
+                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2.5 space-y-1.5">
+                  <span className="block text-[10px] font-bold uppercase tracking-wide text-emerald-300/90">Already sent to</span>
+                  {sent.map((p) => (
+                    <div key={p.board_id} className="flex items-center justify-between gap-2">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-200">
+                        <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+                        {p.board_name}
+                      </span>
+                      <button type="button" onClick={() => openComposer(p.note || summary, p.board_id)} className="text-[10px] text-emerald-300/90 hover:text-white flex-shrink-0" title="Load this note to edit and resend to this partner">Edit / resend</button>
+                    </div>
+                  ))}
+                </div>
+              )}
               {/* Partner picker */}
               <div>
                 <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Send to</span>
