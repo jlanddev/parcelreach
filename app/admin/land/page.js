@@ -4211,20 +4211,19 @@ export default function LandLeadsAdminPage() {
                           <div className="mb-4 pb-3 border-b border-slate-700/40">
                             {/* Contact info on its own, then action buttons on their own
                                 wrapping row below, so the badge can never get squeezed. */}
-                            <div className="mb-2">
-                              <div className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center gap-1.5 flex-wrap">
-                                <span>Last Contacted</span>
-                                {needsResponse && (
-                                  <span className="inline-block whitespace-nowrap px-1.5 py-0.5 rounded bg-red-500/25 text-red-300 text-[9px] font-bold normal-case">
-                                    Needs Response · {whenDateTime}
-                                  </span>
-                                )}
-                                {awaitingSeller && (
-                                  <span className="inline-block whitespace-nowrap px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[9px] font-bold normal-case">
-                                    Awaiting Seller Reply
-                                  </span>
-                                )}
-                              </div>
+                            {/* Each piece on its own line: label, badge, then the time. */}
+                            <div className="mb-2 space-y-1">
+                              <div className="text-[10px] uppercase tracking-wide text-slate-500">Last Contacted</div>
+                              {needsResponse && (
+                                <div>
+                                  <span className="inline-block px-2 py-0.5 rounded-md bg-red-500/25 text-red-300 text-[10px] font-bold">Needs Response · {whenDateTime}</span>
+                                </div>
+                              )}
+                              {awaitingSeller && (
+                                <div>
+                                  <span className="inline-block px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 text-[10px] font-bold">Awaiting Seller Reply</span>
+                                </div>
+                              )}
                               <div className="text-sm font-bold text-slate-100 truncate">
                                 {last ? `${channelLabel(last)} · ${timeAgo(last.created_at)}` : 'No contact yet'}
                               </div>
