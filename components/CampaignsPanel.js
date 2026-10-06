@@ -37,6 +37,7 @@ const offsetLabel = (min) => { min = Number(min) || 0; if (min === 0) return 'Ri
 export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCard, scheduledTasks = [], onOpenLead, onManageReminders, stages = [], stageGroups = [] }) {
   const [campaigns, setCampaigns] = useState(null);
   const [counts, setCounts] = useState({}); // campaignId -> { active, pending }
+  const [today, setToday] = useState({ enrolled: 0, sent: 0, replies: 0 }); // across all campaigns, today
   const [openCampaign, setOpenCampaign] = useState(null); // campaign being viewed in detail
   const [enrolledIds, setEnrolledIds] = useState(new Set());
   const [detailQueue, setDetailQueue] = useState([]); // text queue for the open campaign
@@ -76,7 +77,12 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     // Hide the hidden settings row (used to store the appointment reminder config).
     setCampaigns((camps || []).filter(c => !String(c.name || '').startsWith('__settings')));
     const { data: enr } = await supabase.from('campaign_enrollments').select('lead_id, campaign_id, status, enrolled_at');
-    const { data: q } = await supabase.from('campaign_queue').select('campaign_id, status');
+    const { data: q } = await supabase.from('campaign_queue').select('campaign_id, status, processed_at');
+    // Today's activity across all campaigns, for the at-a-glance summary.
+    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+    const since = todayStart.getTime();
+    const enrolledToday = (enr || []).filter(e => e.enrolled_at && new Date(e.enrolled_at).getTime() >= since).length;
+    const sentToday = (q || []).filter(x => x.status === 'sent' && x.processed_at && new Date(x.processed_at).getTime() >= since).length;
     // Pull the REAL contact status of every enrolled lead (not the de-duplicated
     // in-memory list, which can miss the exact record that got the reply).
     const enrolledIds = [...new Set((enr || []).map(e => e.lead_id))];
@@ -106,6 +112,13 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     setEnrollByCampaign(byCamp);
     setEnrollAtByCampaign(atByCamp);
     setEnrollAtAllByCampaign(atByCampAll);
+    // Replies today: enrolled leads whose last message is inbound and landed today.
+    let repliesToday = 0;
+    for (const id of Object.keys(contactById)) {
+      const lc = contactById[id];
+      if (lc && String(lc.last_contact_dir || '').toLowerCase() === 'inbound' && lc.last_contact_at && new Date(lc.last_contact_at).getTime() >= since) repliesToday++;
+    }
+    setToday({ enrolled: enrolledToday, sent: sentToday, replies: repliesToday });
   };
   // Replies are counted in load() straight from the enrolled leads' contact status.
   const campaignReplies = (cpId) => counts[cpId]?.replied || 0;
@@ -487,6 +500,22 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
         <div className="flex items-center gap-2">
           <button onClick={runPreview} disabled={busy} className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 text-sm font-semibold disabled:opacity-50">Preview sends</button>
           <button onClick={startNew} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-sm font-semibold">+ New campaign</button>
+        </div>
+      </div>
+
+      {/* Today's activity across all campaigns, at a glance. */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
+          <div className="text-2xl font-bold text-indigo-300">{today.enrolled}</div>
+          <div className="text-xs text-slate-400 mt-0.5">leads added to campaigns today</div>
+        </div>
+        <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
+          <div className="text-2xl font-bold text-emerald-300">{today.sent}</div>
+          <div className="text-xs text-slate-400 mt-0.5">texts sent today</div>
+        </div>
+        <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
+          <div className="text-2xl font-bold text-cyan-300">{today.replies}</div>
+          <div className="text-xs text-slate-400 mt-0.5">replies today</div>
         </div>
       </div>
 
