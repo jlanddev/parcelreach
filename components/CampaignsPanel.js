@@ -41,6 +41,7 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
   const [openCampaign, setOpenCampaign] = useState(null); // campaign being viewed in detail
   const [enrolledIds, setEnrolledIds] = useState(new Set());
   const [detailQueue, setDetailQueue] = useState([]); // text queue for the open campaign
+  const [deliveryTab, setDeliveryTab] = useState('sent'); // Message activity view: sent/replied/due/scheduled/stopped
   const [enrolledAtById, setEnrolledAtById] = useState({}); // leadId -> enrollment time (open campaign)
   const [enrollAtByCampaign, setEnrollAtByCampaign] = useState({}); // campaignId -> { leadId: enrolledAt } (active)
   const [enrollAtAllByCampaign, setEnrollAtAllByCampaign] = useState({}); // campaignId -> { leadId: enrolledAt } (all)
@@ -399,12 +400,16 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
         </div>
       </div>
 
-      {/* Delivery: exactly what's going out, what's scheduled, what already sent */}
+      {/* Delivery dashboard: sliceable by Sent / Replied / Scheduled / Stopped. */}
       {(() => {
         const q = detailQueue || [];
-        const sent = q.filter(x => x.status === 'sent');
-        const pending = q.filter(x => x.status === 'pending');
         const nowT = Date.now();
+        const sent = q.filter(x => x.status === 'sent');
+        const pendingDue = q.filter(x => x.status === 'pending' && new Date(x.due_at).getTime() <= nowT);
+        const pendingFuture = q.filter(x => x.status === 'pending' && new Date(x.due_at).getTime() > nowT);
+        const stopped = q.filter(x => x.status === 'cancelled' || x.status === 'failed');
+        // Replied = enrolled leads who responded (back in rotation / inflow).
+        const repliedLeads = enrolledLeads.filter(l => repliedAfterEnroll(l, enrolledAtById[l.id]));
         const label = (x) => {
           if (x.status === 'sent') return { t: 'sent ✓', c: 'bg-emerald-500/20 text-emerald-300' };
           if (x.status === 'cancelled') return { t: 'stopped', c: 'bg-slate-700 text-slate-400' };
@@ -412,37 +417,68 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
           if (new Date(x.due_at).getTime() <= nowT) return { t: 'due', c: 'bg-amber-500/20 text-amber-300' };
           return { t: 'scheduled', c: 'bg-slate-700 text-slate-400' };
         };
-        const rows = [...pending.filter(x => new Date(x.due_at).getTime() <= nowT), ...pending.filter(x => new Date(x.due_at).getTime() > nowT), ...sent.slice().reverse()].slice(0, 60);
+        const TABS = [
+          { k: 'sent', label: 'Sent', n: sent.length, color: 'text-emerald-300' },
+          { k: 'replied', label: 'Replied', n: repliedLeads.length, color: 'text-cyan-300' },
+          { k: 'due', label: 'Due now', n: pendingDue.length, color: 'text-amber-300' },
+          { k: 'scheduled', label: 'Scheduled', n: pendingFuture.length, color: 'text-slate-300' },
+          { k: 'stopped', label: 'Stopped', n: stopped.length, color: 'text-slate-400' },
+        ];
+        const rowsFor = () => {
+          if (deliveryTab === 'sent') return sent.slice().reverse();
+          if (deliveryTab === 'due') return pendingDue;
+          if (deliveryTab === 'scheduled') return pendingFuture;
+          if (deliveryTab === 'stopped') return stopped;
+          return [];
+        };
         return (
           <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-5">
-            <div className="flex items-center justify-between gap-2 mb-3">
-              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400">What's going out</h3>
-              <span className="text-xs text-slate-500"><span className="text-emerald-300 font-semibold">{sent.length}</span> sent · <span className="text-white font-semibold">{pending.length}</span> scheduled</span>
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400 mb-3">Message activity</h3>
+            <div className="flex items-center gap-1.5 mb-3 flex-wrap">
+              {TABS.map(t => (
+                <button key={t.k} onClick={() => setDeliveryTab(t.k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${deliveryTab === t.k ? 'bg-slate-700 border-slate-500 text-white' : 'bg-slate-900/60 border-slate-700 text-slate-300 hover:bg-slate-700/60'}`}>
+                  {t.label} <span className={t.color}>{t.n}</span>
+                </button>
+              ))}
             </div>
-            {rows.length === 0 ? (
-              <div className="text-sm text-slate-500">Nothing queued yet. Enroll leads (or turn on auto-add) and texts will line up here.</div>
-            ) : (
-              <div className="space-y-1.5 max-h-72 overflow-y-auto">
-                {rows.map(x => {
-                  const lead = leadsById[x.lead_id];
-                  const nm = lead?.full_name || lead?.name || 'Lead';
-                  const lab = label(x);
-                  return (
-                    <button key={x.id} onClick={() => lead && onOpenLead && onOpenLead(lead)} className="w-full text-left bg-slate-900/40 border border-slate-700/40 rounded-lg px-3 py-2 hover:bg-slate-800/60 flex items-start gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold text-white truncate">{nm}</span>
-                          <span className={`flex-shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full ${lab.c}`}>{lab.t}</span>
-                        </div>
-                        <div className="text-xs text-slate-400 truncate mt-0.5">{x.message}</div>
-                      </div>
-                      <span className="flex-shrink-0 text-xs text-slate-500">{x.status === 'sent' && x.processed_at ? fmtWhen(x.processed_at) : fmtWhen(x.due_at)}</span>
+            {deliveryTab === 'replied' ? (
+              repliedLeads.length === 0 ? <div className="text-sm text-slate-500">Nobody has replied yet. When they do, they move back to PPC Inflow to be worked.</div> : (
+                <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                  {repliedLeads.map(l => (
+                    <button key={l.id} onClick={() => onOpenLead && onOpenLead(l)} className="w-full text-left bg-slate-900/40 border border-cyan-500/30 rounded-lg px-3 py-2 hover:bg-slate-800/60 flex items-center gap-3">
+                      <span className="text-sm font-semibold text-white truncate flex-1">{l.full_name || l.name || 'Lead'}</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 flex-shrink-0">replied · back in rotation</span>
+                      {l.last_contact_at && <span className="text-xs text-slate-500 flex-shrink-0">{fmtWhen(l.last_contact_at)}</span>}
                     </button>
-                  );
-                })}
-              </div>
-            )}
-            <p className="mt-2 text-xs text-slate-500">{isLive ? `"Sent ✓" already went out. "Due"/"Scheduled" go out on upcoming runs (up to ${maxPerRun} per run, every 30 min, 10am-8pm Central), so they trickle. Counts are for THIS campaign only.` : '"Due" means it\'s queued and would go on the next run, but nothing sends while sending is in safe mode (off). Counts are for THIS campaign only.'} Every real send also shows in the lead\'s message thread.</p>
+                  ))}
+                </div>
+              )
+            ) : (() => {
+              const rows = rowsFor().slice(0, 100);
+              if (!rows.length) return <div className="text-sm text-slate-500">Nothing here.</div>;
+              return (
+                <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                  {rows.map(x => {
+                    const lead = leadsById[x.lead_id];
+                    const nm = lead?.full_name || lead?.name || 'Lead';
+                    const lab = label(x);
+                    return (
+                      <button key={x.id} onClick={() => lead && onOpenLead && onOpenLead(lead)} className="w-full text-left bg-slate-900/40 border border-slate-700/40 rounded-lg px-3 py-2 hover:bg-slate-800/60 flex items-start gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-semibold text-white truncate">{nm}</span>
+                            <span className={`flex-shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full ${lab.c}`}>{lab.t}</span>
+                          </div>
+                          <div className="text-xs text-slate-400 truncate mt-0.5">{x.message}</div>
+                        </div>
+                        <span className="flex-shrink-0 text-xs text-slate-500">{x.status === 'sent' && x.processed_at ? fmtWhen(x.processed_at) : fmtWhen(x.due_at)}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+            <p className="mt-2 text-xs text-slate-500">{isLive ? `Texts go out up to ${maxPerRun} per run, every 30 min, 10am-8pm Central, so a big batch trickles out. A reply moves the lead back to PPC Inflow (see Replied).` : 'Safe mode: nothing sends until it is turned live.'} Every send also shows in the lead\'s message thread.</p>
           </div>
         );
       })()}
