@@ -88,6 +88,10 @@ function LeadField({ initial, onSave, as = 'input', className, placeholder, rows
 
 export default function LandLeadsAdminPage() {
   const router = useRouter();
+  // Render client-only: the server renders nothing (avoids any SSR/prerender crash
+  // from browser-only code), then the full app renders after mount in the browser.
+  const [hasMounted, setHasMounted] = useState(false);
+  useEffect(() => { setHasMounted(true); }, []);
   const [organizations, setOrganizations] = useState([]);
   const [rawLeads, setRawLeads] = useState([]);
   const [selectedOrg, setSelectedOrg] = useState(null);
@@ -4673,6 +4677,9 @@ export default function LandLeadsAdminPage() {
                     </div>{/* End p-5 wrapper */}
                   </div>
   );
+
+  // Client-only: skip server render entirely to avoid SSR/prerender crashes.
+  if (!hasMounted) return <div className="min-h-screen bg-slate-900" />;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
