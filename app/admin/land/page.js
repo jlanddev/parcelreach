@@ -4214,12 +4214,12 @@ export default function LandLeadsAdminPage() {
                                 <div className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center gap-1.5 flex-wrap">
                                   Last Contacted
                                   {needsResponse && (
-                                    <span className="px-1.5 py-0.5 rounded-full bg-red-500/25 text-red-300 text-[9px] font-bold normal-case">
+                                    <span className="inline-block whitespace-nowrap px-1.5 py-0.5 rounded bg-red-500/25 text-red-300 text-[9px] font-bold normal-case">
                                       Needs Response · {whenDateTime}
                                     </span>
                                   )}
                                   {awaitingSeller && (
-                                    <span className="px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[9px] font-bold normal-case">
+                                    <span className="inline-block whitespace-nowrap px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[9px] font-bold normal-case">
                                       Awaiting Seller Reply
                                     </span>
                                   )}
