@@ -4209,26 +4209,27 @@ export default function LandLeadsAdminPage() {
                         const whenDateTime = last ? new Date(last.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
                         return (
                           <div className="mb-4 pb-3 border-b border-slate-700/40">
-                            <div className="flex items-start justify-between gap-2 flex-wrap">
-                              <div className="min-w-[160px] flex-1">
-                                <div className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center gap-1.5 flex-wrap">
-                                  Last Contacted
-                                  {needsResponse && (
-                                    <span className="inline-block whitespace-nowrap px-1.5 py-0.5 rounded bg-red-500/25 text-red-300 text-[9px] font-bold normal-case">
-                                      Needs Response · {whenDateTime}
-                                    </span>
-                                  )}
-                                  {awaitingSeller && (
-                                    <span className="inline-block whitespace-nowrap px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[9px] font-bold normal-case">
-                                      Awaiting Seller Reply
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="text-sm font-bold text-slate-100 truncate">
-                                  {last ? `${channelLabel(last)} · ${timeAgo(last.created_at)}` : 'No contact yet'}
-                                </div>
+                            {/* Contact info on its own, then action buttons on their own
+                                wrapping row below, so the badge can never get squeezed. */}
+                            <div className="mb-2">
+                              <div className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center gap-1.5 flex-wrap">
+                                <span>Last Contacted</span>
+                                {needsResponse && (
+                                  <span className="inline-block whitespace-nowrap px-1.5 py-0.5 rounded bg-red-500/25 text-red-300 text-[9px] font-bold normal-case">
+                                    Needs Response · {whenDateTime}
+                                  </span>
+                                )}
+                                {awaitingSeller && (
+                                  <span className="inline-block whitespace-nowrap px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[9px] font-bold normal-case">
+                                    Awaiting Seller Reply
+                                  </span>
+                                )}
                               </div>
-                              <div className="flex items-center gap-1.5 flex-shrink-0">
+                              <div className="text-sm font-bold text-slate-100 truncate">
+                                {last ? `${channelLabel(last)} · ${timeAgo(last.created_at)}` : 'No contact yet'}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5 flex-wrap">
                                 {(lead.phone || lead.owner_phone) && (
                                   <button
                                     onClick={(e) => { e.stopPropagation(); setCallLead(lead); }}
@@ -4288,7 +4289,6 @@ export default function LandLeadsAdminPage() {
                                 </div>
                                 {/* Push to partners, right from the card (same flow as the Partners tab) */}
                                 <MondayPushButton lead={lead} onToast={(m, t) => showToast(m, t)} compact />
-                              </div>
                             </div>
                             {last?.message_content && (
                               <div className={`text-xs mt-1 truncate ${unread ? 'text-slate-100 font-medium' : 'text-slate-400'}`}>
