@@ -1,0 +1,10182 @@
+'use client';
+
+import { useState, useEffect, useRef, useMemo, Component } from 'react';
+import { supabase } from '@/lib/supabase';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import mapboxgl from 'mapbox-gl';
+import 'mapbox-gl/dist/mapbox-gl.css';
+import area from '@turf/area';
+import ConversationModal from '@/components/ConversationModal';
+import NotesModal from '@/components/NotesModal';
+import CallModal from '@/components/CallModal';
+import NotificationBell from '@/components/NotificationBell';
+import FollowUpsBell from '@/components/FollowUpsBell';
+import DealStrip from '@/components/DealStrip';
+import MondayPushButton from '@/components/MondayPushButton';
+import OfferModal from '@/components/OfferModal';
+import OmSearch from '@/components/OmSearch';
+import CampaignsPanel from '@/components/CampaignsPanel';
+import { timeAgo, channelLabel } from '@/lib/format';
+import { playDing } from '@/lib/sound';
+import { DIRECTIONS, OFFER_DIRECTIONS, GENERAL_DIRECTIONS, FOLLOWUP_BUCKETS, FOLLOWUP_KEYS, LOST_REASONS, formatOffer, mergeScript, firstTouch, touchForStep } from '@/lib/followups';
+
+// A conversation note is anything that isn't an auto-logged activity marker.
+const isConversationNote = (content) =>
+  !/^\s*\[(VM|TEXT|CALL|EMAIL|DAILY RUNDOWN|STATUS_CHANGE|STATUS)\b/i.test(content || '');
+
+// Last 10 digits of a phone, the stable key for matching messages to leads.
+const phoneKey = (p) => (p || '').replace(/\D/g, '').slice(-10);
+
+// Short human label for a pipeline status, used in live stage-change alerts.
+const STAGE_LABEL_SHORT = (s) => ({
+  NEW: 'New', CONTACTING: 'In Contact', CONTACTED: 'In Contact',
+  ANTHONY_CONTACTED: 'Anthony Contacted', ANTHONY_FOLLOW_UP: 'Anthony Follow-up',
+  OFFER_CURATED: 'Offer Curated', APPT_SET_FOR_JORDAN: 'Appt Set',
+  OFFER_SENT: 'Offer Made', NEGOTIATING: 'Negotiating', AGREEMENT_SENT: 'Agreement Sent',
+  UNDER_CONTRACT: 'Signed Contract', CLOSED: 'Closed', DEAD: 'Dead',
+  WE_PASSED: 'We Passed', NURTURE: 'Nurture', LOST: 'Lost', ARCHIVED: 'Archived', FOLLOW_UP: 'Follow-Up',
+}[(s || '').toUpperCase()] || (s || 'Updated'));
+
+// activities.created_at is a naive `timestamp` storing the UTC instant. Force
+// UTC parsing so it isn't re-read as local time (adds the tz offset otherwise).
+const parseTs = (s) => new Date(/Z|[+-]\d\d:?\d\d$/.test(s || '') ? s : (s || '') + 'Z');
+
+// Appointment timezones the seller could be in (booker must pick one).
+const APPT_TZS = [
+  { id: 'America/New_York', label: 'Eastern (EST/EDT)', abbr: 'ET' },
+  { id: 'America/Chicago', label: 'Central (CST/CDT)', abbr: 'CT' },
+  { id: 'America/Denver', label: 'Mountain (MST/MDT)', abbr: 'MT' },
+  { id: 'America/Los_Angeles', label: 'Pacific (PST/PDT)', abbr: 'PT' },
+];
+const tzAbbr = (id) => (APPT_TZS.find(t => t.id === id)?.abbr) || 'CT';
+// Convert a wall-clock date+time in a given IANA tz to a UTC ISO string
+// (DST-correct), so 9:30 Eastern and 9:30 Central never land on the same instant.
+const zonedToUtcISO = (dateStr, timeStr, tz) => {
+  const [y, mo, d] = (dateStr || '').split('-').map(Number);
+  const [h, mi] = (timeStr || '').split(':').map(Number);
+  if (!y || !mo || !d || Number.isNaN(h) || Number.isNaN(mi)) return new Date(`${dateStr}T${timeStr}`).toISOString();
+  const guess = Date.UTC(y, mo - 1, d, h, mi);
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
+    .formatToParts(new Date(guess)).map(p => [p.type, p.value]));
+  const shownHour = parts.hour === '24' ? 0 : Number(parts.hour);
+  const shown = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), shownHour, Number(parts.minute));
+  return new Date(guess + (guess - shown)).toISOString();
+};
+
+// If the full card ever throws while rendering a particular lead, show a fallback
+// instead of a blank/broken modal, so a click always lands on something usable.
+class CardErrorBoundary extends Component {
+  constructor(p) { super(p); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  render() { return this.state.err ? this.props.fallback : this.props.children; }
+}
+
+// A lead-card text field that keeps its value in LOCAL state while you type (so
+// typing is instant) and only saves to the DB once, on blur or Enter. This fixes
+// the lag where every keystroke wrote to Supabase and re-rendered the whole page.
+function LeadField({ initial, onSave, as = 'input', className, placeholder, rows, inputMode, type }) {
+  const [v, setV] = useState(initial ?? '');
+  const dirty = useRef(false);
+  useEffect(() => { if (!dirty.current) setV(initial ?? ''); }, [initial]);
+  const commit = () => { if (!dirty.current) return; dirty.current = false; const val = v; if ((val ?? '') !== (initial ?? '')) onSave(val); };
+  const onChange = (e) => { dirty.current = true; setV(e.target.value); };
+  const stop = (e) => e.stopPropagation();
+  if (as === 'textarea') return <textarea value={v} onChange={onChange} onBlur={commit} onClick={stop} rows={rows} placeholder={placeholder} className={className} />;
+  return <input value={v} onChange={onChange} onBlur={commit} onClick={stop} onKeyDown={(e) => { if (e.key === 'Enter' && as !== 'textarea') e.currentTarget.blur(); }} type={type} inputMode={inputMode} placeholder={placeholder} className={className} />;
+}
+
+export default function LandLeadsAdminPage() {
+  const router = useRouter();
+  // Render client-only: the server renders nothing (avoids any SSR/prerender crash
+  // from browser-only code), then the full app renders after mount in the browser.
+  const [hasMounted, setHasMounted] = useState(false);
+  useEffect(() => { setHasMounted(true); }, []);
+  const [organizations, setOrganizations] = useState([]);
+  const [rawLeads, setRawLeads] = useState([]);
+  const [selectedOrg, setSelectedOrg] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('ppc-inflow');
+  const [exportFilters, setExportFilters] = useState({
+    minAcres: '', maxAcres: '',
+    // POSITIVE include lists. Empty = include all.
+    includeStatuses: [],
+    // Date range: 'all' | '5d' | '30d' | '90d'
+    dateRange: 'all',
+    // Date basis: 'created' (when lead came in) | 'activity' (when status last changed / touch logged)
+    dateBasis: 'activity',
+    // Lead age (by created_at): only include leads that came in at least N days ago.
+    // Empty = no age floor. Lets you pull "50+ days ago", "40+", etc.
+    minAgeDays: '',
+  });
+  const [currentUserId, setCurrentUserId] = useState(null);
+  const [currentUserRole, setCurrentUserRole] = useState(null);
+  const [currentUserName, setCurrentUserName] = useState('');
+  const [adminUserId, setAdminUserId] = useState(null); // Jordan's user id, used to route APPT_SET_FOR_JORDAN tasks
+  const [acquisitionManagerId, setAcquisitionManagerId] = useState(null); // Anthony's user id, used to push leads to his queue
+  const isAdmin = currentUserRole === 'admin';
+  const isAcquisitionManager = currentUserRole === 'acquisition_manager';
+
+  // ---- Clean View ---------------------------------------------------------
+  // A curated focus mode: hides everything except leads explicitly pushed into
+  // it (clean_view = true). Pushed leads keep their real status and notes, so
+  // they still sort into their correct stage tabs. Acquisition managers
+  // (Anthony) are locked into Clean View so their board stays uncluttered;
+  // admins (Jordan) toggle it and default to the full board (the "motherboard").
+  // Per-TAB, not per-browser: each tab keeps its own view so you can have the
+  // full board open in one tab and Clean View in another without them changing
+  // each other. Source of truth is the ?cleanview=1 URL param (so a tab can be
+  // opened straight into a view and survive refresh), backed by sessionStorage
+  // (per tab). localStorage is deliberately NOT used (that is what synced tabs).
+  const [cleanViewPref, setCleanViewPref] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const param = new URLSearchParams(window.location.search).get('cleanview');
+    if (param === '1') setCleanViewPref(true);
+    else if (param === '0') setCleanViewPref(false);
+    else setCleanViewPref(sessionStorage.getItem('pr_clean_view') === '1');
+  }, []);
+  const cleanViewActive = false; // Clean View removed: the 4-stage board is the CRM now
+  const setCleanView = (next) => {
+    setCleanViewPref(next);
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('pr_clean_view', next ? '1' : '0');
+      const url = new URL(window.location.href);
+      url.searchParams.set('cleanview', next ? '1' : '0');
+      window.history.replaceState({}, '', url);
+    }
+  };
+  const toggleCleanView = () => setCleanView(!cleanViewPref);
+  // Open the OTHER view in a fresh tab so both can sit side by side.
+  const openViewInNewTab = (clean) => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('cleanview', clean ? '1' : '0');
+    window.open(url.toString(), '_blank');
+  };
+  // The list every tab/count/board reads from. In Clean View it is the pushed
+  // subset only; otherwise it is the full raw set. Renaming the raw state to
+  // rawLeads and deriving allLeads here means all ~100 read sites filter at once.
+  const allLeads = useMemo(() => {
+    const base = cleanViewActive ? rawLeads.filter((l) => l.clean_view) : rawLeads;
+    // Collapse duplicate lead records for the same person (same phone) to ONE,
+    // keeping the furthest-along stage, so someone who filled out multiple forms
+    // shows as a single card/count/notification. Archived and lost copies never
+    // win over an active record.
+    const rank = (l) => {
+      if ((l.status || '').toLowerCase() === 'archived') return -2;
+      const s = (l.pipeline_status || l.status || '').toUpperCase();
+      if (s === 'LOST') return -1;
+      if (['CLOSED', 'UNDER_CONTRACT', 'AGREEMENT_SENT'].includes(s)) return 5;
+      if (['OFFER_SENT', 'NEGOTIATING'].includes(s)) return 4;
+      if (l.offer_amount != null && Number(l.offer_amount) !== 0) return 3;
+      if (s === 'APPT_SET_FOR_JORDAN') return 2;
+      return 1;
+    };
+    const best = new Map();
+    for (const l of base) {
+      const k = (l.phone || '').replace(/\D/g, '').slice(-10) || `id:${l.id}`;
+      const cur = best.get(k);
+      if (!cur) { best.set(k, l); continue; }
+      const cmp = rank(l) - rank(cur) || (new Date(l.last_activity_at || l.created_at) - new Date(cur.last_activity_at || cur.created_at));
+      if (cmp > 0) best.set(k, l);
+    }
+    return Array.from(best.values());
+  }, [cleanViewActive, rawLeads]);
+  // Push a lead into (or pull it out of) Clean View. Admin-only curation.
+  // clean_view_at stamps when it was pushed, so Clean View can sort newest-first.
+  const setLeadCleanView = async (leadId, on) => {
+    const at = on ? new Date().toISOString() : null;
+    setRawLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, clean_view: on, clean_view_at: at } : l)));
+    setSelectedLead((prev) => (prev && prev.id === leadId ? { ...prev, clean_view: on, clean_view_at: at } : prev));
+    const { error } = await supabase.from('leads').update({ clean_view: on, clean_view_at: at }).eq('id', leadId);
+    if (error) {
+      setRawLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, clean_view: !on } : l)));
+      showToast('Could not update Clean View', 'error');
+      return;
+    }
+    showToast(on ? 'Pushed to Clean View' : 'Removed from Clean View', 'success');
+
+    // Ping Anthony's bell (reliable: realtime + 30s poll fallback + sound +
+    // browser notification) so a lead landing in Clean View never gets missed.
+    if (on && acquisitionManagerId && acquisitionManagerId !== currentUserId) {
+      const lead = rawLeads.find((l) => l.id === leadId);
+      const nm = lead?.full_name || lead?.name || 'New lead';
+      const acresTxt = lead?.acreage || lead?.acres ? `${lead.acreage || lead.acres} acres` : '';
+      const countyTxt = (lead?.property_county || lead?.county) ? `${lead.property_county || lead.county} County` : '';
+      const detail = [acresTxt, countyTxt].filter(Boolean).join(', ');
+      fetch('/api/notifications/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: acquisitionManagerId,
+          fromUserId: currentUserId,
+          type: 'lead_assigned',
+          title: 'New Lead. Contact ASAP.',
+          message: `${nm}${detail ? ` (${detail})` : ''} was pushed to your Clean View. Contact ASAP.`,
+          link: `/admin/land?lead=${leadId}`,
+          sendEmail: true,
+        }),
+      }).catch((e) => console.warn('clean-view notify failed', e?.message));
+    }
+
+    // New pushed lead: drop a speed-to-lead call into the tray so it gets
+    // called within minutes. Only for new-ish leads, so we never nag a lead
+    // that's already deep in the pipe.
+    if (on) {
+      const lead = rawLeads.find((l) => l.id === leadId);
+      const stage = (lead?.pipeline_status || lead?.status || '').toUpperCase();
+      const isNewish = !stage || ['NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'].includes(stage);
+      if (isNewish) {
+        const leadName = lead?.full_name || lead?.name || 'Lead';
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          const owner = acquisitionManagerId || lead?.current_owner_id || user?.id || null;
+          const cp = { lead_id: leadId, created_by: user?.id || null, assigned_to: owner, task_type: 'callback', source: 'pipeline', title: `Call new lead ASAP: ${leadName}`, description: 'New lead, call within 5 minutes', due_at: new Date(Date.now() + 5 * 60000).toISOString(), status: 'pending', priority: 'high' };
+          let { data: t, error: te } = await supabase.from('scheduled_tasks').insert(cp).select().maybeSingle();
+          if (te) { const { source, ...ns } = cp; ({ data: t } = await supabase.from('scheduled_tasks').insert(ns).select().maybeSingle()); }
+          if (t) setScheduledTasks((prev) => [...prev, t]);
+        } catch { /* non-fatal */ }
+      }
+    }
+  };
+
+  // Live board. A realtime feed on the leads table so a lead pushed to Clean
+  // View (or a stage change) shows up on other sessions without a refresh, with
+  // a ding. The actor does not ding themselves: they already updated their own
+  // rawLeads optimistically, so when the echo arrives prev === row and no
+  // transition is detected. Only sessions that did not make the change alert.
+  const rawLeadsRef = useRef([]);
+  useEffect(() => { rawLeadsRef.current = rawLeads; }, [rawLeads]);
+  const cleanViewActiveRef = useRef(cleanViewActive);
+  useEffect(() => { cleanViewActiveRef.current = cleanViewActive; }, [cleanViewActive]);
+  useEffect(() => {
+    if (!currentUserRole) return;
+    const ch = supabase
+      .channel('leads-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, (payload) => {
+        const row = payload.new;
+        if (!row || !row.id) return;
+        const prev = (rawLeadsRef.current || []).find((l) => l.id === row.id);
+        const name = row.full_name || row.name || 'Lead';
+        const statusOfRow = (row.pipeline_status || row.status || '').toUpperCase();
+        const statusOfPrev = (prev?.pipeline_status || prev?.status || '').toUpperCase();
+
+        // Merge the change into the board (or add a brand new lead).
+        setRawLeads((cur) => {
+          if (!cur.some((l) => l.id === row.id)) return [{ ...row }, ...cur];
+          return cur.map((l) => (l.id === row.id ? { ...l, ...row, partner_pushes: l.partner_pushes || row.partner_pushes } : l));
+        });
+
+        // Alerts. Only for real transitions (so the actor stays silent).
+        const becameCleanView = !!row.clean_view && (!prev || !prev.clean_view);
+        const stageChanged = prev && statusOfRow && statusOfRow !== statusOfPrev;
+        if (becameCleanView && cleanViewActiveRef.current) {
+          playDing();
+          showToast('New Lead. Contact ASAP.', 'success', name);
+        } else if (stageChanged) {
+          playDing();
+          showToast(`Stage changed to ${STAGE_LABEL_SHORT(statusOfRow)}`, 'success', name);
+        }
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [currentUserRole]);
+  // -------------------------------------------------------------------------
+
+  // "Mapped" pill rendered on lead cards when a property map screenshot has been uploaded.
+  const MappedBadge = () => (
+    <span className="inline-flex items-center gap-1 ml-2 px-1.5 py-0.5 rounded-full bg-green-900/40 border border-green-700/50 text-green-400 text-[10px] font-semibold uppercase tracking-wide">
+      <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.6l7.3-7.3a1 1 0 011.4 0z" clipRule="evenodd" /></svg>
+      Mapped
+    </span>
+  );
+
+  // Red "hologram" pill shown at the top of a lead card when NO map is attached.
+  const NotMappedBadge = () => (
+    <span className="holo-notmapped inline-flex items-center gap-1 ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide">
+      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7M4 4l16 16" /></svg>
+      Not Mapped
+    </span>
+  );
+
+  // HAMMERING pill, shown when hammer_mode is on. Click to toggle off.
+  const HammerBadge = ({ lead }) => {
+    if (!lead?.hammer_mode) return null;
+    return (
+      <button
+        onClick={(e) => { e.stopPropagation(); toggleHammerMode(lead.id); }}
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-600/30 border border-red-500/60 text-red-300 text-[11px] font-bold uppercase tracking-wide animate-pulse hover:opacity-80"
+        title="Click to stop hammering"
+      >
+        🔨 Hammering
+      </button>
+    );
+  };
+
+  // FRESH pill, shown when the lead was created in the last 24 hours.
+  const FreshBadge = ({ lead }) => {
+    if (!lead?.created_at) return null;
+    const ageMs = Date.now() - new Date(lead.created_at).getTime();
+    if (ageMs > 24 * 60 * 60 * 1000) return null;
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-600/30 border border-red-500/60 text-red-300 text-[11px] font-bold uppercase tracking-wide animate-pulse">
+        Fresh
+      </span>
+    );
+  };
+
+  // Current teammate pill, click to toggle between Jordan and Anthony.
+  const TeammateBadge = ({ lead }) => {
+    if (!lead || (!adminUserId && !acquisitionManagerId)) return null;
+    // Hide on terminal-status leads, no one is "working" a closed/dead/archived/nurture lead.
+    const leadStatus = (lead.pipeline_status || lead.status || '').toUpperCase();
+    if (['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE', 'WE_PASSED'].includes(leadStatus)) return null;
+    // Default unowned leads to Anthony, no more 'Unassigned' label in the wild.
+    const ownerId = lead.current_owner_id || acquisitionManagerId;
+    const isAnthony = ownerId === acquisitionManagerId;
+    const isJordan = ownerId === adminUserId;
+    const name = isJordan ? 'Jordan' : isAnthony ? 'Anthony' : 'Anthony';
+    const color = isJordan
+      ? 'bg-blue-900/40 border-blue-700/50 text-blue-300'
+      : 'bg-purple-900/40 border-purple-700/50 text-purple-300';
+    return (
+      <button
+        onClick={(e) => { e.stopPropagation(); toggleCurrentOwner(lead.id); }}
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-semibold ${color} hover:opacity-80 transition`}
+        title="Click to toggle current teammate"
+      >
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" /></svg>
+        Working: {name}
+      </button>
+    );
+  };
+  const [assignModalOpen, setAssignModalOpen] = useState(false);
+  const [detailsModalOpen, setDetailsModalOpen] = useState(false);
+  const [cardModalLead, setCardModalLead] = useState(null); // show the full lead CARD in a modal when it can't be scrolled to inline
+  const [highlightLeadId, setHighlightLeadId] = useState(null); // briefly ring the card we jumped to
+  const [selectedLead, setSelectedLead] = useState(null);
+  const [selectedOrgsForAssignment, setSelectedOrgsForAssignment] = useState([]);
+  const [leadPrice, setLeadPrice] = useState(''); // Price for marketplace leads
+  const [findMapModalOpen, setFindMapModalOpen] = useState(false);
+  const [leadForMapSearch, setLeadForMapSearch] = useState(null);
+  const [isAssigning, setIsAssigning] = useState(false);
+  const [leadAssignments, setLeadAssignments] = useState({}); // leadId -> array of {teamId, assigned_at}
+
+  // CRM States
+  const [activityModalOpen, setActivityModalOpen] = useState(false);
+  const [activityType, setActivityType] = useState('CALL_OUTBOUND');
+  const [activityLeadId, setActivityLeadId] = useState(null);
+  const [activityNotes, setActivityNotes] = useState('');
+  const [callOutcome, setCallOutcome] = useState('connected');
+  const [callbackDate, setCallbackDate] = useState('');
+  const [callbackTime, setCallbackTime] = useState('');
+  const [loggingActivity, setLoggingActivity] = useState(false);
+  const [leadActivities, setLeadActivities] = useState({}); // leadId -> activities array
+  const [conversationLead, setConversationLead] = useState(null); // open iMessage-style thread
+  const [callLead, setCallLead] = useState(null); // active Twilio call
+  const [contactMeta, setContactMeta] = useState({}); // leadId -> { last, unread } for cards
+  const [contactRefresh, setContactRefresh] = useState(0); // bump to reload contactMeta
+  const [notesByLead, setNotesByLead] = useState({}); // leadId -> recent conversation notes
+  const [notesModalLead, setNotesModalLead] = useState(null); // open notes thread
+  const [notesPostCall, setNotesPostCall] = useState(false); // opened right after a call -> prompt the assistant
+  const [prefillDraft, setPrefillDraft] = useState(''); // seed the text composer (e.g. after a no-answer call)
+
+  // The text we drop into the composer when a call goes unanswered. References
+  // our offer if one is out, otherwise just a friendly "just tried you".
+  const buildNoAnswerText = (l) => {
+    const first = (l?.name || l?.full_name || '').trim().split(' ')[0] || 'there';
+    const sender = (currentUserName || '').trim().split(' ')[0] || 'Anthony';
+    const county = l?.property_county || l?.county || l?.form_data?.county || '';
+    const where = county ? ` in ${county} County` : '';
+    const stage = (l?.pipeline_status || l?.status || '').toUpperCase();
+    const offered = !!l?.offer_amount || ['OFFER_SENT', 'NEGOTIATING', 'OFFER_CURATED'].includes(stage);
+    return offered
+      ? `Hey ${first}, this is ${sender} with Haven Ground. Just tried you to check in on our offer for the land${where}. Give me a shout when you get a sec.`
+      : `Hey ${first}, this is ${sender} with Haven Ground. Just tried giving you a call about the land${where} you wanted us to look at. When is a good time to connect?`;
+  };
+
+  // Replace campaign merge tokens with the lead's real values, at enrollment.
+  const fillTokens = (msg, l) => {
+    const first = (l?.name || l?.full_name || '').trim().split(' ')[0] || 'there';
+    const county = l?.property_county || l?.county || l?.form_data?.county || '';
+    const state = l?.property_state || l?.state || l?.form_data?.state || '';
+    const acres = l?.acreage || l?.acres || l?.form_data?.acreage || '';
+    const sender = (currentUserName || '').trim().split(' ')[0] || 'Anthony';
+    return (msg || '')
+      .replace(/\{\{\s*first\s*\}\}/gi, first)
+      .replace(/\{\{\s*county\s*\}\}/gi, county)
+      .replace(/\{\{\s*state\s*\}\}/gi, state)
+      .replace(/\{\{\s*acres\s*\}\}/gi, acres)
+      .replace(/\{\{\s*sender\s*\}\}/gi, sender);
+  };
+
+  // Campaigns/drip removed. Inert state kept so nothing that still reads it breaks.
+  const [enrollmentsByLead] = useState({});
+  // Follow-Up campaigns: list for the per-card "Add to campaign" control, plus
+  // which campaigns each lead is already enrolled in (so the card can show it).
+  const [campaignList, setCampaignList] = useState([]);
+  const [campaignsByLead, setCampaignsByLead] = useState({}); // leadId -> Set(campaignId)
+  const [campaignMenuLead, setCampaignMenuLead] = useState(null); // leadId whose enroll menu is open
+  const [campaignRefresh, setCampaignRefresh] = useState(0);
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      const { data: camps } = await supabase.from('campaigns').select('id, name, active').order('created_at', { ascending: true });
+      const { data: enr } = await supabase.from('campaign_enrollments').select('lead_id, campaign_id, status');
+      if (cancel) return;
+      setCampaignList((camps || []).filter(c => c.active !== false && !String(c.name || '').startsWith('__settings') && c.name !== 'Appointment Reminders'));
+      const byLead = {};
+      (enr || []).forEach(e => { if (e.status === 'active') (byLead[e.lead_id] = byLead[e.lead_id] || new Set()).add(e.campaign_id); });
+      setCampaignsByLead(byLead);
+    })();
+    return () => { cancel = true; };
+  }, [campaignRefresh]);
+  useEffect(() => {
+    if (!campaignMenuLead) return;
+    const close = () => setCampaignMenuLead(null);
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [campaignMenuLead]);
+  const enrollLeadInCampaign = async (lead, campaignId) => {
+    try {
+      const res = await fetch('/api/campaigns/enroll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ campaignId, leadIds: [lead.id], userId: currentUserId }) });
+      const j = await res.json();
+      if (!j.ok) throw new Error(j.error || 'failed');
+      const cp = campaignList.find(c => c.id === campaignId);
+      setCampaignMenuLead(null);
+      if (j.already && !j.enrolled) { showToast('Already in that campaign', 'info'); return; }
+      showToast(`Added to ${cp?.name || 'campaign'}`, 'success', lead.full_name || lead.name);
+      setCampaignRefresh(t => t + 1);
+    } catch (e) { showToast('Could not add to campaign: ' + e.message, 'error'); }
+  };
+  const [frozenBoardLeads, setFrozenBoardLeads] = useState(null); // snapshot so cards don't reshuffle while a modal is open
+  const [notesRefresh, setNotesRefresh] = useState(0);
+  const [activityLogDate, setActivityLogDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [activityLog, setActivityLog] = useState([]);
+  const [activityLogLoading, setActivityLogLoading] = useState(false);
+  const [noteRoster, setNoteRoster] = useState([]); // [{id,name}] taggable teammates
+  const [usersById, setUsersById] = useState({}); // userId -> display name
+  // Lead ids that are ACTIVELY enrolled in a drip campaign. Those leads are worked
+  // from the campaign view, so they drop out of PPC Inflow to keep inflow clean
+  // (the "card moves to the campaign" flow). Kept live via realtime below.
+  const [campaignEnrolledIds, setCampaignEnrolledIds] = useState(() => new Set());
+  const loadEnrolled = async () => {
+    // Only ACTIVELY dripping leads are "in the campaign" (out of inflow). The moment
+    // a lead replies they come back onto the inflow conveyor belt to be worked
+    // (that's handled below by the inbound-reply check, even before the drip stops).
+    const { data } = await supabase.from('campaign_enrollments').select('lead_id, status').eq('status', 'active');
+    setCampaignEnrolledIds(new Set((data || []).map(e => e.lead_id)));
+  };
+  // A lead sits in the campaign (out of inflow) only while it's dripping AND hasn't
+  // replied. A reply (last_contact_dir inbound) pulls it straight back to inflow.
+  const inCampaign = (l) => campaignEnrolledIds.has(l.id) && String(l.last_contact_dir || '').toLowerCase() !== 'inbound';
+  useEffect(() => {
+    loadEnrolled();
+    const ch = supabase.channel('crm-enrollments-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'campaign_enrollments' }, () => loadEnrolled())
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, []);
+
+  // ---- Internal appointment reminders (for US, not the seller). A ticking clock
+  // drives a banner of appointments starting within 30 min, and fires a one-time
+  // toast ("Appointment with X in N min") as each crosses into the window. ----
+  const [nowTick, setNowTick] = useState(Date.now());
+  useEffect(() => { const iv = setInterval(() => setNowTick(Date.now()), 30000); return () => clearInterval(iv); }, []);
+  // Ask once for OS notification permission so appointment reminders pop even when
+  // the CRM tab is in the background (not just an on-screen toast you might miss).
+  useEffect(() => {
+    try { if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission().catch(() => {}); } catch {}
+  }, []);
+  // Banner shows appointments coming up within the next 4 hours (so you can see
+  // them all along); the toast / OS notification / tab bubble only fire for the
+  // imminent ones (within 30 min). Use new Date (not parseTs) so the countdown
+  // matches how the calendar reads the time.
+  const upcomingAppts = useMemo(() => {
+    const now = nowTick;
+    return (scheduledTasks || [])
+      .filter(t => t.task_type === 'meeting' && t.status === 'pending' && t.due_at && !/^BLOCKED/i.test(t.title || '') && t.lead_id)
+      .map(t => ({ task: t, mins: Math.round((new Date(t.due_at).getTime() - now) / 60000) }))
+      .filter(x => x.mins >= 0 && x.mins <= 240)
+      .sort((a, b) => a.mins - b.mins);
+  }, [scheduledTasks, nowTick]);
+  const imminentAppts = useMemo(() => upcomingAppts.filter(x => x.mins <= 30), [upcomingAppts]);
+  const fmtCountdown = (m) => m < 60 ? `in ${m <= 1 ? 'a few' : m} min` : `in ${Math.floor(m / 60)}h ${m % 60}m`;
+  const apptAlerted = useRef(null);
+  if (apptAlerted.current === null) {
+    try { apptAlerted.current = new Set(JSON.parse(localStorage.getItem('pr_appt_alerted') || '[]')); } catch { apptAlerted.current = new Set(); }
+  }
+  useEffect(() => {
+    for (const { task, mins } of imminentAppts) {
+      const key = `${task.id}:${new Date(task.due_at).getTime()}`; // re-alerts if rescheduled
+      if (apptAlerted.current.has(key)) continue;
+      apptAlerted.current.add(key);
+      try { localStorage.setItem('pr_appt_alerted', JSON.stringify([...apptAlerted.current].slice(-200))); } catch {}
+      const lead = (allLeads || []).find(l => l.id === task.lead_id) || (rawLeads || []).find(l => l.id === task.lead_id);
+      const nm = lead?.full_name || lead?.name || 'a seller';
+      const when = new Date(task.due_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      showToast(`Appointment with ${nm} in ${mins <= 1 ? 'a few' : mins} min`, 'success', nm);
+      // OS-level notification: pops even if the CRM tab is backgrounded.
+      try {
+        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          new Notification(`Appointment in ${mins <= 1 ? 'a few' : mins} min`, { body: `${nm} at ${when}`, tag: key, renotify: true });
+        }
+      } catch {}
+    }
+  }, [imminentAppts]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live: any new text/call activity refreshes the cards' Last Contacted + unread.
+  useEffect(() => {
+    const ch = supabase
+      .channel('pb-activities-live')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activities' }, () =>
+        setContactRefresh((t) => t + 1)
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, []);
+
+  // LIVE UPDATES (no refresh needed): new leads appear, status/field edits by
+  // anyone show up, notes/comments reload, and scheduled tasks stay in sync, all
+  // in real time. Requires the tables to be in the supabase_realtime publication.
+  useEffect(() => {
+    const ch = supabase
+      .channel('crm-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, (payload) => {
+        setRawLeads((prev) => {
+          if (payload.eventType === 'DELETE') return prev.filter((l) => l.id !== payload.old?.id);
+          const row = payload.new;
+          if (!row?.id) return prev;
+          const idx = prev.findIndex((l) => l.id === row.id);
+          if (idx === -1) return [{ ...row }, ...prev]; // brand-new lead, live
+          const next = [...prev];
+          // Keep the partner-push chips we overlaid from the dedicated table.
+          next[idx] = { ...next[idx], ...row, partner_pushes: next[idx].partner_pushes || row.partner_pushes };
+          return next;
+        });
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lead_notes' }, () => {
+        setNotesRefresh((t) => t + 1);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'scheduled_tasks' }, (payload) => {
+        setScheduledTasks((prev) => {
+          if (payload.eventType === 'DELETE') return prev.filter((t) => t.id !== payload.old?.id);
+          const row = payload.new;
+          if (!row?.id) return prev;
+          // The in-memory list holds only pending tasks (matches the initial query).
+          if (row.status && row.status !== 'pending') return prev.filter((t) => t.id !== row.id);
+          const idx = prev.findIndex((t) => t.id === row.id);
+          if (idx === -1) return [...prev, row];
+          const next = [...prev]; next[idx] = { ...next[idx], ...row }; return next;
+        });
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, []);
+
+  // Card summaries (Last Contacted + on-card snippet + unread) come straight
+  // from Project Blue's recent-message feed in one call, so they always match
+  // reality regardless of where a text was sent from. Unread is tracked per
+  // lead in localStorage (cleared when you open the thread).
+  useEffect(() => {
+    if (!allLeads.length) return;
+    let cancelled = false;
+    const compute = async () => {
+      try {
+        const res = await fetch('/api/pb/recent?limit=100');
+        const data = await res.json();
+        if (cancelled || !Array.isArray(data.messages)) return;
+        let lastViewed = {};
+        try {
+          lastViewed = JSON.parse(localStorage.getItem('pb_last_viewed') || '{}');
+        } catch {}
+        // Key by phone (last 10 digits), NOT lead id, so every lead record
+        // sharing a number (duplicates included) gets the summary.
+        const meta = {};
+        for (const m of data.messages) {
+          const outbound = m.direction === 'outbound';
+          const key = phoneKey(outbound ? m.to_number : m.from_number);
+          if (key.length !== 10) continue;
+          const ts = m.sent_at || m.created_at;
+          if (!meta[key]) {
+            meta[key] = {
+              last: {
+                activity_type: 'TEXT',
+                direction: outbound ? 'OUTBOUND' : 'INBOUND',
+                message_content: m.content,
+                created_at: ts,
+              },
+              unread: 0,
+            };
+          }
+          if (!outbound) {
+            const lv = lastViewed[key];
+            if (!lv || new Date(ts) > new Date(lv)) meta[key].unread += 1;
+          }
+        }
+        setContactMeta(meta);
+      } catch {}
+    };
+    compute();
+    const iv = setInterval(compute, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+    };
+  }, [allLeads.length, contactRefresh]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Mark a lead's thread viewed (clears its unread badge) and open it.
+  const openConversation = (lead) => {
+    const key = phoneKey(lead?.phone || lead?.owner_phone);
+    try {
+      const lv = JSON.parse(localStorage.getItem('pb_last_viewed') || '{}');
+      if (key) lv[key] = new Date().toISOString();
+      localStorage.setItem('pb_last_viewed', JSON.stringify(lv));
+    } catch {}
+    setConversationLead(lead);
+    setContactRefresh((t) => t + 1);
+  };
+
+  // Taggable roster (admin + acquisition manager) + author-name lookup.
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from('users').select('id, full_name, role');
+      if (!data) return;
+      const byId = {};
+      for (const u of data) byId[u.id] = u.full_name || 'User';
+      setUsersById(byId);
+      setNoteRoster(
+        data
+          .filter((u) => u.role === 'admin' || u.role === 'acquisition_manager')
+          .map((u) => ({ id: u.id, name: (u.full_name || 'User').split(' ')[0] }))
+      );
+    })();
+  }, []);
+
+  // Batch-load recent conversation notes for every visible lead (all authors).
+  useEffect(() => {
+    if (!allLeads.length) return;
+    let cancelled = false;
+    const loadNotes = async () => {
+      // Fetch recent notes GLOBALLY (not .in() over hundreds of lead ids, which
+      // overflows the request URL and fails). Group by lead_id client-side.
+      // PostgREST ilike wildcard is *, not %, exclude auto-activity logs.
+      const { data } = await supabase
+        .from('lead_notes')
+        .select('id, lead_id, content, created_at, user_id')
+        .not('content', 'ilike', '[VM]*')
+        .not('content', 'ilike', '[TEXT]*')
+        .not('content', 'ilike', '[CALL]*')
+        .not('content', 'ilike', '[EMAIL]*')
+        .not('content', 'ilike', '[DAILY RUNDOWN]*')
+        .order('created_at', { ascending: false })
+        .limit(1500);
+      if (cancelled || !data) return;
+      const map = {};
+      for (const n of data) {
+        if (!isConversationNote(n.content)) continue;
+        if (!map[n.lead_id]) map[n.lead_id] = [];
+        if (map[n.lead_id].length < 3) map[n.lead_id].push(n); // newest 3
+      }
+      setNotesByLead(map);
+    };
+    loadNotes();
+    const iv = setInterval(loadNotes, 20000); // live for teammates' notes
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [allLeads.length, notesRefresh]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Activity Log: load every call/text/note for the selected day, attributed.
+  useEffect(() => {
+    if (activeTab !== 'activity-log') return;
+    let cancelled = false;
+    (async () => {
+      setActivityLogLoading(true);
+      const start = new Date(activityLogDate + 'T00:00:00');
+      const end = new Date(start); end.setDate(end.getDate() + 1);
+      const [acts, notesRes] = await Promise.all([
+        supabase.from('activities').select('id, lead_id, user_id, activity_type, direction, outcome, message_content, created_at').gte('created_at', start.toISOString()).lt('created_at', end.toISOString()).order('created_at', { ascending: false }),
+        supabase.from('lead_notes').select('id, lead_id, user_id, content, created_at').gte('created_at', start.toISOString()).lt('created_at', end.toISOString()).order('created_at', { ascending: false }),
+      ]);
+      if (cancelled) return;
+      const items = [];
+      for (const a of (acts.data || [])) items.push({ kind: 'activity', ...a });
+      for (const n of (notesRes.data || [])) {
+        if (isConversationNote(n.content)) items.push({ kind: 'note', id: n.id, lead_id: n.lead_id, user_id: n.user_id, activity_type: 'NOTE', direction: null, outcome: null, message_content: n.content, created_at: n.created_at });
+      }
+      items.sort((x, y) => new Date(y.created_at) - new Date(x.created_at));
+      setActivityLog(items);
+      setActivityLogLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [activeTab, activityLogDate]);
+
+  const openNotes = (lead) => setNotesModalLead(lead);
+
+  // Deep link from a notification: /admin/land?lead=<id> opens that lead's notes.
+  const openedFromParam = useRef(false);
+  useEffect(() => {
+    if (openedFromParam.current || !allLeads.length || typeof window === 'undefined') return;
+    const leadId = new URLSearchParams(window.location.search).get('lead');
+    if (!leadId) return;
+    const lead = allLeads.find((l) => l.id === leadId);
+    if (lead) {
+      openedFromParam.current = true;
+      setNotesModalLead(lead);
+      window.history.replaceState({}, '', '/admin/land');
+    }
+  }, [allLeads.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const allLeadsRef = useRef(allLeads);
+  useEffect(() => { allLeadsRef.current = allLeads; }, [allLeads]);
+
+  // While any lead modal is open (texting, calling, notes, details), freeze the
+  // board's contents and order so cards don't jump around while you read info
+  // off a card or type a message. It refreshes the moment everything closes.
+  useEffect(() => {
+    const open = !!(conversationLead || notesModalLead || callLead || detailsModalOpen);
+    if (open) setFrozenBoardLeads((cur) => cur || allLeadsRef.current);
+    else setFrozenBoardLeads(null);
+  }, [conversationLead, notesModalLead, callLead, detailsModalOpen]);
+  const boardLeads = frozenBoardLeads || allLeads;
+
+  // Subdivision leads are manually uploaded (not imported from PPC) and worked
+  // in their own Subdivision Inflow tab (agent follow-up, underwriting, offers)
+  // with the same card abilities as PPC. They CROSS OVER into the shared
+  // pipeline tabs only once they reach Agreement Sent and beyond.
+  const SUBDIV_CROSSOVER = ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'];
+  const isSubdivisionInflow = (l) =>
+    l.source === 'subdivision' &&
+    l.status !== 'archived' &&
+    !SUBDIV_CROSSOVER.includes((l.pipeline_status || l.status || '').toUpperCase());
+
+  // Keep a tab's card order stable so live updates (e.g. sending a text bumping
+  // last_activity_at) don't make a card leap to the top and steal your place.
+  // Order is recomputed only when the view key changes (tab, sort, filters);
+  // within a view, live data updates a card's contents but not its position.
+  // New leads that appear are appended at the end.
+  const boardOrderRef = useRef({ key: '', rank: new Map(), next: 0 });
+  const stableOrder = (list, comparator, viewKey) => {
+    const ref = boardOrderRef.current;
+    if (ref.key !== viewKey) {
+      const sorted = [...list].sort(comparator);
+      const rank = new Map();
+      sorted.forEach((l, i) => rank.set(l.id, i));
+      boardOrderRef.current = { key: viewKey, rank, next: sorted.length };
+      return sorted;
+    }
+    // Give any lead we have not ranked yet (late loads, new arrivals) a permanent
+    // rank at the end, in its current order. Once a lead has a rank it never
+    // changes within this view, so a sent text can't move a card.
+    const newcomers = list.filter((l) => !ref.rank.has(l.id));
+    if (newcomers.length) {
+      newcomers.sort(comparator).forEach((l) => ref.rank.set(l.id, ref.next++));
+    }
+    return [...list].sort((a, b) => ref.rank.get(a.id) - ref.rank.get(b.id));
+  };
+
+  // Clicking a notification opens that lead's note (mention) or text (sms) in-page.
+  const handleOpenNotification = async (n) => {
+    let leadId = null;
+    let view = null;
+    try {
+      const u = new URL(n?.link || '', window.location.origin);
+      leadId = u.searchParams.get('lead');
+      view = u.searchParams.get('view');
+    } catch {}
+    if (!leadId) {
+      showToast('This alert was created before deep-links existed, so it has no lead attached. Newer ones open the lead.', 'error');
+      return;
+    }
+    let lead = (allLeadsRef.current || []).find((l) => l.id === leadId);
+    if (!lead) {
+      const { data } = await supabase.from('leads').select('*').eq('id', leadId).maybeSingle();
+      lead = data;
+    }
+    if (!lead) {
+      showToast('Could not load that lead.', 'error');
+      return;
+    }
+    if (view === 'sms' || n.type === 'sms_inbound') setConversationLead(lead);
+    else setNotesModalLead(lead);
+  };
+
+  // Compact notes block shown on every lead card.
+  const renderNotesPreview = (lead) => {
+    const recent = notesByLead[lead.id] || [];
+    return (
+      <div className="mt-3 pt-3 border-t border-slate-700/40">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-[10px] uppercase tracking-wide text-slate-500">Notes{recent.length ? ` (${recent.length})` : ''}</span>
+          <button
+            onClick={(e) => { e.stopPropagation(); openNotes(lead); }}
+            className="text-xs px-2 py-1 rounded bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 font-medium"
+          >
+            {recent.length ? 'Open thread' : 'Add note'}
+          </button>
+        </div>
+        <div className="bg-slate-900/40 border border-slate-700/40 rounded-lg px-3 py-2">
+          {recent.length === 0 ? (
+            <div className="text-xs text-slate-500 text-center">No notes yet. Tag a teammate with @ to start.</div>
+          ) : (
+            <div className="space-y-1.5">
+              {recent.map((n) => (
+                <div key={n.id} className="text-xs text-slate-300 truncate">
+                  <span className="text-slate-500">{(usersById[n.user_id] || 'Teammate').split(' ')[0]} · {timeAgo(n.created_at)}:</span>{' '}
+                  {n.content}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+  const [rundownFilter, setRundownFilter] = useState(null); // For Daily Rundown tile clicks
+  const [toast, setToast] = useState(null); // { message, type, leadName }
+  const [actionInProgress, setActionInProgress] = useState(null); // { leadId, action }
+  const [completedToday, setCompletedToday] = useState(new Set()); // Lead IDs completed today
+  const [recentActivity, setRecentActivity] = useState([]); // Live activity feed
+  const [selectedCalendarDay, setSelectedCalendarDay] = useState(null); // For calendar day click
+  const [rundownVisibleCount, setRundownVisibleCount] = useState(20);
+  // Render cards in pages so a big tab (600+ leads) doesn't lag the board.
+  const [cardLimit, setCardLimit] = useState(60);
+
+  // Per-tab "new since you last looked" tracking. A red bubble shows the count of
+  // leads in a tab with activity (new lead / message / move / update, all of which
+  // bump last_activity_at) newer than the last time you opened that tab. Opening a
+  // tab stamps it seen and clears the bubble. Per-browser via localStorage; seeded
+  // to "now" on first load so you don't get flooded by the whole backlog.
+  const TAB_KEYS = ['ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent', 'campaigns', 'follow-up', 'lost'];
+  const [tabSeen, setTabSeen] = useState(() => {
+    if (typeof window === 'undefined') return {};
+    const VER = 'v3';
+    try {
+      const raw = localStorage.getItem('pr_tab_seen');
+      const ver = localStorage.getItem('pr_tab_seen_ver');
+      if (raw && ver === VER) return JSON.parse(raw);
+    } catch {}
+    // Clean slate: seed to NOW so the backlog doesn't flood the tabs. Only
+    // activity that happens from here on shows as new.
+    const seed = Date.now();
+    const init = {};
+    TAB_KEYS.forEach(t => { init[t] = seed; });
+    try { localStorage.setItem('pr_tab_seen', JSON.stringify(init)); localStorage.setItem('pr_tab_seen_ver', VER); } catch {}
+    return init;
+  });
+  const markTabSeen = (tab) => setTabSeen(prev => {
+    const next = { ...prev, [tab]: Date.now() };
+    try { localStorage.setItem('pr_tab_seen', JSON.stringify(next)); } catch {}
+    return next;
+  });
+  // Per-notification dismissal: clear one row independently (not just the whole tab).
+  // Keyed by person + event time, so a NEWER message from the same person still shows.
+  const [dismissedEvents, setDismissedEvents] = useState(() => {
+    if (typeof window === 'undefined') return new Set();
+    try { return new Set(JSON.parse(localStorage.getItem('pr_tab_dismissed') || '[]')); } catch { return new Set(); }
+  });
+  const evKey = (lead, ts) => `${(lead.phone || '').replace(/\D/g, '').slice(-10) || lead.id}:${Math.round(Number(ts) || 0)}`;
+  const dismissEvent = (lead, ts) => setDismissedEvents(prev => {
+    const next = new Set(prev); next.add(evKey(lead, ts));
+    try { localStorage.setItem('pr_tab_dismissed', JSON.stringify([...next])); } catch {}
+    return next;
+  });
+  // Build the "what's new" event list for a tab: which leads changed since it was
+  // last seen, and WHAT changed (new lead / new message / reached out / updated).
+  const _up = (l) => (l.pipeline_status || l.status || '').toUpperCase();
+  const _hasOffer = (l) => l.offer_amount != null && Number(l.offer_amount) !== 0;
+  // Each lead has exactly ONE home tab for notifications, so a notification never
+  // shows in two tabs at once. Offer Curated takes precedence over Inflow/Appt
+  // when a lead has an offer entered.
+  const homeTab = (l) => {
+    if ((l.status || '').toLowerCase() === 'archived') return 'archive';
+    const s = _up(l);
+    if (s === 'LOST') return 'lost';
+    if (s === 'FOLLOW_UP') return 'follow-up';
+    if (['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(s)) return 'agreement-sent';
+    if (['OFFER_SENT', 'NEGOTIATING'].includes(s)) return 'offer-made';
+    const early = ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'];
+    if (_hasOffer(l) && [...early, 'APPT_SET_FOR_JORDAN'].includes(s)) return 'offer-curated';
+    if (s === 'APPT_SET_FOR_JORDAN') return 'appointment-set';
+    return 'ppc-inflow';
+  };
+  // Furthest-stage rank for a lead (higher = deeper in the pipeline).
+  const stageRank = (l) => ({ 'ppc-inflow': 1, 'appointment-set': 2, 'offer-curated': 3, 'offer-made': 4, 'agreement-sent': 5, 'follow-up': 1, 'lost': 0, 'archive': 0 }[homeTab(l)] ?? 1);
+  // One person can have several lead records (they filled out multiple forms).
+  // Keep only each person's furthest-along record, so for notifications they count
+  // once, in the deepest stage they've reached, never in two tabs.
+  const primaryLeadIds = (() => {
+    const groups = {};
+    for (const l of (allLeads || [])) {
+      const key = (l.phone || '').replace(/\D/g, '').slice(-10) || l.id;
+      (groups[key] = groups[key] || []).push(l);
+    }
+    const ids = new Set();
+    for (const k in groups) {
+      const arr = groups[k].slice().sort((a, b) => stageRank(b) - stageRank(a)
+        || (parseTs(b.last_activity_at || b.created_at).getTime() - parseTs(a.last_activity_at || a.created_at).getTime()));
+      ids.add(arr[0].id);
+    }
+    return ids;
+  })();
+  // A silently-dripping lead notifies under 'campaigns'; once it replies it's back
+  // in inflow, so its reply shows on the inflow conveyor belt where it gets worked.
+  const notifTab = (l) => inCampaign(l) ? 'campaigns' : homeTab(l);
+  const leadInTabC = (l, tab) => primaryLeadIds.has(l.id) && notifTab(l) === tab;
+  // Tab-aware: the label reflects what matters in THAT tab (an appointment-set
+  // lead that changed reads "Appointment scheduled", not "We reached out").
+  const STAGE_EVENT = {
+    'appointment-set': { kind: 'Appointment scheduled', color: 'text-green-300', dot: 'bg-green-400' },
+    'offer-curated': { kind: 'Offer curated', color: 'text-amber-300', dot: 'bg-amber-400' },
+    'offer-made': { kind: 'Offer made', color: 'text-purple-300', dot: 'bg-purple-400' },
+    'agreement-sent': { kind: 'Contract signed', color: 'text-emerald-300', dot: 'bg-emerald-400' },
+    'follow-up': { kind: 'Moved to follow-up', color: 'text-rose-300', dot: 'bg-rose-400' },
+    'lost': { kind: 'Marked lost', color: 'text-zinc-300', dot: 'bg-zinc-400' },
+  };
+  // Label for the "arrived in this tab" notification, per tab, so an appointment
+  // that got set reads "New appointment" instead of "New lead" etc.
+  const TAB_NEW_LABEL = {
+    'ppc-inflow': { kind: 'New lead', color: 'text-emerald-300', dot: 'bg-emerald-400' },
+    'appointment-set': { kind: 'New appointment', color: 'text-green-300', dot: 'bg-green-400' },
+    'offer-curated': { kind: 'Offer curated', color: 'text-amber-300', dot: 'bg-amber-400' },
+    'offer-made': { kind: 'Offer made', color: 'text-purple-300', dot: 'bg-purple-400' },
+    'agreement-sent': { kind: 'Contract', color: 'text-emerald-300', dot: 'bg-emerald-400' },
+  };
+  const eventKind = (l, seen, tab) => {
+    // Dead / closed / lost / passed / nurture / archived leads never notify. Moving
+    // a sold lead to Dead (or any terminal stage) clears its notification everywhere.
+    const st = (l.pipeline_status || l.status || '').toUpperCase();
+    if ((l.status || '').toLowerCase() === 'archived' || ['DEAD', 'LOST', 'CLOSED', 'WE_PASSED', 'NURTURE'].includes(st)) return null;
+    const created = l.created_at ? parseTs(l.created_at).getTime() : 0;
+    const contact = l.last_contact_at ? parseTs(l.last_contact_at).getTime() : 0;
+    // Only two notifications, and both CLEAR the moment we act:
+    //  - a reply we haven't answered yet (last contact is inbound), and
+    //  - a brand-new lead we haven't reached out to yet (no contact at all).
+    // Once we text back / reach out, last_contact flips to outbound and both go away.
+    const calledAt = l.last_call_at ? parseTs(l.last_call_at).getTime() : 0;
+    // A reply is "answered" (notification clears) once we text back (last contact
+    // flips outbound) OR call them at/after their message.
+    if (contact > seen && l.last_contact_dir === 'inbound' && !(calledAt >= contact)) return { kind: 'New message', ts: contact, color: 'text-cyan-300', dot: 'bg-cyan-400' };
+    if (created > seen && !l.last_contact_at && !calledAt) { const lbl = TAB_NEW_LABEL[tab] || TAB_NEW_LABEL['ppc-inflow']; return { kind: lbl.kind, ts: created, color: lbl.color, dot: lbl.dot }; }
+    return null;
+  };
+  // Why a lead needs a touch right now (or null). Order 0 = most urgent.
+  // Ignores how long ago it happened, so a message buried from days ago still
+  // surfaces until it's answered. Terminal/archived leads are excluded.
+  const needsTouchInfo = (l) => {
+    const s = _up(l);
+    if (['LOST', 'CLOSED', 'DEAD', 'WE_PASSED', 'NURTURE'].includes(s)) return null;
+    if ((l.status || '').toLowerCase() === 'archived') return null;
+    const DAY = 86400000;
+    const now = Date.now();
+    const contact = l.last_contact_at ? parseTs(l.last_contact_at).getTime() : null;
+    const dir = l.last_contact_dir;
+    if (contact && dir === 'inbound') {
+      const days = Math.floor((now - contact) / DAY);
+      return { order: 0, color: 'red', reason: days >= 1 ? `They replied ${days}d ago, owe a response` : 'They replied, owe a response', ts: contact };
+    }
+    if (!contact) {
+      const age = l.created_at ? Math.floor((now - parseTs(l.created_at).getTime()) / DAY) : 0;
+      if (age >= 1) return { order: 1, color: 'red', reason: `Uncontacted ${age}d`, ts: l.created_at ? parseTs(l.created_at).getTime() : 0 };
+      return null;
+    }
+    if (contact && dir === 'outbound') {
+      const days = Math.floor((now - contact) / DAY);
+      if (days >= 3) return { order: 2, color: days >= 7 ? 'red' : 'amber', reason: `No reply in ${days}d`, ts: contact };
+    }
+    return null;
+  };
+  const needsTouchLeads = () => {
+    const out = [];
+    for (const l of (allLeads || [])) { const info = needsTouchInfo(l); if (info) out.push({ lead: l, ...info }); }
+    out.sort((a, b) => a.order - b.order || a.ts - b.ts); // most urgent group, then oldest first
+    return out;
+  };
+
+  const tabEventsFor = (tab) => {
+    const seen = tabSeen[tab];
+    if (seen == null) return [];
+    const out = [];
+    for (const l of (allLeads || [])) {
+      if (!leadInTabC(l, tab)) continue;
+      const e = eventKind(l, seen, tab);
+      if (e && !dismissedEvents.has(evKey(l, e.ts))) out.push({ lead: l, ...e });
+    }
+    out.sort((a, b) => b.ts - a.ts);
+    // Collapse duplicate lead records for the same person (same phone) to one row.
+    const seenKey = new Set();
+    const deduped = [];
+    for (const e of out) {
+      const key = (e.lead.phone || '').replace(/\D/g, '').slice(-10) || e.lead.id;
+      if (seenKey.has(key)) continue;
+      seenKey.add(key);
+      deduped.push(e);
+    }
+    return deduped;
+  };
+  const [ppcSearch, setPpcSearch] = useState('');
+  const [pipelineSearch, setPipelineSearch] = useState('');
+  const [pipelineMapped, setPipelineMapped] = useState(false);
+  const [pipelineSort, setPipelineSort] = useState('activity_desc');
+  // Overflow ("More") menu for secondary tabs, and appointment-calendar state.
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [calMonth, setCalMonth] = useState(() => { const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; });
+  const [calSelectedDay, setCalSelectedDay] = useState(() => new Date().toDateString());
+  // Reset the render cap whenever the tab or filters change, so each view starts
+  // light and only grows when you ask for more.
+  useEffect(() => { setCardLimit(60); }, [activeTab, ppcSearch, pipelineSearch, pipelineMapped, pipelineSort]);
+  // Clean View defaults to "newest pushed first"; exiting restores last-activity.
+  useEffect(() => {
+    setPipelineSort(cleanViewActive ? 'cleanview_desc' : 'activity_desc');
+  }, [cleanViewActive]);
+  // Engagement filters shared across PPC Inflow and the pipeline buckets.
+  const [needsResponseOnly, setNeedsResponseOnly] = useState(false); // last message was theirs
+  const [uncontactedOnly, setUncontactedOnly] = useState(false);     // still NEW, never reached
+  const [offerSetOnly, setOfferSetOnly] = useState(false);           // has a locked offer
+  const [untouchedDays, setUntouchedDays] = useState(0);             // no contact in N+ days (0 = off)
+  const [inflowDays, setInflowDays] = useState(7);                   // PPC Inflow: only leads from the last N days (0 = all)
+  const [partnerSearch, setPartnerSearch] = useState('');           // Partners tab lead search
+  const [partnerStage, setPartnerStage] = useState('active');       // Partners tab stage filter
+  const [partnerDirection, setPartnerDirection] = useState('');     // Partners tab lean/substatus filter
+  const [partnerSentFilter, setPartnerSentFilter] = useState('');   // Partners tab: filter by who it's been sent to
+  const passesEngagement = (l) => {
+    if (needsResponseOnly && (l.last_contact_dir || '').toLowerCase() !== 'inbound') return false;
+    if (uncontactedOnly) {
+      const s = (l.pipeline_status || l.status || '').toUpperCase();
+      if (s && s !== 'NEW') return false;
+    }
+    if (offerSetOnly && !l.offer_confirmed) return false;
+    if (untouchedDays > 0) {
+      // Measure from the last touch, or from when the lead arrived if never
+      // touched, so a brand-new lead isn't counted as "untouched 7d+".
+      const t = l.last_contact_at || l.last_activity_at || l.created_at;
+      if (!t) return false;
+      if (new Date(t).getTime() > Date.now() - untouchedDays * 86400000) return false;
+    }
+    return true;
+  };
+  // Filter chips reused in both the PPC Inflow and bucket filter rows.
+  const renderEngagementFilters = () => {
+    const chip = (on) => `px-3 py-2 rounded-lg text-sm font-medium border ${on ? 'bg-blue-600/30 border-blue-600/50 text-blue-200' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`;
+    return (
+      <>
+        <button onClick={() => setNeedsResponseOnly((v) => !v)} className={chip(needsResponseOnly)} title="Their text is the last message, you owe a reply">
+          {needsResponseOnly ? '✓ ' : ''}Needs response
+        </button>
+        <button onClick={() => setUncontactedOnly((v) => !v)} className={chip(uncontactedOnly)} title="Still New, never reached">
+          {uncontactedOnly ? '✓ ' : ''}Haven't contacted
+        </button>
+        <button onClick={() => setOfferSetOnly((v) => !v)} className={chip(offerSetOnly)} title="Has a locked offer">
+          {offerSetOnly ? '✓ ' : ''}Offer set
+        </button>
+        <select value={untouchedDays} onChange={(e) => setUntouchedDays(Number(e.target.value))} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500">
+          <option value={0}>Any last touch</option>
+          <option value={1}>Untouched 1d+</option>
+          <option value={2}>Untouched 2d+</option>
+          <option value={3}>Untouched 3d+</option>
+          <option value={7}>Untouched 7d+</option>
+        </select>
+      </>
+    );
+  };
+  const [convoCompleteTask, setConvoCompleteTask] = useState(null);
+  const [convoNotes, setConvoNotes] = useState('');
+  const [convoModalOpen, setConvoModalOpen] = useState(false);
+  const [convoScheduleDate, setConvoScheduleDate] = useState('');
+  const [convoScheduleTime, setConvoScheduleTime] = useState('');
+  const [convoSaving, setConvoSaving] = useState(false);
+  const [editingTaskTime, setEditingTaskTime] = useState(null); // task id being edited
+  const [editingTimeValue, setEditingTimeValue] = useState('');
+  const [editingDateValue, setEditingDateValue] = useState('');
+  const [calendarModalOpen, setCalendarModalOpen] = useState(false);
+  const [calendarLead, setCalendarLead] = useState(null);
+  const [calendarMonth, setCalendarMonth] = useState(new Date().getMonth());
+  const [calendarYear, setCalendarYear] = useState(new Date().getFullYear());
+  const [calendarSelectedDay, setCalendarSelectedDay] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(new Date());
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Subdivision Inflow states
+  const [subdivSearch, setSubdivSearch] = useState('');
+  const [subdivForm, setSubdivForm] = useState({
+    county: '', state: 'TX', acreage: '', seller_name: '',
+    agent_name: '', agent_phone: '', agent_email: '', parcel_id: ''
+  });
+  const [subdivCreating, setSubdivCreating] = useState(false);
+  const [subdivFormOpen, setSubdivFormOpen] = useState(false);
+
+  // Schedule Task states
+  const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
+  const [scheduleLeadId, setScheduleLeadId] = useState(null);
+  const [scheduleType, setScheduleType] = useState('callback');
+  const [scheduleDate, setScheduleDate] = useState('');
+  const [scheduleTime, setScheduleTime] = useState('');
+  const [scheduleNote, setScheduleNote] = useState('');
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [scheduledTasks, setScheduledTasks] = useState([]);
+  const [editingScheduleTaskId, setEditingScheduleTaskId] = useState(null);
+
+  // APPT_SET_FOR_JORDAN booking modal
+  const [apptModalOpen, setApptModalOpen] = useState(false);
+  const [apptModalLeadId, setApptModalLeadId] = useState(null);
+  const [apptDate, setApptDate] = useState('');
+  const [apptTime, setApptTime] = useState('');
+  const [apptNote, setApptNote] = useState('');
+  const [apptTz, setApptTz] = useState('America/Chicago'); // seller's timezone, required
+  const [apptSaving, setApptSaving] = useState(false);
+  // Block off personal time (e.g. engineering meeting) so no appt can be booked over it.
+  const [blockModalOpen, setBlockModalOpen] = useState(false);
+  const [blockDate, setBlockDate] = useState('');
+  const [blockTime, setBlockTime] = useState('');
+  const [blockTz, setBlockTz] = useState('America/Chicago');
+  const [blockLabel, setBlockLabel] = useState('');
+  const submitBlock = async () => {
+    if (!blockDate || !blockTime) { showToast('Date and time required', 'error'); return; }
+    const dueAt = zonedToUtcISO(blockDate, blockTime, blockTz);
+    const { data, error } = await supabase.from('scheduled_tasks').insert({
+      assigned_to: adminUserId, created_by: currentUserId, task_type: 'meeting',
+      title: `BLOCKED — ${blockLabel || 'Unavailable'}`, description: `Blocked time · ${tzAbbr(blockTz)}`,
+      due_at: dueAt, status: 'pending', priority: 'high',
+    }).select().single();
+    if (error) { showToast('Could not block time', 'error'); return; }
+    if (data) setScheduledTasks(prev => [...prev, data]);
+    showToast('Time blocked off'); setBlockModalOpen(false); setBlockLabel('');
+  };
+  // One-click: block (or unblock) a whole day. dateStr is a toDateString() value.
+  const toggleDayBlock = async (dateStr) => {
+    const existing = (scheduledTasks || []).find(t => t.task_type === 'meeting' && t.status === 'pending' && /^BLOCKED/i.test(t.title || '') && (t.description || '').includes('allday') && new Date(t.due_at).toDateString() === dateStr);
+    if (existing) {
+      setScheduledTasks(prev => prev.filter(t => t.id !== existing.id));
+      await supabase.from('scheduled_tasks').update({ status: 'cancelled' }).eq('id', existing.id);
+      showToast('Day unblocked');
+      return;
+    }
+    const dd = new Date(dateStr); dd.setHours(12, 0, 0, 0);
+    const { data, error } = await supabase.from('scheduled_tasks').insert({
+      assigned_to: adminUserId, created_by: currentUserId, task_type: 'meeting',
+      title: 'BLOCKED — Day off', description: 'allday', due_at: dd.toISOString(), status: 'pending', priority: 'high',
+    }).select().single();
+    if (error) { showToast('Could not block day', 'error'); return; }
+    if (data) setScheduledTasks(prev => [...prev, data]);
+    showToast('Day blocked off');
+  };
+  // Block (or unblock) a single hour. dateStr is a toDateString() value, hour is 0-23
+  // in the browser's local time (same clock the calendar renders appointments in).
+  const toggleHourBlock = async (dateStr, hour) => {
+    const d = new Date(dateStr); d.setHours(hour, 0, 0, 0);
+    const existing = (scheduledTasks || []).find(t => t.task_type === 'meeting' && t.status === 'pending' && /^BLOCKED/i.test(t.title || '') && (t.description || '').includes('hourblock') && new Date(t.due_at).getTime() === d.getTime());
+    if (existing) {
+      setScheduledTasks(prev => prev.filter(t => t.id !== existing.id));
+      await supabase.from('scheduled_tasks').update({ status: 'cancelled' }).eq('id', existing.id);
+      return;
+    }
+    const { data, error } = await supabase.from('scheduled_tasks').insert({
+      assigned_to: adminUserId, created_by: currentUserId, task_type: 'meeting',
+      title: 'BLOCKED — Unavailable', description: 'hourblock', due_at: d.toISOString(), status: 'pending', priority: 'high',
+    }).select().single();
+    if (error) { showToast('Could not block that hour', 'error'); return; }
+    if (data) setScheduledTasks(prev => [...prev, data]);
+  };
+
+  // ---- Appointment reminders: a REAL campaign row named "Appointment Reminders"
+  // so it lives in the Follow-Up Campaigns list and turns on/off like any other.
+  // steps = array of { enabled, hoursBefore, message } (one or more reminders). ----
+  const REMINDER_CAMPAIGN_NAME = 'Appointment Reminders';
+  const DEFAULT_REMINDER_ITEM = { enabled: true, hoursBefore: 3, message: 'Hi {{first}}, this is Jordan with Haven Ground. Reminder of our appointment today at {{time}} to talk about your land. Looking forward to it!' };
+  const [reminders, setReminders] = useState([DEFAULT_REMINDER_ITEM]);
+  const [reminderActive, setReminderActive] = useState(true); // the campaign on/off
+  const [reminderOpen, setReminderOpen] = useState(false);
+  const [reminderSaving, setReminderSaving] = useState(false);
+  useEffect(() => {
+    (async () => {
+      try {
+        // Prefer the new named campaign; migrate the legacy hidden settings row if found.
+        let { data } = await supabase.from('campaigns').select('id, steps, active, name').eq('name', REMINDER_CAMPAIGN_NAME).maybeSingle();
+        if (!data) {
+          const { data: legacy } = await supabase.from('campaigns').select('id, steps, active').eq('name', '__settings:appointment_reminder').maybeSingle();
+          if (legacy?.id) {
+            await supabase.from('campaigns').update({ name: REMINDER_CAMPAIGN_NAME, description: 'Automatic texts before each scheduled appointment', active: legacy.active !== false }).eq('id', legacy.id);
+            data = legacy;
+          }
+        }
+        if (Array.isArray(data?.steps) && data.steps.length) setReminders(data.steps.map(s => ({ enabled: s.enabled !== false, hoursBefore: Number(s.hoursBefore) || 3, message: s.message || DEFAULT_REMINDER_ITEM.message })));
+        if (data) setReminderActive(data.active !== false);
+      } catch { /* ignore */ }
+    })();
+  }, []);
+  const addReminder = () => setReminders(prev => [...prev, { enabled: true, hoursBefore: 24, message: 'Hi {{first}}, looking forward to our call tomorrow at {{time}}. Talk soon, Jordan with Haven Ground.' }]);
+  const updateReminder = (i, patch) => setReminders(prev => prev.map((r, j) => j === i ? { ...r, ...patch } : r));
+  const removeReminder = (i) => setReminders(prev => prev.filter((_, j) => j !== i));
+  const saveReminderCfg = async () => {
+    setReminderSaving(true);
+    try {
+      const clean = reminders.map(r => ({ enabled: r.enabled !== false, hoursBefore: Number(r.hoursBefore) > 0 ? Number(r.hoursBefore) : 3, message: r.message || '' }));
+      const payload = { name: REMINDER_CAMPAIGN_NAME, description: 'Automatic texts before each scheduled appointment', steps: clean, active: reminderActive };
+      const { data: ex } = await supabase.from('campaigns').select('id').eq('name', REMINDER_CAMPAIGN_NAME).maybeSingle();
+      let error;
+      if (ex?.id) ({ error } = await supabase.from('campaigns').update(payload).eq('id', ex.id));
+      else ({ error } = await supabase.from('campaigns').insert(payload));
+      if (error) throw error;
+      showToast('Reminders saved'); setReminderOpen(false); setCampaignRefresh(t => t + 1);
+    } catch (e) { showToast('Could not save reminders', 'error'); }
+    setReminderSaving(false);
+  };
+
+  // ---- Appointment outcomes (complete / reschedule / no-show) ----
+  const [outcomeFor, setOutcomeFor] = useState(null); // meeting task id with the complete panel open
+  const [outcomeNotes, setOutcomeNotes] = useState('');
+  const completeAppt = async (task, nextStatus) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (outcomeNotes.trim()) {
+        await supabase.from('lead_notes').insert({ lead_id: task.lead_id, user_id: user?.id || null, content: `[APPOINTMENT COMPLETED] ${outcomeNotes.trim()}`, mentioned_users: [] });
+      }
+      await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', task.id);
+      await supabase.from('leads').update({ pipeline_status: nextStatus, status: nextStatus.toLowerCase(), last_activity_at: new Date().toISOString() }).eq('id', task.lead_id);
+      setScheduledTasks(prev => prev.filter(t => t.id !== task.id));
+      setRawLeads(prev => prev.map(l => l.id === task.lead_id ? { ...l, pipeline_status: nextStatus } : l));
+      setOutcomeFor(null); setOutcomeNotes('');
+      showToast('Appointment completed', 'success');
+    } catch (e) { showToast('Could not complete appointment', 'error'); }
+  };
+  const rescheduleAppt = (task) => {
+    setApptModalLeadId(task.lead_id);
+    setApptDate(''); setApptTime('');
+    setApptModalOpen(true);
+  };
+  const noShowAppt = async (task) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      await supabase.from('lead_notes').insert({ lead_id: task.lead_id, user_id: user?.id || null, content: '[NO-SHOW] Seller missed the appointment. Text + call to reschedule.', mentioned_users: [] });
+      await supabase.from('scheduled_tasks').update({ status: 'cancelled', completed_at: new Date().toISOString() }).eq('id', task.id);
+      await supabase.from('leads').update({ pipeline_status: 'FOLLOW_UP', status: 'follow_up', last_activity_at: new Date().toISOString() }).eq('id', task.lead_id);
+      const cb = { lead_id: task.lead_id, assigned_to: adminUserId || user?.id || null, created_by: user?.id || null, task_type: 'callback', title: 'Reschedule (no-show)', description: 'Missed appointment, text + call to reschedule', due_at: new Date(Date.now() + 3600000).toISOString(), status: 'pending', priority: 'high' };
+      const { data: cbRow } = await supabase.from('scheduled_tasks').insert(cb).select().single();
+      setScheduledTasks(prev => prev.filter(t => t.id !== task.id).concat(cbRow ? [cbRow] : []));
+      setRawLeads(prev => prev.map(l => l.id === task.lead_id ? { ...l, pipeline_status: 'FOLLOW_UP' } : l));
+      showToast('Marked no-show, moved to Follow-Up to reschedule', 'success');
+    } catch (e) { showToast('Could not mark no-show', 'error'); }
+  };
+
+  // Session Analytics states
+  const [analyticsSubTab, setAnalyticsSubTab] = useState('live-feed');
+  const [liveSessions, setLiveSessions] = useState([]);
+  const [funnelData, setFunnelData] = useState([]);
+  const [allTrackingSessions, setAllTrackingSessions] = useState([]);
+  const [selectedReplaySession, setSelectedReplaySession] = useState(null);
+  const [replayEvents, setReplayEvents] = useState(null);
+  const [replayLoading, setReplayLoading] = useState(false);
+  const [heatmapStep, setHeatmapStep] = useState(1);
+  const [heatmapClicks, setHeatmapClicks] = useState([]);
+  const [analyticsDateRange, setAnalyticsDateRange] = useState('7d');
+  const replayContainerRef = useRef(null);
+  const replayPlayerRef = useRef(null);
+
+  // Add to activity feed
+  const addActivity = (leadName, action, type = 'success') => {
+    const activity = {
+      id: Date.now(),
+      leadName,
+      action,
+      type,
+      time: new Date()
+    };
+    setRecentActivity(prev => [activity, ...prev].slice(0, 10)); // Keep last 10
+  };
+
+  // Show toast notification
+  const showToast = (message, type = 'success', leadName = '') => {
+    setToast({ message, type, leadName });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  // Mark lead as done for today (removes from daily rundown)
+  const markDoneForToday = async (leadId, outcome = 'SPOKE') => {
+    const lead = allLeads.find(l => l.id === leadId);
+    const leadName = lead?.full_name || lead?.name || 'Lead';
+
+    setActionInProgress({ leadId, action: 'done' });
+
+    try {
+      // Log the activity
+      const { data: { user } } = await supabase.auth.getUser();
+
+      await supabase.from('activities').insert({
+        lead_id: leadId,
+        user_id: user?.id,
+        activity_type: 'CALL',
+        outcome: outcome,
+        created_at: new Date().toISOString()
+      });
+
+      if (user) {
+        await supabase.from('lead_notes').insert({
+          lead_id: leadId,
+          user_id: user.id,
+          content: `[DAILY RUNDOWN] Completed - ${outcome}`,
+          mentioned_users: []
+        });
+      }
+
+      // Update lead's last activity
+      await supabase.from('leads').update({
+        last_activity_at: new Date().toISOString()
+      }).eq('id', leadId);
+
+      // Update local state
+      setRawLeads(prev => prev.map(l =>
+        l.id === leadId ? { ...l, last_activity_at: new Date().toISOString() } : l
+      ));
+
+      // Add to completed set (removes from daily rundown)
+      setCompletedToday(prev => new Set([...prev, leadId]));
+
+      showToast('Cleared from today\'s list', 'success', leadName);
+
+    } catch (err) {
+      console.error('markDoneForToday error:', err);
+      showToast('Error: ' + err.message, 'error', leadName);
+    } finally {
+      setActionInProgress(null);
+    }
+  };
+
+  // Smart lead status - auto-calculates based on time and activity
+  const getSmartStatus = (lead) => {
+    // Status is driven by the manual pipeline_status / status only, no auto-aging.
+    // Age is communicated separately via the FRESH pill (<24h) and "Lead received Xd ago"
+    // text on the card, so a 6-day-old "New" lead stays NEW until someone moves it forward.
+    const manualStatus = (lead.pipeline_status || lead.status || '').toUpperCase();
+    if (manualStatus === 'OFFER_MADE') return 'OFFER_SENT';
+    // 'Contacted' is retired; everything reached is just 'In Contact' (CONTACTING).
+    if (manualStatus === 'CONTACTED') return 'CONTACTING';
+    return manualStatus || 'NEW';
+  };
+
+  // Status display config
+  const STATUS_CONFIG = {
+    NEW: { label: 'New', color: 'bg-green-500/20 text-green-400 border-green-500/50' },
+    NEEDS_ATTENTION: { label: 'Needs Attention', color: 'bg-red-500/20 text-red-400 border-red-500/50' },
+    CONTACTING: { label: 'In Contact', color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50' },
+    CONTACTED: { label: 'Contacted', color: 'bg-blue-500/20 text-blue-400 border-blue-500/50' },
+    OFFER_SENT: { label: 'Offer Sent', color: 'bg-purple-500/20 text-purple-400 border-purple-500/50' },
+    NEGOTIATING: { label: 'Negotiating', color: 'bg-orange-500/20 text-orange-400 border-orange-500/50' },
+    UNDER_CONTRACT: { label: 'Under Contract', color: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50' },
+    CLOSED: { label: 'Closed', color: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50' },
+    DEAD: { label: 'Dead', color: 'bg-slate-500/20 text-slate-400 border-slate-500/50' },
+    NURTURE: { label: 'Nurture', color: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/50' },
+    WE_PASSED: { label: 'We Passed', color: 'bg-slate-500/20 text-slate-400 border-slate-500/50' },
+    DEAD: { label: 'Dead', color: 'bg-slate-500/20 text-slate-400 border-slate-500/50' },
+    FOLLOW_UP: { label: 'Follow-Up', color: 'bg-rose-500/20 text-rose-400 border-rose-500/50' },
+    LOST: { label: 'Lost', color: 'bg-zinc-500/20 text-zinc-400 border-zinc-500/50' },
+    ARCHIVED: { label: 'Archived', color: 'bg-zinc-500/20 text-zinc-400 border-zinc-500/50' }
+  };
+
+  // Shared search matcher for every bucket's search bar. Matches the usual
+  // contact/property fields PLUS the lead's status (e.g. "new", "in contact",
+  // "offer") and its lean/temperature (e.g. "hot", "warm", "cold", "ready"), so
+  // you can type a status or lean into any search bar to filter by it.
+  const leadMatchesSearch = (lead, q) => {
+    if (!q) return true;
+    q = q.toLowerCase().trim();
+    const smart = getSmartStatus(lead);
+    const statusLabel = (STATUS_CONFIG[smart]?.label || smart || '').toLowerCase();
+    const rawStatus = (lead.pipeline_status || lead.status || '').toLowerCase();
+    const dir = (lead.deal_direction || '').toLowerCase();
+    const dirLabel = (DIRECTIONS.find(d => d.value === dir)?.label || '').toLowerCase();
+    const fd = lead.form_data || {};
+    return (
+      (lead.full_name || lead.name || '').toLowerCase().includes(q) ||
+      (lead.phone || '').toLowerCase().includes(q) ||
+      (lead.email || '').toLowerCase().includes(q) ||
+      (lead.property_county || lead.county || '').toLowerCase().includes(q) ||
+      (lead.property_state || lead.state || '').toLowerCase().includes(q) ||
+      (fd.streetAddress || lead.street_address || lead.address || '').toLowerCase().includes(q) ||
+      (fd.agentName || '').toLowerCase().includes(q) ||
+      statusLabel.includes(q) ||
+      rawStatus.includes(q) ||
+      dir.includes(q) ||
+      dirLabel.includes(q)
+    );
+  };
+
+  // How long ago helper
+  const timeAgo = (date) => {
+    if (!date) return '';
+    const mins = Math.floor((new Date() - new Date(date)) / 60000);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
+  };
+
+  // Open lead details modal and fetch notes
+  const openLeadDetails = async (lead) => {
+    // Fetch notes for this lead
+    const { data: notes } = await supabase
+      .from('lead_notes')
+      .select('*')
+      .eq('lead_id', lead.id)
+      .order('created_at', { ascending: false });
+
+    setSelectedLead({ ...lead, notes: notes || [] });
+    setDetailsModalOpen(true);
+  };
+
+  // Which tab a lead's card lives in, based on its stage. Active pipeline stages
+  // land on their rich-card bucket; everything else (DEAD, not interested, etc.)
+  // lives in the All Leads master list, and archived in Archive.
+  const tabForLead = (lead) => {
+    if ((lead.status || '').toLowerCase() === 'archived') return 'archive';
+    const s = (lead.pipeline_status || lead.status || '').toUpperCase();
+    // Subdivision leads stay in their own inflow tab until they cross over to
+    // Agreement Sent (then they flow through the shared pipeline tabs).
+    if (isSubdivisionInflow(lead)) return 'subdivision-inflow';
+    if (s === 'FOLLOW_UP') return 'follow-up';
+    if (s === 'LOST') return 'lost';
+    if (s === 'APPT_SET_FOR_JORDAN') return 'appointment-set';
+    if (['OFFER_SENT', 'NEGOTIATING'].includes(s)) return 'offer-made';
+    // Signed Agreement = the end of the pipeline (agreement out, signed, closed).
+    if (['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(s)) return 'agreement-sent';
+    // Offer Curated folds back into PPC Inflow (pre-appointment work).
+    if (['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(s)) return 'ppc-inflow';
+    return 'all-leads'; // DEAD / NOT_INTERESTED / QUALIFIED / anything else
+  };
+
+  // Jump to the lead's actual card in whatever stage it sits in, scroll it into
+  // view and flash a ring. Retries because the tab needs a beat to render; if
+  // the card still can't be found, falls back to opening the lead details so
+  // the click never silently does nothing.
+  // Clicking any lead (notification, message row, campaign item) ALWAYS opens the
+  // full lead card in a modal, so you can act on it (status dropdown -> Dead,
+  // Messages, Call, offer) every time. Reliable regardless of pagination, tab
+  // filters, or duplicate records, which the old scroll-to-card approach missed.
+  const navigateToLeadCard = (lead) => {
+    if (!lead?.id) return;
+    setConversationLead(null);
+    setNotesModalLead(null);
+    setDetailsModalOpen(false);
+    const fresh = (allLeads || []).find(l => l.id === lead.id) || (rawLeads || []).find(l => l.id === lead.id) || lead;
+    setCardModalLead(fresh);
+  };
+
+  // --- Offer, direction, and Follow-Up handlers -------------------------------
+
+  const patchLead = (leadId, patch) => {
+    setRawLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, ...patch } : l)));
+    setSelectedLead((prev) => (prev && prev.id === leadId ? { ...prev, ...patch } : prev));
+    supabase.from('leads').update(patch).eq('id', leadId).then(
+      ({ error }) => { if (error) showToast(`Could not save: ${error.message}`, 'error'); },
+      (e) => showToast(`Could not save: ${e?.message || e}`, 'error')
+    );
+  };
+
+  const setOfferAmount = (leadId, amount) => {
+    const raw = amount === '' || amount === null ? null : Number(String(amount).replace(/[^0-9.]/g, ''));
+    const n = raw === null || Number.isNaN(raw) ? null : raw;
+    // Entering an offer locks it (green); clearing it unlocks.
+    patchLead(leadId, { offer_amount: n, offer_confirmed: n != null });
+  };
+  const setDealDirection = (leadId, value) => patchLead(leadId, { deal_direction: value || null });
+
+  // Park a lead into a Follow-Up bucket: set status, bucket, and schedule touch 1.
+  const moveToFollowUp = (lead, bucketKey) => {
+    const startedAt = new Date().toISOString();
+    const t = firstTouch(bucketKey, startedAt);
+    patchLead(lead.id, {
+      pipeline_status: 'FOLLOW_UP',
+      status: 'follow_up',
+      deal_direction: null,
+      follow_up_bucket: bucketKey,
+      follow_up_step: 0,
+      follow_up_started_at: startedAt,
+      next_follow_up_at: t ? t.at.toISOString() : startedAt,
+    });
+    showToast(`Moved to Follow-Up · ${FOLLOWUP_BUCKETS[bucketKey]?.label || ''}`, 'success');
+  };
+
+  // Did the current touch: advance to the next step and schedule it.
+  const advanceFollowUp = (lead) => {
+    const nextStep = (lead.follow_up_step || 0) + 1;
+    const t = touchForStep(lead.follow_up_bucket, nextStep, lead.follow_up_started_at);
+    patchLead(lead.id, {
+      follow_up_step: nextStep,
+      next_follow_up_at: t ? t.at.toISOString() : null,
+    });
+    showToast('Touch logged · next one scheduled', 'success');
+  };
+
+  // Push the next touch out by N days without advancing the step.
+  const snoozeFollowUp = (lead, days = 3) => {
+    const base = lead.next_follow_up_at ? new Date(lead.next_follow_up_at) : new Date();
+    if (base < new Date()) base.setTime(Date.now());
+    base.setDate(base.getDate() + days);
+    patchLead(lead.id, { next_follow_up_at: base.toISOString() });
+    showToast(`Snoozed ${days} days`, 'success');
+  };
+
+  // Bring a parked lead back into the active pipeline.
+  const reviveFollowUp = (lead) => {
+    patchLead(lead.id, {
+      pipeline_status: 'NEGOTIATING',
+      status: 'negotiating',
+      follow_up_bucket: null,
+      next_follow_up_at: null,
+    });
+    showToast('Back in play · Negotiating', 'success');
+  };
+
+  const markLost = (lead, reason) => {
+    patchLead(lead.id, {
+      pipeline_status: 'LOST',
+      status: 'lost',
+      lost_reason: reason || null,
+      next_follow_up_at: null,
+    });
+    showToast('Marked Lost', 'success');
+  };
+
+  // From Smart Suggest: create a rundown task at the AI-read time + set the
+  // card's Next Touch banner.
+  const scheduleSmartFollowUp = async (leadId, whenISO, label) => {
+    const due = whenISO ? new Date(whenISO) : null;
+    if (!due || isNaN(due.getTime())) { showToast('Could not read the follow-up time', 'error'); return; }
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const lead = (allLeadsRef.current || []).find((l) => l.id === leadId);
+      // One active follow-up per lead. Supersede any existing pending follow-up
+      // or callback so the bell doesn't stack three rows for the same person.
+      await supabase.from('scheduled_tasks')
+        .update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id || null })
+        .eq('lead_id', leadId).eq('status', 'pending').in('task_type', ['follow_up', 'callback'])
+        .then(() => {}, () => {});
+      setScheduledTasks((prev) => prev.map((t) =>
+        (t.lead_id === leadId && t.status === 'pending' && ['follow_up', 'callback'].includes(t.task_type))
+          ? { ...t, status: 'completed' } : t));
+      const fuPayload = {
+        lead_id: leadId,
+        created_by: user?.id || null,
+        assigned_to: user?.id || lead?.current_owner_id || null,
+        task_type: 'follow_up',
+        source: 'pipeline',
+        title: `${label || 'Follow up'}: ${lead?.name || lead?.full_name || 'Lead'}`,
+        description: 'Scheduled from Smart Suggest',
+        due_at: due.toISOString(),
+        status: 'pending',
+        priority: 'normal',
+      };
+      let { data: task, error } = await supabase.from('scheduled_tasks').insert(fuPayload).select().maybeSingle();
+      if (error) {
+        const { source, ...noSource } = fuPayload;
+        ({ data: task, error } = await supabase.from('scheduled_tasks').insert(noSource).select().maybeSingle());
+      }
+      if (error) throw error;
+      if (task) setScheduledTasks((prev) => [...prev, task]);
+      showToast(`Follow-up set for ${due.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`, 'success');
+    } catch (e) {
+      showToast('Could not schedule: ' + (e?.message || e), 'error');
+    }
+  };
+
+  // Assign a deliberate task on a lead (who + when), the canonical next-touch.
+  // Supersedes any existing pending follow-up/callback so a lead never carries
+  // two conflicting next-touches. assignedTo defaults to the lead's owner.
+  const assignTask = async (leadId, { assignedTo, dueISO, label, taskType = 'callback', why } = {}) => {
+    const due = dueISO ? new Date(dueISO) : null;
+    if (!due || isNaN(due.getTime())) { showToast('Pick a date and time for the task', 'error'); return; }
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const lead = (allLeadsRef.current || []).find((l) => l.id === leadId);
+      const owner = assignedTo || lead?.current_owner_id || acquisitionManagerId || user?.id || null;
+      // One active next-touch per lead: supersede prior pending follow-up/callback.
+      await supabase.from('scheduled_tasks')
+        .update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id || null })
+        .eq('lead_id', leadId).eq('status', 'pending').in('task_type', ['follow_up', 'callback'])
+        .then(() => {}, () => {});
+      setScheduledTasks((prev) => prev.map((t) =>
+        (t.lead_id === leadId && t.status === 'pending' && ['follow_up', 'callback'].includes(t.task_type))
+          ? { ...t, status: 'completed' } : t));
+      const taskPayload = {
+        lead_id: leadId,
+        created_by: user?.id || null,
+        assigned_to: owner,
+        task_type: taskType,
+        source: 'pipeline',
+        title: `${label || 'Call'}: ${lead?.name || lead?.full_name || 'Lead'}`,
+        description: (why && String(why).trim()) || 'Assigned from the note screen',
+        due_at: due.toISOString(),
+        status: 'pending',
+        priority: 'normal',
+      };
+      let { data: task, error } = await supabase.from('scheduled_tasks').insert(taskPayload).select().maybeSingle();
+      if (error) { // 'source' column may not be migrated yet; retry without it
+        const { source, ...noSource } = taskPayload;
+        ({ data: task, error } = await supabase.from('scheduled_tasks').insert(noSource).select().maybeSingle());
+      }
+      if (error) throw error;
+      if (task) setScheduledTasks((prev) => [...prev, task]);
+      const whoName = usersById[owner]?.split(' ')[0] || 'the owner';
+      showToast(`Task set for ${whoName}, ${due.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`, 'success');
+    } catch (e) {
+      showToast('Could not assign task: ' + (e?.message || e), 'error');
+    }
+  };
+
+
+  // ---- Daily Action Tray ---------------------------------------------------
+  // Today's due calls/tasks for the logged-in person, forced in front of them
+  // until cleared, so scheduled follow-ups actually get worked.
+  const [trayOpen, setTrayOpen] = useState(true);
+  const [dailyScan, setDailyScan] = useState(null);
+  const [scanLoading, setScanLoading] = useState(false);
+
+  const completeTaskQuick = async (task) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id || null }).eq('id', task.id);
+      setScheduledTasks((prev) => prev.filter((t) => t.id !== task.id));
+      showToast('Cleared', 'success');
+    } catch (e) { showToast('Could not clear: ' + (e?.message || e), 'error'); }
+  };
+  const snoozeTask = async (task, days) => {
+    const d = new Date(); d.setDate(d.getDate() + days); d.setHours(10, 0, 0, 0);
+    const iso = d.toISOString();
+    try {
+      await supabase.from('scheduled_tasks').update({ due_at: iso, updated_at: new Date().toISOString() }).eq('id', task.id);
+      setScheduledTasks((prev) => prev.map((t) => t.id === task.id ? { ...t, due_at: iso } : t));
+      showToast(`Snoozed to ${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}`, 'success');
+    } catch (e) { showToast('Could not snooze: ' + (e?.message || e), 'error'); }
+  };
+  const runDailyScan = async () => {
+    setScanLoading(true); setDailyScan(null);
+    try {
+      // Scope the scan to exactly what's on screen: in Clean View, only the
+      // pushed leads; otherwise the whole board.
+      const viewLeadIds = allLeads.map((l) => l.id);
+      const res = await fetch('/api/ai/daily-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: currentUserId, cleanView: cleanViewActive, leadIds: cleanViewActive ? viewLeadIds : null }) });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Scan failed');
+      setDailyScan(data);
+    } catch (e) { setDailyScan({ error: e.message }); }
+    finally { setScanLoading(false); }
+  };
+
+  // Quick log activity (one-tap)
+  const quickLogActivity = async (leadId, outcome) => {
+    const lead = allLeads.find(l => l.id === leadId);
+    const leadName = lead?.full_name || lead?.name || 'Lead';
+
+    // Show immediate visual feedback
+    setActionInProgress({ leadId, action: outcome });
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+
+      // Try to log to activities table first
+      await supabase.from('activities').insert({
+        lead_id: leadId,
+        user_id: user?.id,
+        activity_type: 'CALL',
+        outcome: outcome,
+        created_at: new Date().toISOString()
+      });
+
+      // Also log to lead_notes as backup
+      if (user) {
+        await supabase.from('lead_notes').insert({
+          lead_id: leadId,
+          user_id: user.id,
+          content: `[CALL] ${outcome}`,
+          mentioned_users: []
+        });
+      }
+
+      // Update lead
+      const updates = {
+        last_activity_at: new Date().toISOString(),
+        touch_count: (lead?.touch_count || 0) + 1,
+        call_count: (lead?.call_count || 0) + 1
+      };
+
+      if (outcome === 'SPOKE' && (!lead?.status || lead.status === 'new')) {
+        updates.status = 'contacting';
+        updates.pipeline_status = 'CONTACTING';
+      }
+
+      await supabase.from('leads').update(updates).eq('id', leadId);
+
+      // Update local state
+      setRawLeads(prev => prev.map(l =>
+        l.id === leadId ? { ...l, ...updates } : l
+      ));
+
+      // Show success toast
+      const outcomeLabels = {
+        'NO_ANSWER': 'No Answer logged',
+        'LEFT_VM': 'Voicemail logged',
+        'SPOKE': 'Call completed',
+        'TEXTED': 'Text logged'
+      };
+      showToast(outcomeLabels[outcome] || 'Activity logged', 'success', leadName);
+
+    } catch (err) {
+      console.error('quickLogActivity error:', err);
+      showToast('Error: ' + err.message, 'error', leadName);
+    } finally {
+      setActionInProgress(null);
+    }
+  };
+
+  // Pipeline status options (manual overrides)
+  const PIPELINE_STATUSES = [
+    { value: 'NEW', label: 'New' },
+    { value: 'CONTACTING', label: 'In Contact' },
+    { value: 'ANTHONY_CONTACTED', label: 'Anthony Contacted' },
+    { value: 'ANTHONY_FOLLOW_UP', label: 'Anthony Follow-up' },
+    { value: 'OFFER_CURATED', label: 'Offer Curated' },
+    { value: 'APPT_SET_FOR_JORDAN', label: 'Appt Set for Jordan' },
+    { value: 'OFFER_SENT', label: 'Offer Sent' },
+    { value: 'NEGOTIATING', label: 'Negotiating' },
+    { value: 'AGREEMENT_SENT', label: 'Agreement Sent' },
+    { value: 'UNDER_CONTRACT', label: 'Signed Contract' },
+    { value: 'CLOSED', label: 'Closed' },
+    { value: 'DEAD', label: 'Dead' },
+    { value: 'WE_PASSED', label: 'We Passed' },
+    { value: 'NURTURE', label: 'Nurture' },
+    { value: 'ARCHIVED', label: 'Archived' }
+  ];
+
+  // Statuses that end the loop, no auto-cadence, no watchdog, no Hammer.
+  const TERMINAL_STATUSES = ['CLOSED', 'DEAD', 'WE_PASSED', 'NURTURE', 'ARCHIVED'];
+
+  // Export leads to CSV
+  // Returns leads matching the current Export tab filters (status include + date + acres).
+  const applyExportFilters = () => {
+    const days = { '5d': 5, '30d': 30, '90d': 90 }[exportFilters.dateRange];
+    const cutoff = days ? Date.now() - days * 24 * 60 * 60 * 1000 : null;
+    const minAge = exportFilters.minAgeDays ? parseInt(exportFilters.minAgeDays, 10) : null;
+    const ageCeiling = (minAge != null && !Number.isNaN(minAge))
+      ? Date.now() - minAge * 24 * 60 * 60 * 1000
+      : null;
+    return allLeads.filter(lead => {
+      const acres = parseFloat(lead.acres) || 0;
+      const status = (lead.pipeline_status || lead.status || 'NEW').toUpperCase();
+      if (exportFilters.minAcres && acres < parseFloat(exportFilters.minAcres)) return false;
+      if (exportFilters.maxAcres && acres > parseFloat(exportFilters.maxAcres)) return false;
+      if (exportFilters.includeStatuses.length > 0 && !exportFilters.includeStatuses.includes(status)) return false;
+      // Age floor: lead must have come in at least minAgeDays ago (by created_at).
+      if (ageCeiling != null && new Date(lead.created_at).getTime() > ageCeiling) return false;
+      if (cutoff) {
+        const basis = exportFilters.dateBasis === 'activity'
+          ? (lead.last_activity_at || lead.created_at)
+          : lead.created_at;
+        if (new Date(basis).getTime() < cutoff) return false;
+      }
+      return true;
+    });
+  };
+
+  const handleExportCSV = () => {
+    const filtered = applyExportFilters();
+
+    if (filtered.length === 0) { alert('No leads match your filters.'); return; }
+
+    const now = new Date();
+    const headers = [
+      'Name', 'Phone', 'Email',
+      'Address', 'County', 'State', 'APN/Parcel ID',
+      'Acres', 'Status', 'Price Range',
+      'Home on Property', 'Property Listed', 'Inherited', 'Owned 4+ Years',
+      'Names on Deed', 'Why Selling',
+      'Agent Name', 'Agent Phone', 'Agent Email',
+      'Source', 'Age (days)', 'Created'
+    ];
+    const rows = filtered.map(lead => {
+      const ageDays = Math.floor((now - new Date(lead.created_at)) / (1000 * 60 * 60 * 24));
+      const status = (lead.pipeline_status || lead.status || 'new').toUpperCase();
+      const fd = lead.form_data || {};
+      return [
+        lead.full_name || lead.name || '',
+        lead.phone || '',
+        lead.email || '',
+        fd.streetAddress || lead.street_address || lead.address || '',
+        fd.propertyCounty || lead.property_county || lead.county || '',
+        fd.propertyState || lead.property_state || lead.state || '',
+        fd.parcelId || lead.parcel_id || '',
+        fd.acres || lead.acres || lead.acreage || '',
+        status,
+        fd.priceRange || '',
+        fd.homeOnProperty || '',
+        fd.propertyListed || '',
+        fd.isInherited || '',
+        fd.ownedFourYears || '',
+        fd.namesOnDeed || '',
+        fd.whySelling || '',
+        fd.agentName || '',
+        fd.agentPhone || '',
+        fd.agentEmail || '',
+        lead.source || '',
+        ageDays,
+        new Date(lead.created_at).toLocaleDateString()
+      ];
+    });
+
+    const csvContent = [headers, ...rows]
+      .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `leads-export-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Export an arbitrary list of leads (used by bucket-level Export buttons).
+  // Same column layout as handleExportCSV but takes the lead list directly.
+  const exportLeadsToCsv = (leads, filenamePrefix = 'leads-export') => {
+    if (!leads || leads.length === 0) { alert('No leads to export.'); return; }
+    const now = new Date();
+    const headers = [
+      'Name', 'Phone', 'Email',
+      'Address', 'County', 'State', 'APN/Parcel ID',
+      'Acres', 'Status', 'Price Range',
+      'Home on Property', 'Property Listed', 'Inherited', 'Owned 4+ Years',
+      'Names on Deed', 'Why Selling',
+      'Agent Name', 'Agent Phone', 'Agent Email',
+      'Source', 'Age (days)', 'Created'
+    ];
+    const rows = leads.map(lead => {
+      const ageDays = Math.floor((now - new Date(lead.created_at)) / (1000 * 60 * 60 * 24));
+      const status = (lead.pipeline_status || lead.status || 'new').toUpperCase();
+      const fd = lead.form_data || {};
+      return [
+        lead.full_name || lead.name || '',
+        lead.phone || '', lead.email || '',
+        fd.streetAddress || lead.street_address || lead.address || '',
+        fd.propertyCounty || lead.property_county || lead.county || '',
+        fd.propertyState || lead.property_state || lead.state || '',
+        fd.parcelId || lead.parcel_id || '',
+        fd.acres || lead.acres || lead.acreage || '',
+        status, fd.priceRange || '',
+        fd.homeOnProperty || '', fd.propertyListed || '',
+        fd.isInherited || '', fd.ownedFourYears || '',
+        fd.namesOnDeed || '', fd.whySelling || '',
+        fd.agentName || '', fd.agentPhone || '', fd.agentEmail || '',
+        lead.source || '', ageDays, new Date(lead.created_at).toLocaleDateString()
+      ];
+    });
+    const csv = [headers, ...rows]
+      .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${filenamePrefix}-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Create Lead states
+  const mapContainer = useRef(null);
+  const map = useRef(null);
+  const [foundParcels, setFoundParcels] = useState([]);
+  const [selectedParcelIndex, setSelectedParcelIndex] = useState(0);
+  const [parcelLocated, setParcelLocated] = useState(false);
+  const [searchType, setSearchType] = useState('parcel_id'); // 'parcel_id', 'address', 'owner'
+  const [inputMode, setInputMode] = useState('search'); // 'search', 'upload', or 'click'
+  const [kmlFile, setKmlFile] = useState(null);
+  const [csvFile, setCsvFile] = useState(null);
+  const [uploadedGeometry, setUploadedGeometry] = useState(null);
+  const [clickToFindActive, setClickToFindActive] = useState(false);
+  const [newLead, setNewLead] = useState({
+    full_name: '',
+    email: '',
+    phone: '',
+    property_state: 'TX',
+    property_county: '',
+    street_address: '',
+    zip_code: '',
+    acres: '',
+    parcel_id: '',
+    owner_name: '' // Name on title for owner search
+  });
+  const [selectedOrgsForLead, setSelectedOrgsForLead] = useState([]);
+  const [creatingLead, setCreatingLead] = useState(false);
+  const [locatingParcel, setLocatingParcel] = useState(false);
+
+  // Screenshot -> Lead states
+  const [shotBusy, setShotBusy] = useState(false);
+  const [shotProgress, setShotProgress] = useState({ done: 0, total: 0 });
+  const [shotResults, setShotResults] = useState([]); // {ok, name, county, state, acres, error, thumb}
+  const [shotDragOver, setShotDragOver] = useState(false);
+
+  const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+
+  // Process one or more lead screenshots: extract fields with AI and create a
+  // PPC-inflow lead for each. Runs sequentially so the results list fills in order.
+  const processLeadScreenshots = async (files) => {
+    const imgs = Array.from(files || []).filter((f) => f.type && f.type.startsWith('image/'));
+    if (!imgs.length) return;
+    setShotBusy(true);
+    setShotProgress({ done: 0, total: imgs.length });
+    for (let i = 0; i < imgs.length; i++) {
+      const file = imgs[i];
+      let thumb = null;
+      try {
+        const dataUrl = await fileToDataUrl(file);
+        thumb = dataUrl;
+        const res = await fetch('/api/lead/from-screenshot', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: dataUrl }),
+        });
+        const json = await res.json();
+        if (json.ok) {
+          setShotResults((prev) => [{ ok: true, ...json.lead, thumb }, ...prev]);
+          showToast('Lead added to PPC Inflow', 'success', json.lead.name);
+        } else {
+          setShotResults((prev) => [{ ok: false, error: json.error || 'Failed', thumb }, ...prev]);
+        }
+      } catch (e) {
+        setShotResults((prev) => [{ ok: false, error: e.message || 'Failed', thumb }, ...prev]);
+      }
+      setShotProgress((p) => ({ ...p, done: p.done + 1 }));
+    }
+    setShotBusy(false);
+    fetchAllData(); // refresh so new leads show in PPC Inflow
+  };
+
+  const onShotPaste = (e) => {
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    const files = [];
+    for (const it of items) { if (it.type && it.type.startsWith('image/')) { const f = it.getAsFile(); if (f) files.push(f); } }
+    if (files.length) { e.preventDefault(); processLeadScreenshots(files); }
+  };
+
+  // Admin access control
+  useEffect(() => {
+    const checkAdminAccess = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+
+      if (!user) {
+        console.log('❌ Not authenticated - redirecting to admin login');
+        router.push('/admin/login');
+        return;
+      }
+
+      // Look up role from users table
+      const adminEmails = ['admin@parcelreach.ai', 'jordan@havenground.com', 'jordan@landreach.co'];
+      let { data: profile } = await supabase
+        .from('users')
+        .select('id, email, full_name, role')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      // Self-heal: ensure Jordan has a users row with admin role
+      if (!profile && adminEmails.includes(user.email)) {
+        const { data: upserted } = await supabase
+          .from('users')
+          .upsert({ id: user.id, email: user.email, full_name: user.user_metadata?.full_name || 'Jordan', role: 'admin' }, { onConflict: 'id' })
+          .select()
+          .single();
+        profile = upserted;
+      }
+
+      const role = profile?.role || (adminEmails.includes(user.email) ? 'admin' : null);
+      if (!role || !['admin', 'acquisition_manager'].includes(role)) {
+        console.log('❌ Access denied - role:', role);
+        router.push('/dashboard');
+        return;
+      }
+
+      setCurrentUserId(user.id);
+      setCurrentUserRole(role);
+      setCurrentUserName(profile?.full_name || user.email);
+
+      // Find Jordan's user id (the admin) so APPT_SET_FOR_JORDAN can route to him
+      const { data: admins } = await supabase
+        .from('users')
+        .select('id')
+        .eq('role', 'admin')
+        .limit(1);
+      if (admins?.[0]) setAdminUserId(admins[0].id);
+
+      // Find Anthony (acquisition manager) so admin can push leads to his queue
+      const { data: ams } = await supabase
+        .from('users')
+        .select('id')
+        .eq('role', 'acquisition_manager')
+        .limit(1);
+      if (ams?.[0]) setAcquisitionManagerId(ams[0].id);
+    };
+
+    checkAdminAccess();
+  }, [router]);
+
+  useEffect(() => {
+    // Wait for role to be set before fetching so Acquisition Manager
+    // gets the 7-lead limit on first load (not the full pool).
+    if (!currentUserRole) return;
+    fetchAllData();
+
+    // Auto-refresh every 30 seconds
+    const interval = setInterval(fetchAllData, 30000);
+    return () => clearInterval(interval);
+  }, [currentUserRole]);
+
+  const fetchAllData = async () => {
+    setLoading(true);
+
+    // Fetch organizations (teams)
+    const { data: orgsData } = await supabase
+      .from('teams')
+      .select(`
+        *,
+        team_members(count)
+      `)
+      .order('created_at', { ascending: false });
+
+    // Fetch all leads. (We dropped the 7-lead cap on Acquisition Manager -
+    // tasks now drive the rundown, and the lead pool needs to match.)
+    const { data: leadsData } = await supabase
+      .from('leads')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    // Fetch all assignments
+    const { data: assignmentsData } = await supabase
+      .from('lead_assignments')
+      .select('lead_id, team_id, assigned_at')
+      .order('assigned_at', { ascending: false });
+
+    // Fetch scheduled tasks (pending for today and future)
+    const { data: tasksData } = await supabase
+      .from('scheduled_tasks')
+      .select('*')
+      .eq('status', 'pending')
+      .order('due_at', { ascending: true });
+
+    // Group assignments by lead_id
+    const assignmentsByLead = {};
+    assignmentsData?.forEach(assignment => {
+      if (!assignmentsByLead[assignment.lead_id]) {
+        assignmentsByLead[assignment.lead_id] = [];
+      }
+      assignmentsByLead[assignment.lead_id].push(assignment);
+    });
+
+    // Overlay the durable partner-push history from its dedicated table so the
+    // "sent to" chips can never be lost to a lead-row overwrite. Falls back to
+    // whatever is on the lead's jsonb if the table isn't migrated yet.
+    let leadsWithPushes = leadsData || [];
+    try {
+      const { data: pushRows, error: pushErr } = await supabase
+        .from('partner_pushes')
+        .select('lead_id, board_id, board_name, item_id, pushed_at')
+        .order('pushed_at', { ascending: true });
+      if (!pushErr && pushRows) {
+        const byLead = {};
+        for (const r of pushRows) {
+          (byLead[r.lead_id] = byLead[r.lead_id] || []).push(r);
+        }
+        leadsWithPushes = leadsWithPushes.map((l) =>
+          byLead[l.id] ? { ...l, partner_pushes: byLead[l.id] } : l
+        );
+      }
+    } catch { /* table not migrated yet, keep jsonb values */ }
+
+    setOrganizations(orgsData || []);
+    setRawLeads(leadsWithPushes);
+    setLeadAssignments(assignmentsByLead);
+    setScheduledTasks(tasksData || []);
+    setLoading(false);
+
+    // AUTO-TASK GENERATION DISABLED (speed-to-lead + watchdog). The rundown now
+    // holds only DELIBERATE tasks: appointments, text-cadence follow-ups, and
+    // tasks a rep schedules by hand. New leads are triaged from the PPC Inflow
+    // tab, not auto-pushed here, so the rundown can't auto-flood. Smarter "push a
+    // lead into the rundown" logic will come later.
+  };
+
+  // Update lead pipeline status
+  const updateLeadStatus = async (leadId, newStatus) => {
+    // Intercept APPT_SET_FOR_JORDAN: open the appointment modal to capture date/time
+    // and route a scheduled task to Jordan. Actual status write happens after modal submit.
+    if (newStatus === 'APPT_SET_FOR_JORDAN') {
+      setApptModalLeadId(leadId);
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      setApptDate(tomorrow.toISOString().split('T')[0]);
+      setApptTime('10:00');
+      setApptNote('');
+      setApptModalOpen(true);
+      return;
+    }
+
+    const lead = allLeads.find(l => l.id === leadId);
+    const oldStatus = lead?.pipeline_status || lead?.status || 'NEW';
+    const leadName = lead?.full_name || lead?.name || 'Lead';
+
+    console.log('Updating status:', { leadId, oldStatus, newStatus });
+
+    // Update local state immediately for responsiveness
+    setRawLeads(prev => prev.map(l =>
+      l.id === leadId ? { ...l, pipeline_status: newStatus, status: newStatus.toLowerCase() } : l
+    ));
+
+    // Also update selectedLead if it's the same lead (for modal state)
+    if (selectedLead && selectedLead.id === leadId) {
+      setSelectedLead(prev => ({ ...prev, pipeline_status: newStatus, status: newStatus.toLowerCase() }));
+    }
+
+    // Use existing 'status' column and try pipeline_status if it exists
+    const { error } = await supabase
+      .from('leads')
+      .update({
+        status: newStatus.toLowerCase(),
+        pipeline_status: newStatus,
+        last_activity_at: new Date().toISOString()
+      })
+      .eq('id', leadId);
+
+    if (error) {
+      console.log('Status update error (trying fallback):', error.message);
+      // Fallback: just use status column if pipeline_status doesn't exist
+      const { error: fallbackError } = await supabase
+        .from('leads')
+        .update({ status: newStatus.toLowerCase() })
+        .eq('id', leadId);
+
+      if (fallbackError) {
+        console.error('Fallback also failed:', fallbackError);
+        showToast('Failed to update status', 'error', leadName);
+        return;
+      }
+    }
+
+    console.log('Status updated successfully to:', newStatus);
+    showToast(`Status: ${newStatus}`, 'success', leadName);
+
+    // Status change always clears hammer mode, hammering is meant to push toward the
+    // next status, so once that lands the mode resets.
+    if (newStatus !== oldStatus && lead?.hammer_mode) {
+      await supabase.from('leads').update({ hammer_mode: false }).eq('id', leadId);
+      setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, hammer_mode: false } : l));
+    }
+
+    // Auto-cancel pending tasks for terminal statuses so they stop cluttering the rundown
+    // UNDER_CONTRACT is intentionally NOT terminal, deals in motion still need follow-up
+    // tasks (title work, contract review, etc.) to appear in the rundown.
+    const terminalStatuses = ['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE', 'WE_PASSED'];
+    if (terminalStatuses.includes(newStatus)) {
+      await supabase.from('scheduled_tasks')
+        .update({ status: 'cancelled', completed_at: new Date().toISOString() })
+        .eq('lead_id', leadId)
+        .eq('status', 'pending');
+      setScheduledTasks(prev => prev.filter(t => !(t.lead_id === leadId && t.status === 'pending')));
+    }
+
+    // Try to log activity
+    try {
+      await supabase.from('activities').insert({
+        lead_id: leadId,
+        activity_type: 'STATUS_CHANGE',
+        outcome: `${oldStatus} -> ${newStatus}`,
+        created_at: new Date().toISOString()
+      });
+    } catch (e) {
+      // activities table may not exist yet
+    }
+  };
+
+  // The lead whose "Produce Offer PDF" screen is open (null = closed).
+  const [offerModalLead, setOfferModalLead] = useState(null);
+
+  // Status filter for the All Leads table ('all' or a canonical status).
+  const [allLeadsFilter, setAllLeadsFilter] = useState('all');
+
+  // Put a lead back into the PPC Inflow board (used to pull leads out of terminal
+  // buckets like We Passed / Nurture / Dead that otherwise can't be re-staged).
+  const moveToInflow = async (leadId) => {
+    try {
+      const lead = allLeads.find(l => l.id === leadId) || rawLeads.find(l => l.id === leadId);
+      const leadName = lead?.full_name || lead?.name || 'Lead';
+      const patch = { status: 'new', pipeline_status: 'NEW' };
+      const { error } = await supabase.from('leads').update(patch).eq('id', leadId);
+      if (error) throw error;
+      setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...patch } : l));
+      if (selectedLead && selectedLead.id === leadId) setSelectedLead(prev => ({ ...prev, ...patch }));
+      showToast('Moved back to Inflow', 'success', leadName);
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error');
+    }
+  };
+
+  // Append map entries to a lead's lead_maps array and keep map_image_url pointed
+  // at the chosen/newest one (so the Mapped badge + offer default keep working).
+  // Legacy leads with only map_image_url get it seeded into the array first.
+  const appendLeadMaps = async (leadId, entries, newestUrl) => {
+    const lead = rawLeads.find(l => l.id === leadId);
+    let base = Array.isArray(lead?.lead_maps) ? [...lead.lead_maps] : [];
+    if (!base.length && lead?.map_image_url) base = [{ id: 'legacy', url: lead.map_image_url, label: 'Current map', kind: 'aerial' }];
+    const next = [...base, ...entries];
+    const patch = { lead_maps: next, map_uploaded: true };
+    if (newestUrl) patch.map_image_url = newestUrl;
+    const { error } = await supabase.from('leads').update(patch).eq('id', leadId);
+    if (error) throw error;
+    setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...patch } : l));
+    if (selectedLead && selectedLead.id === leadId) setSelectedLead(prev => ({ ...prev, ...patch }));
+  };
+
+  // Choose which map is the primary (the one on the badge + default offer map).
+  const setPrimaryMap = async (leadId, url) => {
+    const patch = { map_image_url: url, map_uploaded: true };
+    await supabase.from('leads').update(patch).eq('id', leadId);
+    setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...patch } : l));
+    if (selectedLead && selectedLead.id === leadId) setSelectedLead(prev => ({ ...prev, ...patch }));
+  };
+
+  // Remove one map from the gallery. If it was primary, promote the first left.
+  const deleteLeadMap = async (leadId, url) => {
+    const lead = rawLeads.find(l => l.id === leadId);
+    let base = Array.isArray(lead?.lead_maps) ? [...lead.lead_maps] : [];
+    if (!base.length && lead?.map_image_url) base = [{ id: 'legacy', url: lead.map_image_url, label: 'Current map', kind: 'aerial' }];
+    const next = base.filter(m => m.url !== url);
+    const patch = { lead_maps: next };
+    if (lead?.map_image_url === url) { patch.map_image_url = next[0]?.url || null; patch.map_uploaded = next.length > 0; }
+    await supabase.from('leads').update(patch).eq('id', leadId);
+    setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...patch } : l));
+    if (selectedLead && selectedLead.id === leadId) setSelectedLead(prev => ({ ...prev, ...patch }));
+  };
+
+  // Upload one or more property map screenshots; each is appended to the gallery.
+  const [mapUploading, setMapUploading] = useState(false);
+  const handleMapUpload = async (leadId, fileList) => {
+    const files = Array.from(fileList || []).filter(Boolean);
+    if (!files.length) return;
+    if (files.some(f => !f.type.startsWith('image/'))) { showToast('Files must be images', 'error'); return; }
+    setMapUploading(true);
+    try {
+      const added = [];
+      for (const file of files) {
+        const ext = file.name.split('.').pop() || 'png';
+        const path = `${leadId}/${Date.now()}-${Math.round(Math.random() * 1e4)}.${ext}`;
+        const { error: uploadErr } = await supabase.storage.from('lead-maps').upload(path, file, { cacheControl: '3600', upsert: true });
+        if (uploadErr) throw uploadErr;
+        const { data: urlData } = supabase.storage.from('lead-maps').getPublicUrl(path);
+        added.push({ id: path, url: urlData?.publicUrl, label: file.name.replace(/\.[^.]+$/, '').slice(0, 40), kind: 'upload' });
+      }
+      await appendLeadMaps(leadId, added, added[added.length - 1].url);
+      showToast(`Uploaded ${added.length} map${added.length > 1 ? 's' : ''}`, 'success');
+    } catch (err) {
+      showToast('Upload failed: ' + err.message, 'error');
+    } finally {
+      setMapUploading(false);
+    }
+  };
+
+  // Auto-generate the parcel map (satellite + boundary) from the lead's APN and
+  // save it as the lead's map, flagging it Mapped. No manual screenshot needed.
+  const [mapGenerating, setMapGenerating] = useState(false);
+  const handleGenerateMap = async (lead) => {
+    if (!lead?.parcel_id) { showToast('This lead has no parcel ID to map from', 'error'); return; }
+    setMapGenerating(true);
+    try {
+      const res = await fetch('/api/lead/save-map', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadId: lead.id, apn: lead.parcel_id, state: lead.property_state || lead.state, county: lead.property_county || lead.county }),
+      });
+      const d = await res.json();
+      if (!res.ok || !d.ok) throw new Error(d.error || 'Could not generate map');
+      await appendLeadMaps(lead.id, [{ id: d.url, url: d.url, label: 'Parcel aerial', kind: 'aerial' }], d.url);
+      showToast('Map generated and saved', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setMapGenerating(false);
+    }
+  };
+
+  // Toggle hammer mode on a lead. When ON, every completed touch auto-schedules
+  // tomorrow's callback regardless of bucket cadence.
+  const toggleHammerMode = async (leadId) => {
+    const lead = allLeads.find(l => l.id === leadId);
+    if (!lead) return;
+    const next = !lead.hammer_mode;
+    const { error } = await supabase
+      .from('leads')
+      .update({ hammer_mode: next })
+      .eq('id', leadId);
+    if (error) {
+      showToast('Toggle failed: ' + error.message, 'error');
+      return;
+    }
+    setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, hammer_mode: next } : l));
+    if (selectedLead && selectedLead.id === leadId) {
+      setSelectedLead(prev => ({ ...prev, hammer_mode: next }));
+    }
+    // If turning ON and lead has no pending task today, schedule one for now.
+    if (next) {
+      const hasOpenToday = scheduledTasks.some(t => {
+        if (t.lead_id !== leadId || t.status !== 'pending') return false;
+        const d = new Date(t.due_at);
+        const tmrw = new Date(); tmrw.setHours(0, 0, 0, 0); tmrw.setDate(tmrw.getDate() + 1);
+        return d < tmrw;
+      });
+      if (!hasOpenToday) {
+        const { data: newTask } = await supabase.from('scheduled_tasks').insert({
+          lead_id: leadId,
+          created_by: currentUserId,
+          assigned_to: lead.current_owner_id || acquisitionManagerId || currentUserId,
+          task_type: 'callback',
+          title: `HAMMER: ${lead.full_name || lead.name || 'Lead'}`,
+          description: 'Hammer mode, daily callbacks until status changes',
+          due_at: new Date().toISOString(),
+          status: 'pending',
+          priority: 'high'
+        }).select().single();
+        if (newTask) setScheduledTasks(prev => [...prev, newTask]);
+      }
+    }
+    showToast(next ? '🔨 Hammering on' : 'Hammer cleared', 'success', lead.full_name || lead.name);
+  };
+
+  // Toggle which teammate is currently working a lead (Jordan ↔ Anthony).
+  // Either role can flip it. Updates leads.current_owner_id and re-renders.
+  const toggleCurrentOwner = async (leadId) => {
+    const lead = allLeads.find(l => l.id === leadId);
+    if (!lead) return;
+    const currentOwner = lead.current_owner_id;
+    let nextOwner;
+    if (currentOwner === adminUserId) nextOwner = acquisitionManagerId;
+    else if (currentOwner === acquisitionManagerId) nextOwner = adminUserId;
+    else nextOwner = currentUserId; // null → whoever clicked claims it (was wrongly hardcoded to admin)
+    if (!nextOwner) {
+      showToast('No teammate to toggle to', 'error');
+      return;
+    }
+    const { error } = await supabase
+      .from('leads')
+      .update({ current_owner_id: nextOwner })
+      .eq('id', leadId);
+    if (error) {
+      showToast('Toggle failed: ' + error.message, 'error');
+      return;
+    }
+    setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, current_owner_id: nextOwner } : l));
+    if (selectedLead && selectedLead.id === leadId) {
+      setSelectedLead(prev => ({ ...prev, current_owner_id: nextOwner }));
+    }
+    // Cascade: any pending tasks for this lead move to the new owner so the rundown follows.
+    await supabase.from('scheduled_tasks')
+      .update({ assigned_to: nextOwner })
+      .eq('lead_id', leadId)
+      .eq('status', 'pending');
+    setScheduledTasks(prev => prev.map(t =>
+      t.lead_id === leadId && t.status === 'pending' ? { ...t, assigned_to: nextOwner } : t
+    ));
+    const newName = nextOwner === adminUserId ? 'Jordan' : 'Anthony';
+    showToast(`Now working: ${newName}`, 'success', lead.full_name || lead.name);
+  };
+
+  // Whoever first engages an unowned lead claims it, so it lands in THEIR feed
+  // (fixes "leads stay Unassigned after I work them"). No-op if already owned.
+  const claimLeadIfUnowned = async (leadId) => {
+    const lead = allLeads.find(l => l.id === leadId);
+    if (!lead || lead.current_owner_id || !currentUserId) return;
+    await supabase.from('leads').update({ current_owner_id: currentUserId }).eq('id', leadId);
+    setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, current_owner_id: currentUserId } : l));
+    if (selectedLead && selectedLead.id === leadId) {
+      setSelectedLead(prev => ({ ...prev, current_owner_id: currentUserId }));
+    }
+    await supabase.from('scheduled_tasks')
+      .update({ assigned_to: currentUserId })
+      .eq('lead_id', leadId).eq('status', 'pending');
+    setScheduledTasks(prev => prev.map(t =>
+      t.lead_id === leadId && t.status === 'pending' ? { ...t, assigned_to: currentUserId } : t
+    ));
+  };
+
+  // Push a lead to Anthony's queue. Creates a scheduled_task assigned to him at "now",
+  // high priority, so it pops to the top of his rundown.
+  const pushToAcquisitionManager = async (leadId) => {
+    if (!isAdmin) return;
+    if (!acquisitionManagerId) {
+      showToast('No acquisition manager found', 'error');
+      return;
+    }
+    const lead = allLeads.find(l => l.id === leadId);
+    const leadName = lead?.full_name || lead?.name || 'Lead';
+    try {
+      // Drop any open task for this lead so the new push is the canonical one
+      await supabase.from('scheduled_tasks')
+        .update({ status: 'cancelled' })
+        .eq('lead_id', leadId)
+        .eq('status', 'pending');
+
+      const { data: newTask, error } = await supabase.from('scheduled_tasks').insert({
+        lead_id: leadId,
+        created_by: currentUserId,
+        assigned_to: acquisitionManagerId,
+        task_type: 'callback',
+        title: `Pushed by Jordan: ${leadName}`,
+        description: 'Jordan flagged this lead for you to contact',
+        due_at: new Date().toISOString(),
+        status: 'pending',
+        priority: 'high'
+      }).select().single();
+      if (error) throw error;
+      if (newTask) setScheduledTasks(prev => [...prev.filter(t => !(t.lead_id === leadId && t.status === 'pending')), newTask]);
+
+      // Flip lead ownership to acquisition manager so the badge reflects who's working it
+      await supabase.from('leads').update({ current_owner_id: acquisitionManagerId }).eq('id', leadId);
+      setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, current_owner_id: acquisitionManagerId } : l));
+
+      showToast('Pushed to Acquisition Manager', 'success', leadName);
+    } catch (err) {
+      showToast('Push failed: ' + err.message, 'error');
+    }
+  };
+
+  // Submit the APPT_SET_FOR_JORDAN booking: create scheduled task assigned to Jordan,
+  // then flip the lead status. Called by the appointment modal.
+  const submitApptForJordan = async () => {
+    if (!apptModalLeadId || !apptDate || !apptTime) {
+      showToast('Date and time are required', 'error');
+      return;
+    }
+    if (!apptTz) { showToast("Pick the seller's timezone", 'error'); return; }
+    setApptSaving(true);
+    try {
+      const lead = allLeads.find(l => l.id === apptModalLeadId);
+      const leadName = lead?.full_name || lead?.name || 'Lead';
+      const dueAt = zonedToUtcISO(apptDate, apptTime, apptTz);
+
+      // Keep at least 30 minutes between Jordan's appointments (and around any
+      // blocked-off time). Block the booking if it lands too close to another.
+      const newMs = new Date(dueAt).getTime();
+      const conflict = (scheduledTasks || []).find(t =>
+        t.task_type === 'meeting' && t.status === 'pending' && t.assigned_to === adminUserId
+        && t.lead_id !== apptModalLeadId && Math.abs(new Date(t.due_at).getTime() - newMs) < 30 * 60000);
+      if (conflict) {
+        const ct = new Date(conflict.due_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        const what = /^BLOCKED/i.test(conflict.title || '') ? 'blocked time' : (conflict.title || 'another appointment');
+        showToast(`Too close to ${what} at ${ct}. Keep at least 30 minutes between.`, 'error');
+        setApptSaving(false);
+        return;
+      }
+      // Reject if Jordan blocked that whole day off.
+      const apptDay = new Date(dueAt).toDateString();
+      const dayBlocked = (scheduledTasks || []).some(t => t.task_type === 'meeting' && t.status === 'pending' && t.assigned_to === adminUserId && (t.description || '').includes('allday') && new Date(t.due_at).toDateString() === apptDay);
+      if (dayBlocked) { showToast('That day is blocked off. Pick another day.', 'error'); setApptSaving(false); return; }
+
+      // Cancel any existing pending tasks for this lead so it stops appearing in the
+      // booker's rundown (Anthony's callback gets cleared when he books an appt).
+      await supabase.from('scheduled_tasks')
+        .update({ status: 'cancelled', completed_at: new Date().toISOString() })
+        .eq('lead_id', apptModalLeadId)
+        .eq('status', 'pending');
+      setScheduledTasks(prev => prev.filter(t => !(t.lead_id === apptModalLeadId && t.status === 'pending')));
+
+      const { data: newApptTask, error: taskErr } = await supabase.from('scheduled_tasks').insert({
+        lead_id: apptModalLeadId,
+        assigned_to: adminUserId,
+        created_by: currentUserId,
+        task_type: 'meeting',
+        title: `Appointment with ${leadName}`,
+        description: `${apptNote || `Booked by ${currentUserName}`} · ${tzAbbr(apptTz)}`,
+        due_at: dueAt,
+        priority: 'high',
+        status: 'pending'
+      }).select().single();
+      if (taskErr) throw taskErr;
+      if (newApptTask) setScheduledTasks(prev => [...prev, newApptTask]);
+
+      // Now write the actual status change (skipping the intercept by passing a non-APPT value path)
+      // Try with pipeline_status (newer schema) first, fall back to status-only if the column
+      // doesn't exist in this DB.
+      let { error: statusErr } = await supabase
+        .from('leads')
+        .update({
+          status: 'appt_set_for_jordan',
+          pipeline_status: 'APPT_SET_FOR_JORDAN',
+          current_owner_id: adminUserId,
+          last_activity_at: new Date().toISOString()
+        })
+        .eq('id', apptModalLeadId);
+      if (statusErr) {
+        const { error: fallbackErr } = await supabase
+          .from('leads')
+          .update({
+            status: 'appt_set_for_jordan',
+            current_owner_id: adminUserId,
+            last_activity_at: new Date().toISOString()
+          })
+          .eq('id', apptModalLeadId);
+        if (fallbackErr) throw fallbackErr;
+        statusErr = null;
+      }
+
+      setRawLeads(prev => prev.map(l =>
+        l.id === apptModalLeadId
+          ? { ...l, pipeline_status: 'APPT_SET_FOR_JORDAN', status: 'appt_set_for_jordan', current_owner_id: adminUserId }
+          : l
+      ));
+      if (selectedLead && selectedLead.id === apptModalLeadId) {
+        setSelectedLead(prev => ({ ...prev, pipeline_status: 'APPT_SET_FOR_JORDAN', status: 'appt_set_for_jordan', current_owner_id: adminUserId }));
+      }
+
+      showToast(`Appt booked for Jordan on ${apptDate} ${apptTime} ${tzAbbr(apptTz)}`, 'success', leadName);
+      setApptModalOpen(false);
+      setApptModalLeadId(null);
+    } catch (err) {
+      showToast('Failed to book appt: ' + err.message, 'error');
+    } finally {
+      setApptSaving(false);
+    }
+  };
+
+  // Log activity (call, text, email, etc.)
+  const logActivity = async () => {
+    if (!activityLeadId) return;
+    setLoggingActivity(true);
+
+    try {
+      const lead = allLeads.find(l => l.id === activityLeadId);
+      await claimLeadIfUnowned(activityLeadId);
+
+      // Try to log to activity_log table (may not exist yet)
+      try {
+        await supabase.from('activity_log').insert({
+          lead_id: activityLeadId,
+          activity_type: activityType,
+          body: activityNotes,
+          call_outcome: activityType.includes('CALL') ? callOutcome : null,
+          activity_date: new Date().toISOString()
+        });
+      } catch (e) {
+        // Table may not exist - continue anyway
+      }
+
+      // Also add to lead_notes as a fallback
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user && activityNotes) {
+        await supabase.from('lead_notes').insert({
+          lead_id: activityLeadId,
+          user_id: user.id,
+          content: `[${activityType}] ${activityNotes}${activityType.includes('CALL') ? ` (${callOutcome})` : ''}`,
+          mentioned_users: []
+        });
+      }
+
+      // Update lead status if still NEW
+      if (!lead?.pipeline_status || lead.pipeline_status === 'NEW' || lead.status === 'new') {
+        await supabase.from('leads').update({ status: 'contacted' }).eq('id', activityLeadId);
+      }
+
+      // Update local state
+      setRawLeads(allLeads.map(l =>
+        l.id === activityLeadId ? {
+          ...l,
+          status: (!lead?.status || lead.status === 'new') ? 'contacted' : l.status,
+          pipeline_status: (!lead?.pipeline_status || lead.pipeline_status === 'NEW') ? 'CONTACTED' : l.pipeline_status
+        } : l
+      ));
+
+      // Refresh data
+      fetchAllData();
+
+      // Reset form
+      setActivityModalOpen(false);
+      setActivityNotes('');
+      setCallbackDate('');
+      setCallbackTime('');
+      setActivityLeadId(null);
+    } catch (err) {
+      console.error('Error logging activity:', err);
+    }
+
+    setLoggingActivity(false);
+  };
+
+  // Quick action to open activity modal
+  const openActivityModal = (leadId, type) => {
+    setActivityLeadId(leadId);
+    setActivityType(type);
+    setActivityModalOpen(true);
+  };
+
+  // Open schedule modal for a lead
+  const openScheduleModal = (leadId) => {
+    setScheduleLeadId(leadId);
+    setScheduleType('callback');
+    setScheduleDate('');
+    setScheduleTime('');
+    setScheduleNote('');
+    setEditingScheduleTaskId(null);
+    setScheduleModalOpen(true);
+  };
+
+  // Task type labels used across scheduling
+  const TASK_TYPE_LABELS = {
+    callback: 'Callback',
+    discovery_call: 'Discovery Call',
+    follow_up_call: 'Follow Up Call',
+    send_offer: 'Send Offer',
+    offer_follow_up: 'Offer Follow Up',
+    title_work: 'Title Work Call'
+  };
+
+  const TASK_TYPE_COLORS = {
+    callback: 'bg-blue-500/20 text-blue-400 border-blue-500/50',
+    discovery_call: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50',
+    follow_up_call: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50',
+    send_offer: 'bg-purple-500/20 text-purple-400 border-purple-500/50',
+    offer_follow_up: 'bg-amber-500/20 text-amber-400 border-amber-500/50',
+    title_work: 'bg-pink-500/20 text-pink-400 border-pink-500/50'
+  };
+
+  // Normalize legacy/unknown task_type values to a valid key
+  const normalizeTaskType = (type) => {
+    if (TASK_TYPE_LABELS[type]) return type;
+    if (type === 'follow_up') return 'follow_up_call';
+    return 'callback';
+  };
+
+  const updateTaskType = async (taskId, newType) => {
+    const task = scheduledTasks.find(t => t.id === taskId);
+    if (!task) return;
+    const lead = allLeads.find(l => l.id === task.lead_id);
+    const leadName = lead?.full_name || lead?.name || 'Unknown';
+    const newTitle = `${TASK_TYPE_LABELS[newType] || newType}: ${leadName}`;
+    const { error } = await supabase
+      .from('scheduled_tasks')
+      .update({ task_type: newType, title: newTitle })
+      .eq('id', taskId);
+    if (!error) {
+      setScheduledTasks(prev => prev.map(t => t.id === taskId ? { ...t, task_type: newType, title: newTitle } : t));
+      showToast(`Changed to ${TASK_TYPE_LABELS[newType]}`, 'success', leadName);
+    }
+  };
+
+  // Reassign a task between Jordan and Anthony (used on the Shared Calendar).
+  const reassignTask = async (taskId, newAssignee) => {
+    const { error } = await supabase.from('scheduled_tasks').update({ assigned_to: newAssignee }).eq('id', taskId);
+    if (!error) {
+      setScheduledTasks(prev => prev.map(t => t.id === taskId ? { ...t, assigned_to: newAssignee } : t));
+      showToast(`Reassigned to ${usersById[newAssignee] || 'teammate'}`, 'success');
+    }
+  };
+
+  // Save a scheduled task (create or edit)
+  const saveScheduledTask = async () => {
+    if (!scheduleDate || !scheduleTime) return;
+    setScheduleSaving(true);
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const lead = allLeads.find(l => l.id === scheduleLeadId);
+      const leadName = lead?.full_name || lead?.name || 'Lead';
+      const desired = new Date(`${scheduleDate}T${scheduleTime}`);
+      const slot = getAvailableTime(desired);
+      const dueAt = slot.toISOString();
+      const title = `${TASK_TYPE_LABELS[scheduleType] || scheduleType}: ${leadName}`;
+
+      if (editingScheduleTaskId) {
+        // UPDATE existing task
+        const { data, error } = await supabase.from('scheduled_tasks').update({
+          task_type: scheduleType,
+          title,
+          description: scheduleNote || null,
+          due_at: dueAt,
+          updated_at: new Date().toISOString()
+        }).eq('id', editingScheduleTaskId).select().single();
+
+        if (error) throw error;
+
+        setScheduledTasks(prev => prev.map(t => t.id === editingScheduleTaskId ? data : t));
+        showToast(`Updated ${TASK_TYPE_LABELS[scheduleType] || scheduleType} to ${slot.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}`, 'success', leadName);
+      } else {
+        // INSERT new task
+        const { data, error } = await supabase.from('scheduled_tasks').insert({
+          lead_id: scheduleLeadId,
+          created_by: user?.id, assigned_to: user?.id,
+          task_type: scheduleType,
+          title,
+          description: scheduleNote || null,
+          due_at: dueAt,
+          status: 'pending',
+          priority: 'normal'
+        }).select().single();
+
+        if (error) throw error;
+
+        setScheduledTasks(prev => [...prev, data]);
+        showToast(`Scheduled ${TASK_TYPE_LABELS[scheduleType] || scheduleType} for ${slot.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}`, 'success', leadName);
+      }
+
+      setEditingScheduleTaskId(null);
+      setScheduleModalOpen(false);
+    } catch (err) {
+      console.error('Error saving scheduled task:', err);
+      showToast('Error scheduling task: ' + err.message, 'error');
+    } finally {
+      setScheduleSaving(false);
+    }
+  };
+
+  // Complete a scheduled task
+  const completeScheduledTask = async (taskId) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const { error } = await supabase.from('scheduled_tasks').update({
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        completed_by: user?.id
+      }).eq('id', taskId);
+
+      if (error) throw error;
+
+      setScheduledTasks(prev => prev.filter(t => t.id !== taskId));
+      showToast('Task completed', 'success');
+    } catch (err) {
+      console.error('Error completing task:', err);
+      showToast('Error: ' + err.message, 'error');
+    }
+  };
+
+  // Archive a lead
+  const archiveLead = async (leadId) => {
+    if (!isAdmin) { showToast('Only admins can archive leads', 'error'); return; }
+    try {
+      const lead = allLeads.find(l => l.id === leadId);
+      const leadName = lead?.full_name || lead?.name || 'Lead';
+      await supabase.from('leads').update({ status: 'archived' }).eq('id', leadId);
+      setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'archived' } : l));
+      showToast('Archived', 'success', leadName);
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error');
+    }
+  };
+
+  // Restore a lead from archive
+  const restoreLead = async (leadId) => {
+    try {
+      const lead = allLeads.find(l => l.id === leadId) || rawLeads.find(l => l.id === leadId);
+      const leadName = lead?.full_name || lead?.name || 'Lead';
+      const patch = { status: 'new' };
+      // A lead archived via the status dropdown carries pipeline_status ARCHIVED.
+      // If we only reset `status`, that stale ARCHIVED keeps it out of every tab
+      // (it lands in the phantom all-leads bucket and vanishes), so reset it too.
+      if ((lead?.pipeline_status || '').toUpperCase() === 'ARCHIVED') patch.pipeline_status = 'NEW';
+      await supabase.from('leads').update(patch).eq('id', leadId);
+      setRawLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...patch } : l));
+      showToast('Restored to New', 'success', leadName);
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error');
+    }
+  };
+
+  // Permanently delete a lead
+  const deleteLead = async (leadId) => {
+    if (!isAdmin) { showToast('Only admins can delete leads', 'error'); return; }
+    try {
+      const lead = allLeads.find(l => l.id === leadId);
+      const leadName = lead?.full_name || lead?.name || 'Lead';
+      // Delete related scheduled tasks first
+      await supabase.from('scheduled_tasks').delete().eq('lead_id', leadId);
+      // Delete lead assignments
+      await supabase.from('lead_assignments').delete().eq('lead_id', leadId);
+      // Delete the lead
+      const { error } = await supabase.from('leads').delete().eq('id', leadId);
+      if (error) throw error;
+      setRawLeads(prev => prev.filter(l => l.id !== leadId));
+      setScheduledTasks(prev => prev.filter(t => t.lead_id !== leadId));
+      showToast('Permanently deleted', 'success', leadName);
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error');
+    }
+  };
+
+  // Find next available time slot (no double-booking). Bumps by 15 min if conflict.
+  const getAvailableTime = (desiredDate) => {
+    const desired = new Date(desiredDate);
+    const maxAttempts = 20; // check up to 5 hours of 15-min slots
+    for (let i = 0; i < maxAttempts; i++) {
+      const checkTime = new Date(desired.getTime() + i * 15 * 60 * 1000);
+      const conflict = scheduledTasks.some(t => {
+        const existing = new Date(t.due_at);
+        return Math.abs(existing.getTime() - checkTime.getTime()) < 15 * 60 * 1000; // within 15 min
+      });
+      if (!conflict) return checkTime;
+    }
+    return desired; // fallback
+  };
+
+  // Update a task's scheduled date+time
+  const saveTaskReschedule = async (taskId) => {
+    const parsed = parseTimeInput(editingTimeValue);
+    if (!parsed || !editingDateValue) { setEditingTaskTime(null); return; }
+    const newDate = new Date(`${editingDateValue}T${parsed}`);
+    if (isNaN(newDate.getTime())) { setEditingTaskTime(null); return; }
+    // Check for conflicts (exclude self)
+    const conflict = scheduledTasks.some(t => t.id !== taskId && Math.abs(new Date(t.due_at).getTime() - newDate.getTime()) < 15 * 60 * 1000);
+    if (conflict) { showToast('Time conflict, another task is within 15 min of that slot', 'error'); return; }
+    const newDueAt = newDate.toISOString();
+    await supabase.from('scheduled_tasks').update({ due_at: newDueAt, updated_at: new Date().toISOString() }).eq('id', taskId);
+    setScheduledTasks(prev => prev.map(t => t.id === taskId ? { ...t, due_at: newDueAt, updated_at: new Date().toISOString() } : t));
+    setEditingTaskTime(null);
+    showToast(`Rescheduled to ${newDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`, 'success');
+  };
+
+  // Rundown action: Left Voicemail
+  const rundownVM = async (task) => {
+    if (actionInProgress) return;
+    setActionInProgress({ leadId: task.lead_id, action: 'vm' });
+    try {
+    const lead = allLeads.find(l => l.id === task.lead_id);
+    const leadName = lead?.full_name || lead?.name || 'Lead';
+    const { data: { user } } = await supabase.auth.getUser();
+    await claimLeadIfUnowned(task.lead_id);
+
+    // Log the VM note
+    await supabase.from('lead_notes').insert({
+      lead_id: task.lead_id, user_id: user?.id,
+      content: '[VM] Left Voicemail', mentioned_users: []
+    });
+    // A voicemail is not a real connection, leave the lead's status as is.
+
+    // Count VMs today for this lead
+    const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+    const tomorrowStart = new Date(todayStart); tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+    const { count } = await supabase.from('lead_notes').select('*', { count: 'exact', head: true })
+      .eq('lead_id', task.lead_id).gte('created_at', todayStart.toISOString()).lt('created_at', tomorrowStart.toISOString()).like('content', '%[VM]%');
+
+    // Complete this task
+    await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id }).eq('id', task.id);
+    setScheduledTasks(prev => prev.filter(t => t.id !== task.id));
+
+    // Preserve original task type so discovery calls stay discovery calls, etc.
+    const retryType = normalizeTaskType(task.task_type);
+    const retryLabel = TASK_TYPE_LABELS[retryType] || 'Callback';
+
+    // Hammer mode override, daily cadence wins over normal VM cadence.
+    if (lead?.hammer_mode) {
+      const tmrw = new Date(tomorrowStart); tmrw.setHours(9, 0, 0, 0);
+      const slot = getAvailableTime(tmrw);
+      const { data: newTask } = await supabase.from('scheduled_tasks').insert({
+        lead_id: task.lead_id, created_by: user?.id, assigned_to: lead.current_owner_id || user?.id, task_type: retryType,
+        title: `🔨 HAMMER: ${leadName}`, description: 'Hammer mode, daily callbacks until status changes',
+        due_at: slot.toISOString(), status: 'pending', priority: 'high'
+      }).select().single();
+      if (newTask) setScheduledTasks(prev => [...prev, newTask]);
+      showToast(`🔨 Hammer next callback ${slot.toLocaleString([], {month:'short', day:'numeric', hour:'numeric'})}`, 'success', leadName);
+      return;
+    }
+
+    if ((count || 0) >= 2) {
+      // 2+ VMs today → schedule for tomorrow morning
+      const tmrw = new Date(tomorrowStart); tmrw.setHours(9, 0, 0, 0);
+      const slot = getAvailableTime(tmrw);
+      const { data: newTask } = await supabase.from('scheduled_tasks').insert({
+        lead_id: task.lead_id, created_by: user?.id, assigned_to: user?.id, task_type: retryType,
+        title: `${retryLabel}: ${leadName}`, description: '2+ voicemails left, try again',
+        due_at: slot.toISOString(), status: 'pending', priority: 'normal'
+      }).select().single();
+      if (newTask) setScheduledTasks(prev => [...prev, newTask]);
+      showToast(`2 VMs today → scheduled ${slot.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}`, 'success', leadName);
+    } else {
+      // Schedule retry: 2 hours later, but never past 6 PM. If past 6 PM, bump to tomorrow 9 AM.
+      const retryTime = new Date();
+      retryTime.setHours(retryTime.getHours() + 2);
+      const sixPM = new Date(); sixPM.setHours(18, 0, 0, 0);
+
+      if (retryTime <= sixPM) {
+        const slot = getAvailableTime(retryTime);
+        const { data: newTask } = await supabase.from('scheduled_tasks').insert({
+          lead_id: task.lead_id, created_by: user?.id, assigned_to: user?.id, task_type: retryType,
+          title: `${retryLabel}: ${leadName}`, description: 'Voicemail left, retry',
+          due_at: slot.toISOString(), status: 'pending', priority: 'normal'
+        }).select().single();
+        if (newTask) setScheduledTasks(prev => [...prev, newTask]);
+        showToast(`VM logged → retry at ${slot.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})}`, 'success', leadName);
+      } else {
+        // Past 6 PM cutoff, schedule tomorrow 9 AM
+        const tmrw = new Date(tomorrowStart); tmrw.setHours(9, 0, 0, 0);
+        const slot = getAvailableTime(tmrw);
+        const { data: newTask } = await supabase.from('scheduled_tasks').insert({
+          lead_id: task.lead_id, created_by: user?.id, assigned_to: user?.id, task_type: retryType,
+          title: `${retryLabel}: ${leadName}`, description: 'Voicemail left, retry',
+          due_at: slot.toISOString(), status: 'pending', priority: 'normal'
+        }).select().single();
+        if (newTask) setScheduledTasks(prev => [...prev, newTask]);
+        showToast(`VM logged → scheduled ${slot.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}`, 'success', leadName);
+      }
+    }
+    } finally { setActionInProgress(null); }
+  };
+
+  // Rundown action: Sent Message → schedule follow-up tomorrow
+  const rundownSentMessage = async (task) => {
+    if (actionInProgress) return;
+    setActionInProgress({ leadId: task.lead_id, action: 'sentmsg' });
+    try {
+    const lead = allLeads.find(l => l.id === task.lead_id);
+    const leadName = lead?.full_name || lead?.name || 'Lead';
+    const { data: { user } } = await supabase.auth.getUser();
+    await claimLeadIfUnowned(task.lead_id);
+
+    await supabase.from('lead_notes').insert({
+      lead_id: task.lead_id, user_id: user?.id,
+      content: '[TEXT] Sent text message', mentioned_users: []
+    });
+    // Sending a text is not contact, status only advances on a reply/connected call.
+
+    // Complete this task
+    await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id }).eq('id', task.id);
+    setScheduledTasks(prev => prev.filter(t => t.id !== task.id));
+
+    // Schedule follow-up tomorrow, preserve original task type
+    const followType = normalizeTaskType(task.task_type);
+    const followLabel = TASK_TYPE_LABELS[followType] || 'Follow Up Call';
+    const tmrw = new Date(); tmrw.setHours(0,0,0,0); tmrw.setDate(tmrw.getDate() + 1); tmrw.setHours(10, 0, 0, 0);
+    const slot = getAvailableTime(tmrw);
+    const { data: newTask } = await supabase.from('scheduled_tasks').insert({
+      lead_id: task.lead_id, created_by: user?.id, assigned_to: user?.id, task_type: followType,
+      title: `${followLabel}: ${leadName}`, description: 'Text sent, follow up',
+      due_at: slot.toISOString(), status: 'pending', priority: 'normal'
+    }).select().single();
+    if (newTask) setScheduledTasks(prev => [...prev, newTask]);
+    showToast(`Message logged → follow-up ${slot.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}`, 'success', leadName);
+    } finally { setActionInProgress(null); }
+  };
+
+  const openConvoComplete = (task) => {
+    const lead = allLeads.find(l => l.id === task.lead_id);
+    setConvoCompleteTask({ ...task, lead });
+    setConvoNotes('');
+    // Default to tomorrow 10 AM
+    const tmrw = new Date(); tmrw.setDate(tmrw.getDate() + 1);
+    setConvoScheduleDate(tmrw.toISOString().split('T')[0]);
+    setConvoScheduleTime('10:00');
+    setConvoModalOpen(true);
+  };
+
+  const saveConvoComplete = async () => {
+    if (!convoCompleteTask) return;
+    setConvoSaving(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const lead = convoCompleteTask.lead;
+      const leadName = lead?.full_name || lead?.name || 'Lead';
+      await claimLeadIfUnowned(convoCompleteTask.lead_id);
+
+      // Log notes
+      if (convoNotes.trim()) {
+        await supabase.from('lead_notes').insert({
+          lead_id: convoCompleteTask.lead_id, user_id: user?.id,
+          content: `[SPOKE] ${convoNotes}`, mentioned_users: []
+        });
+      } else {
+        await supabase.from('lead_notes').insert({
+          lead_id: convoCompleteTask.lead_id, user_id: user?.id,
+          content: '[SPOKE] Conversation completed', mentioned_users: []
+        });
+      }
+      await updateLeadStatus(convoCompleteTask.lead_id, 'CONTACTED');
+
+      // Complete current task
+      await supabase.from('scheduled_tasks').update({ status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id }).eq('id', convoCompleteTask.id);
+      setScheduledTasks(prev => prev.filter(t => t.id !== convoCompleteTask.id));
+
+      // Schedule follow-up if date provided
+      if (convoScheduleDate && convoScheduleTime) {
+        const desired = new Date(`${convoScheduleDate}T${convoScheduleTime}`);
+        const slot = getAvailableTime(desired);
+        const { data: newTask } = await supabase.from('scheduled_tasks').insert({
+          lead_id: convoCompleteTask.lead_id, created_by: user?.id, assigned_to: user?.id, task_type: 'follow_up',
+          title: `Follow Up: ${leadName}`, description: convoNotes.trim() ? `Last convo: ${convoNotes}` : 'Follow up from conversation',
+          due_at: slot.toISOString(), status: 'pending', priority: 'normal'
+        }).select().single();
+        if (newTask) setScheduledTasks(prev => [...prev, newTask]);
+        showToast(`Conversation logged → follow-up ${slot.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}`, 'success', leadName);
+      } else {
+        showToast(`Conversation logged`, 'success', leadName);
+      }
+
+      setConvoModalOpen(false);
+    } catch (err) {
+      console.error(err);
+      showToast('Error: ' + err.message, 'error');
+    } finally {
+      setConvoSaving(false);
+    }
+  };
+
+  // Parse typed time like "2pm", "10:30am", "14:00", "3:30 PM" into "HH:MM" 24h format
+  const parseTimeInput = (val) => {
+    if (!val) return '';
+    const s = val.trim().toLowerCase().replace(/\s+/g, '');
+    // Already HH:MM format
+    if (/^\d{1,2}:\d{2}$/.test(s)) return s.padStart(5, '0');
+    // Match patterns like 2pm, 2:30pm, 10am, 10:30am
+    const m = s.match(/^(\d{1,2}):?(\d{2})?\s*(am|pm)?$/);
+    if (!m) return '';
+    let h = parseInt(m[1], 10);
+    const min = m[2] ? parseInt(m[2], 10) : 0;
+    const ampm = m[3];
+    if (ampm === 'pm' && h < 12) h += 12;
+    if (ampm === 'am' && h === 12) h = 0;
+    if (h > 23 || min > 59) return '';
+    return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+  };
+
+  // Open big calendar modal for a lead
+  const openCalendarModal = async (lead) => {
+    // Fetch notes for this lead
+    const { data: notes } = await supabase.from('lead_notes').select('*').eq('lead_id', lead.id).order('created_at', { ascending: false });
+    setCalendarLead({ ...lead, notes: notes || [] });
+    setCalendarMonth(new Date().getMonth());
+    setCalendarYear(new Date().getFullYear());
+    setCalendarSelectedDay(null);
+    setCalendarModalOpen(true);
+  };
+
+  const handleViewDashboard = (orgId) => {
+    // Store selected org in session and redirect to dashboard
+    console.log('🔍 Admin viewing org:', orgId);
+    sessionStorage.setItem('admin_viewing_org', orgId);
+    router.push('/dashboard');
+  };
+
+  const handleAssignLead = async (leadId, teamIds) => {
+    if (!isAdmin) { showToast('Only admins can assign leads to organizations', 'error'); return; }
+    setIsAssigning(true);
+    try {
+      console.log('🔍 Assigning lead:', leadId, 'to teams:', teamIds);
+
+      // Update lead with any edits made in the assignment modal
+      if (selectedLead) {
+        const { error: updateError } = await supabase
+          .from('leads')
+          .update({
+            full_name: selectedLead.full_name || selectedLead.name,
+            name: selectedLead.full_name || selectedLead.name,
+            email: selectedLead.email,
+            phone: selectedLead.phone,
+            street_address: selectedLead.street_address || selectedLead.address,
+            address: selectedLead.street_address || selectedLead.address,
+            property_county: selectedLead.property_county || selectedLead.county,
+            county: selectedLead.property_county || selectedLead.county,
+            property_state: selectedLead.property_state || selectedLead.state,
+            state: selectedLead.property_state || selectedLead.state,
+            zip: selectedLead.zip,
+            acres: parseFloat(selectedLead.acres || selectedLead.acreage) || null,
+            acreage: parseFloat(selectedLead.acres || selectedLead.acreage) || null
+          })
+          .eq('id', leadId);
+
+        if (updateError) {
+          console.error('Failed to update lead:', updateError);
+        } else {
+          console.log('✅ Lead info updated successfully');
+        }
+      }
+
+      // Get lead details for notification and team_lead_data creation
+      const { data: leadData } = await supabase
+        .from('leads')
+        .select('*')
+        .eq('id', leadId)
+        .single();
+
+      // Insert into lead_assignments junction table (allows multiple assignments)
+      const assignments = teamIds.map(teamId => ({
+        lead_id: leadId,
+        team_id: teamId,
+        assigned_at: new Date().toISOString()
+      }));
+
+      console.log('📝 Creating assignments:', assignments);
+
+      // Insert each assignment individually, ignoring duplicates
+      for (const assignment of assignments) {
+        const { error } = await supabase
+          .from('lead_assignments')
+          .insert([assignment]);
+
+        // Ignore duplicate errors (23505 is PostgreSQL unique violation code)
+        if (error && !error.message.includes('duplicate') && error.code !== '23505') {
+          console.error('❌ Assignment error:', error);
+          alert(`Failed to assign lead: ${error.message}`);
+          return;
+        }
+
+        // Determine price for this specific org
+        const priceValue = leadPrice ? parseFloat(leadPrice) : null;
+
+        // Create team_lead_data record with org-specific price and lead data
+        const { error: teamDataError } = await supabase
+          .from('team_lead_data')
+          .insert([{
+            team_id: assignment.team_id,
+            lead_id: leadId,
+            status: 'new',
+            purchase_price: priceValue,
+            acres: leadData?.acres || leadData?.acreage || null,
+            parcel_id: leadData?.parcel_id || leadData?.parcelid || null,
+            property_county: leadData?.property_county || leadData?.county || null,
+            property_state: leadData?.property_state || leadData?.state || null
+          }]);
+
+        // Ignore duplicate errors (team already has this lead)
+        if (teamDataError && !teamDataError.message.includes('duplicate') && teamDataError.code !== '23505') {
+          console.error('❌ Team data creation error:', teamDataError);
+        } else {
+          if (priceValue !== null) {
+            console.log(`💰 Org ${assignment.team_id}: price $${priceValue} (masked)`);
+          } else {
+            console.log(`✅ Org ${assignment.team_id}: free (unmasked)`);
+          }
+        }
+      }
+
+      console.log('✅ Assignments with per-org pricing created successfully');
+
+      // Update lead status if not already assigned
+      await supabase
+        .from('leads')
+        .update({ status: 'assigned' })
+        .eq('id', leadId);
+
+      // Create notifications for all team members of assigned teams
+      for (const teamId of teamIds) {
+        // Get the price for THIS specific team/org
+        const { data: teamData } = await supabase
+          .from('team_lead_data')
+          .select('purchase_price')
+          .eq('team_id', teamId)
+          .eq('lead_id', leadId)
+          .single();
+
+        const orgPrice = teamData?.purchase_price || null;
+        const isPricedLead = orgPrice && orgPrice > 0;
+
+        const { data: teamMembers } = await supabase
+          .from('team_members')
+          .select('user_id')
+          .eq('team_id', teamId);
+
+        if (teamMembers && teamMembers.length > 0) {
+          const location = leadData?.property_county || leadData?.county || 'Unknown';
+          const state = leadData?.property_state || leadData?.state || 'TX';
+          const acres = leadData?.acres || leadData?.acreage || 'N/A';
+
+          // For priced leads, DON'T show owner name (prevents lookup without purchase)
+          const title = isPricedLead ? 'New Lead Available for Purchase' : 'New Lead';
+          const message = isPricedLead
+            ? `${acres} acres in ${location}, ${state} - $${orgPrice}`
+            : `${leadData?.full_name || leadData?.name || 'Property'} - ${acres} in ${location}`;
+
+          // Create notification for each team member via API (sends email too)
+          for (const member of teamMembers) {
+            try {
+              await fetch('/api/notifications/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  userId: member.user_id,
+                  type: 'lead_assigned',
+                  title: title,
+                  message: message,
+                  sendEmail: true,
+                  isPricedLead: isPricedLead
+                })
+              });
+            } catch (err) {
+              console.error('Failed to send notification:', err);
+            }
+          }
+        }
+      }
+
+      alert(`✅ Successfully assigned lead to ${teamIds.length} organization(s)!`);
+
+      setAssignModalOpen(false);
+      setSelectedLead(null);
+      setSelectedOrgsForAssignment([]);
+      setLeadPrice(''); // Reset price
+      fetchAllData();
+    } catch (err) {
+      console.error('❌ Error assigning lead:', err);
+      alert(`Error: ${err.message}`);
+    } finally {
+      setIsAssigning(false);
+    }
+  };
+
+  // Initialize Mapbox when Create Lead tab is active
+  useEffect(() => {
+    if (activeTab === 'create-lead' && !map.current && mapContainer.current) {
+      mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+
+      map.current = new mapboxgl.Map({
+        container: mapContainer.current,
+        style: 'mapbox://styles/mapbox/satellite-streets-v12',
+        center: [-98.5795, 39.8283], // Center of USA
+        zoom: 4
+      });
+
+      map.current.addControl(new mapboxgl.NavigationControl(), 'top-right');
+    }
+  }, [activeTab]);
+
+  // Add map click handler when click mode is active
+  useEffect(() => {
+    if (!map.current) return;
+
+    const handleClick = async (e) => {
+      if (inputMode !== 'click' || !clickToFindActive) return;
+
+      const { lng, lat } = e.lngLat;
+
+      // Show loading state
+      setLocatingParcel(true);
+
+      try {
+        console.log('🖱️ Clicked map at:', { lat, lng });
+
+        // Call Regrid Tile Query API
+        const response = await fetch(`/api/regrid/query?lat=${lat}&lon=${lng}`);
+        const data = await response.json();
+
+        if (data.success && data.results && data.results.length > 0) {
+          const parcel = data.results[0];
+          console.log('✅ Found parcel:', parcel);
+
+          // Set found parcels
+          setFoundParcels(data.results);
+          setSelectedParcelIndex(0);
+
+          // Auto-populate form with parcel data
+          setNewLead(prev => ({
+            ...prev,
+            parcel_id: parcel.properties?.apn || '',
+            street_address: parcel.properties?.address || '',
+            property_county: parcel.properties?.county || '',
+            property_state: parcel.properties?.state || 'TX',
+            zip_code: parcel.properties?.zip || '',
+            acres: parcel.properties?.acres || ''
+          }));
+
+          // Draw parcel on map
+          drawParcelOnMap(parcel);
+
+          // Fly to parcel
+          if (parcel.geometry && map.current) {
+            map.current.flyTo({
+              center: [lng, lat],
+              zoom: 17,
+              essential: true
+            });
+          }
+
+          setParcelLocated(true);
+          alert('✅ Parcel found! Review the data and click "Publish Lead"');
+        } else {
+          alert('❌ No parcel found at this location. Try clicking on a different area.');
+        }
+      } catch (error) {
+        console.error('Error finding parcel:', error);
+        alert('❌ Error finding parcel: ' + error.message);
+      } finally {
+        setLocatingParcel(false);
+      }
+    };
+
+    // Add click handler
+    map.current.on('click', handleClick);
+
+    // Cleanup
+    return () => {
+      if (map.current) {
+        map.current.off('click', handleClick);
+      }
+    };
+  }, [inputMode, clickToFindActive]);
+
+  const drawParcelOnMap = (parcelData) => {
+    if (parcelData.geometry && map.current) {
+      // Remove existing parcel layers if they exist
+      if (map.current.getLayer('parcel-fill')) {
+        map.current.removeLayer('parcel-fill');
+      }
+      if (map.current.getLayer('parcel-boundary')) {
+        map.current.removeLayer('parcel-boundary');
+      }
+      if (map.current.getSource('parcel')) {
+        map.current.removeSource('parcel');
+      }
+
+      // Add the parcel boundary as a red outline
+      map.current.addSource('parcel', {
+        type: 'geojson',
+        data: {
+          type: 'Feature',
+          geometry: parcelData.geometry,
+          properties: parcelData.properties
+        }
+      });
+
+      map.current.addLayer({
+        id: 'parcel-fill',
+        type: 'fill',
+        source: 'parcel',
+        paint: {
+          'fill-color': '#FF0000',
+          'fill-opacity': 0.2
+        }
+      });
+
+      map.current.addLayer({
+        id: 'parcel-boundary',
+        type: 'line',
+        source: 'parcel',
+        paint: {
+          'line-color': '#FF0000',
+          'line-width': 3
+        }
+      });
+    }
+  };
+
+  const locateParcel = async () => {
+    // Validate based on what info is provided
+    if (!newLead.parcel_id && !newLead.street_address && !newLead.owner_name) {
+      alert('❌ Please enter either:\n• Parcel ID + County\n• Owner Name + County\n• Address');
+      return;
+    }
+
+    setLocatingParcel(true);
+
+    try {
+      let regridData = null;
+
+      // Priority 1: Parcel ID (search all, then filter by county)
+      if (newLead.parcel_id && newLead.parcel_id.trim()) {
+        console.log('🎯 Using APN lookup for parcel:', newLead.parcel_id, 'filtering for county:', newLead.property_county);
+        // Search by parcel ID only, will filter by county in results
+        const url = `/api/regrid/lookup?apn=${encodeURIComponent(newLead.parcel_id)}${newLead.property_county ? `&county=${encodeURIComponent(newLead.property_county)}` : ''}`;
+        const regridResponse = await fetch(url);
+        regridData = await regridResponse.json();
+      }
+      // Priority 2: Owner Name + County
+      else if (newLead.owner_name && newLead.owner_name.trim()) {
+        console.log('👤 Searching by owner name:', newLead.owner_name);
+        const queryParts = [newLead.owner_name];
+        if (newLead.property_county) queryParts.push(newLead.property_county);
+        if (newLead.property_state) queryParts.push(newLead.property_state);
+
+        const searchQuery = queryParts.join(', ');
+        const regridResponse = await fetch(`/api/regrid/lookup?address=${encodeURIComponent(searchQuery)}`);
+        regridData = await regridResponse.json();
+      }
+      // Priority 3: Address (can return multiple results - EXPENSIVE!)
+      else {
+        console.log('⚠️ Searching by address (may return multiple parcels - uses more API credits)');
+        const queryParts = [];
+        if (newLead.street_address) queryParts.push(newLead.street_address);
+        if (newLead.property_county) queryParts.push(newLead.property_county);
+        if (newLead.property_state) queryParts.push(newLead.property_state);
+        if (newLead.zip_code) queryParts.push(newLead.zip_code);
+
+        const searchQuery = queryParts.join(', ');
+        const regridResponse = await fetch(`/api/regrid/lookup?address=${encodeURIComponent(searchQuery)}`);
+        regridData = await regridResponse.json();
+      }
+
+      // Process results
+      if (regridData && regridData.success && regridData.results && regridData.results.length > 0) {
+        setFoundParcels(regridData.results);
+        setSelectedParcelIndex(0);
+
+        // Get centroid from first parcel for map positioning
+        const firstParcel = regridData.results[0];
+        let lng, lat;
+
+        if (firstParcel.geometry) {
+          if (firstParcel.geometry.type === 'Point') {
+            [lng, lat] = firstParcel.geometry.coordinates;
+          } else if (firstParcel.geometry.type === 'Polygon') {
+            const bounds = firstParcel.geometry.coordinates[0];
+            const lngs = bounds.map(c => c[0]);
+            const lats = bounds.map(c => c[1]);
+            lng = (Math.min(...lngs) + Math.max(...lngs)) / 2;
+            lat = (Math.min(...lats) + Math.max(...lats)) / 2;
+          }
+        }
+
+        // Fly to location and add marker
+        if (lng && lat && map.current) {
+          map.current.flyTo({
+            center: [lng, lat],
+            zoom: 16,
+            essential: true
+          });
+
+          new mapboxgl.Marker()
+            .setLngLat([lng, lat])
+            .addTo(map.current);
+        }
+
+        // Draw the first parcel by default
+        drawParcelOnMap(regridData.results[0]);
+
+        setParcelLocated(true);
+        if (regridData.results.length > 1) {
+          alert(`Found ${regridData.results.length} parcels. Select the correct one below.`);
+        } else {
+          alert('✅ Parcel found! Verify and click "Publish Lead"');
+        }
+      } else {
+        alert('❌ No parcel found. Please verify the Parcel ID or address.');
+      }
+    } catch (error) {
+      console.error('Error locating parcel:', error);
+      alert('Error locating property: ' + error.message);
+    } finally {
+      setLocatingParcel(false);
+    }
+  };
+
+  const selectParcel = (index) => {
+    setSelectedParcelIndex(index);
+    drawParcelOnMap(foundParcels[index]);
+  };
+
+  // Handle KML file upload and parsing
+  const handleKmlUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setKmlFile(file);
+
+    try {
+      const text = await file.text();
+      const parser = new DOMParser();
+      const kml = parser.parseFromString(text, 'text/xml');
+
+      // Extract coordinates from KML
+      const coordinates = kml.getElementsByTagName('coordinates')[0]?.textContent.trim();
+
+      if (!coordinates) {
+        alert('❌ No coordinates found in KML file');
+        return;
+      }
+
+      // Parse KML coordinates (lon,lat,alt format) to GeoJSON
+      const coordPairs = coordinates.split(/\s+/).map(coord => {
+        const [lon, lat] = coord.split(',').map(Number);
+        return [lon, lat];
+      });
+
+      // Create GeoJSON Polygon
+      const geometry = {
+        type: 'Polygon',
+        coordinates: [coordPairs]
+      };
+
+      setUploadedGeometry(geometry);
+
+      // Draw on map
+      drawParcelOnMap({ geometry, properties: {} });
+
+      // Center map on parcel
+      if (coordPairs.length > 0 && map.current) {
+        const [lon, lat] = coordPairs[0];
+        map.current.flyTo({
+          center: [lon, lat],
+          zoom: 16,
+          essential: true
+        });
+      }
+
+      setParcelLocated(true);
+      alert('✅ KML file loaded! Parcel boundary displayed on map.');
+    } catch (error) {
+      console.error('Error parsing KML:', error);
+      alert('❌ Error parsing KML file: ' + error.message);
+    }
+  };
+
+  // Handle pasted property data from GIS
+  const handlePastedData = (pastedText) => {
+    try {
+      console.log('📋 Pasted text:', pastedText);
+
+      const updatedLead = { ...newLead };
+
+      // Extract County from "Location" line (e.g., "Grimes County, TX")
+      const locationMatch = pastedText.match(/Location[:\s]*\n([^\n]+)/i);
+      if (locationMatch) {
+        const location = locationMatch[1].trim();
+        // Extract county name (before "County")
+        const countyMatch = location.match(/^([^,]+)\s+County/i);
+        if (countyMatch) {
+          updatedLead.property_county = countyMatch[1].trim();
+        }
+        // Extract state
+        const stateMatch = location.match(/,\s*([A-Z]{2})/);
+        if (stateMatch) {
+          updatedLead.property_state = stateMatch[1];
+        }
+      }
+
+      // Extract Acres
+      const acresMatch = pastedText.match(/Acres[:\s]*\n([0-9.,]+)/i);
+      if (acresMatch) {
+        updatedLead.acres = acresMatch[1].replace(',', '');
+      }
+
+      // Extract Parcel #
+      const parcelMatch = pastedText.match(/Parcel\s*#?[:\s]*\n([^\n]+)/i);
+      if (parcelMatch) {
+        updatedLead.parcel_id = parcelMatch[1].trim();
+      }
+
+      // Extract Owner 1
+      const ownerMatch = pastedText.match(/Owner\s*1?[:\s]*\n([^\n]+)/i);
+      if (ownerMatch) {
+        updatedLead.owner_name = ownerMatch[1].trim();
+      }
+
+      // Extract Property Address
+      const propAddressMatch = pastedText.match(/Property\s+Address[:\s]*\n([^\n]+)/i);
+      if (propAddressMatch) {
+        const address = propAddressMatch[1].trim();
+        updatedLead.street_address = address;
+
+        // Extract ZIP code from address (5 or 9 digit)
+        const zipMatch = address.match(/\b(\d{5})(?:\d{4})?\b/);
+        if (zipMatch) {
+          updatedLead.zip_code = zipMatch[1];
+        }
+      }
+
+      setNewLead(updatedLead);
+      console.log('✅ Auto-populated from pasted data:', updatedLead);
+      alert('✅ Property data auto-populated! Review and fill in Name/Email/Phone.');
+    } catch (error) {
+      console.error('Error parsing pasted data:', error);
+      alert('❌ Error parsing pasted data: ' + error.message);
+    }
+  };
+
+  // Handle CSV file upload and parsing
+  const handleCsvUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setCsvFile(file);
+
+    try {
+      const text = await file.text();
+      const lines = text.split('\n').filter(line => line.trim());
+
+      if (lines.length < 2) {
+        alert('❌ CSV file must have a header row and data row');
+        return;
+      }
+
+      // Parse CSV (handle quoted values)
+      const parseCSVLine = (line) => {
+        const result = [];
+        let current = '';
+        let inQuotes = false;
+
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+          if (char === '"') {
+            inQuotes = !inQuotes;
+          } else if (char === ',' && !inQuotes) {
+            result.push(current.trim());
+            current = '';
+          } else {
+            current += char;
+          }
+        }
+        result.push(current.trim());
+        return result;
+      };
+
+      const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/"/g, ''));
+      const values = parseCSVLine(lines[1]).map(v => v.replace(/"/g, ''));
+
+      // Create data object
+      const data = {};
+      headers.forEach((header, i) => {
+        data[header] = values[i] || '';
+      });
+
+      console.log('📄 CSV Headers:', headers);
+      console.log('📄 CSV Values:', values);
+      console.log('📄 Parsed CSV data:', data);
+
+      // Map CSV fields to lead fields (flexible mapping)
+      const updatedLead = { ...newLead };
+
+      // Try to find owner/name (many variations)
+      const ownerFields = ['owner', 'owner name', 'owner_name', 'name', 'ownername', 'owner1', 'mail_name'];
+      for (const field of ownerFields) {
+        if (data[field]) {
+          updatedLead.owner_name = data[field];
+          break;
+        }
+      }
+
+      // Try to find parcel ID (many variations)
+      const parcelFields = ['apn', 'parcel id', 'parcel_id', 'parcelid', 'parcelnumb', 'parcel_number', 'account', 'account_number'];
+      for (const field of parcelFields) {
+        if (data[field]) {
+          updatedLead.parcel_id = data[field];
+          break;
+        }
+      }
+
+      // Try to find acres (many variations)
+      const acresFields = ['acres', 'acreage', 'gisacre', 'gis_acre', 'calc_acres', 'calculated_acres', 'area_acres'];
+      for (const field of acresFields) {
+        if (data[field]) {
+          updatedLead.acres = data[field];
+          break;
+        }
+      }
+
+      // Try to find address
+      const addressFields = ['address', 'street address', 'street_address', 'situs_address', 'situs', 'property_address'];
+      for (const field of addressFields) {
+        if (data[field]) {
+          updatedLead.street_address = data[field];
+          break;
+        }
+      }
+
+      // Try to find county
+      const countyFields = ['county', 'county_name'];
+      for (const field of countyFields) {
+        if (data[field]) {
+          updatedLead.property_county = data[field];
+          break;
+        }
+      }
+
+      // Try to find state
+      const stateFields = ['state', 'state_code', 'st'];
+      for (const field of stateFields) {
+        if (data[field]) {
+          updatedLead.property_state = data[field];
+          break;
+        }
+      }
+
+      // Try to find zip
+      const zipFields = ['zip', 'zipcode', 'zip_code', 'postal_code', 'postalcode'];
+      for (const field of zipFields) {
+        if (data[field]) {
+          updatedLead.zip_code = data[field];
+          break;
+        }
+      }
+
+      setNewLead(updatedLead);
+      console.log('✅ Updated lead data:', updatedLead);
+      alert('✅ CSV data loaded! Check the console for details.');
+    } catch (error) {
+      console.error('Error parsing CSV:', error);
+      alert('❌ Error parsing CSV file: ' + error.message);
+    }
+  };
+
+  const handleCreateLead = async () => {
+    if (!parcelLocated) {
+      alert('Please locate the property on the map first');
+      return;
+    }
+
+    setCreatingLead(true);
+
+    try {
+      // Determine geometry source based on input mode
+      let geometry = null;
+      let properties = {};
+
+      if (inputMode === 'upload') {
+        // Use uploaded geometry from KML file
+        geometry = uploadedGeometry;
+        console.log('📤 Using uploaded geometry:', geometry);
+      } else if (inputMode === 'click' || inputMode === 'search') {
+        // Use Regrid result geometry (from click or search)
+        const selectedParcel = foundParcels[selectedParcelIndex];
+        geometry = selectedParcel?.geometry;
+        properties = selectedParcel?.properties || {};
+
+        console.log(`${inputMode === 'click' ? '🖱️' : '🔍'} Using Regrid geometry:`, {
+          mode: inputMode,
+          foundParcelsLength: foundParcels.length,
+          selectedParcelIndex: selectedParcelIndex,
+          hasGeometry: !!geometry
+        });
+      }
+
+      if (!geometry) {
+        console.error('❌ NO GEOMETRY FOUND!', {
+          inputMode,
+          uploadedGeometry,
+          foundParcels,
+          selectedParcelIndex
+        });
+        alert('⚠️ ERROR: No parcel geometry! Lead will be created but won\'t show on map. Check console.');
+      }
+
+      // Calculate centroid from geometry for lat/lng
+      let latitude = null;
+      let longitude = null;
+      if (geometry && geometry.coordinates && geometry.coordinates[0]) {
+        const coords = geometry.coordinates[0];
+        const lats = coords.map(c => c[1]);
+        const lngs = coords.map(c => c[0]);
+        latitude = lats.reduce((a, b) => a + b) / lats.length;
+        longitude = lngs.reduce((a, b) => a + b) / lngs.length;
+        console.log('📍 Calculated centroid:', { latitude, longitude });
+      }
+
+      const leadToInsert = {
+        full_name: newLead.full_name,
+        name: newLead.full_name,
+        email: newLead.email,
+        phone: newLead.phone,
+        street_address: newLead.street_address,
+        address: newLead.street_address,
+        city: properties?.city || 'Unknown',
+        property_state: newLead.property_state,
+        state: newLead.property_state,
+        property_county: newLead.property_county,
+        county: newLead.property_county,
+        zip: newLead.zip_code,
+        acres: parseFloat(newLead.acres) || null,
+        acreage: parseFloat(newLead.acres) || null,
+        parcel_id: newLead.parcel_id,
+        parcel_geometry: geometry,
+        latitude: latitude,
+        longitude: longitude,
+        source: inputMode === 'upload' ? 'admin-upload' : inputMode === 'click' ? 'admin-click' : 'admin-search',
+        status: 'new',
+        dealtype: 'flips',
+        created_at: new Date().toISOString()
+      };
+
+      console.log('🚀 INSERTING LEAD:', {
+        name: leadToInsert.full_name,
+        inputMode,
+        hasGeometry: !!geometry,
+        geometryType: geometry?.type,
+        acres: leadToInsert.acres,
+        parcel_id: leadToInsert.parcel_id
+      });
+
+      const { data: leadData, error: leadError } = await supabase
+        .from('leads')
+        .insert([leadToInsert])
+        .select();
+
+      if (leadError) throw leadError;
+
+      // Notify all teams about the new lead
+      if (leadData && leadData.length > 0) {
+        const newLeadData = leadData[0];
+        const location = newLeadData.property_county || 'Unknown';
+        const state = newLeadData.property_state || newLeadData.state || 'TX';
+        const acres = newLeadData.acres || 'N/A';
+        const price = newLeadData.price;
+
+        // Check if this is a priced lead (for purchase)
+        const isPricedLead = price && parseFloat(price) > 0;
+
+        const title = isPricedLead ? 'New Lead Available for Purchase' : 'New Lead Available';
+        const message = isPricedLead
+          ? `${acres} acres in ${location}, ${state} - $${price}`
+          : `${newLeadData.full_name || 'Property'} - ${acres} in ${location}`;
+
+        // Get all teams
+        const { data: allTeams } = await supabase
+          .from('teams')
+          .select('id');
+
+        if (allTeams && allTeams.length > 0) {
+          for (const team of allTeams) {
+            // Get all team members
+            const { data: teamMembers } = await supabase
+              .from('team_members')
+              .select('user_id')
+              .eq('team_id', team.id);
+
+            if (teamMembers && teamMembers.length > 0) {
+              // Notify each team member
+              for (const member of teamMembers) {
+                try {
+                  await fetch('/api/notifications/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      userId: member.user_id,
+                      type: isPricedLead ? 'lead_available_purchase' : 'lead_added',
+                      title: title,
+                      message: message,
+                      sendEmail: true
+                    })
+                  });
+                } catch (err) {
+                  console.error('Failed to send notification:', err);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Reset form
+      setNewLead({
+        full_name: '',
+        email: '',
+        phone: '',
+        property_state: '',
+        property_county: '',
+        street_address: '',
+        zip_code: '',
+        acres: '',
+        parcel_id: ''
+      });
+      setFoundParcels([]);
+      setSelectedParcelIndex(0);
+      setParcelLocated(false);
+
+      // Refresh data and switch to unassigned tab
+      await fetchAllData();
+      setActiveTab('unassigned');
+      alert('Lead published successfully! You can now assign it to organizations.');
+    } catch (error) {
+      console.error('Error creating lead:', error);
+      alert('Error creating lead: ' + error.message);
+    } finally {
+      setCreatingLead(false);
+    }
+  };
+
+  // Create Subdivision Property via API
+  const handleCreateSubdivision = async () => {
+    if (!subdivForm.county || !subdivForm.state) {
+      showToast('County and State are required', 'error');
+      return;
+    }
+    setSubdivCreating(true);
+    try {
+      const res = await fetch('/api/subdivision/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(subdivForm)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to create');
+
+      // Add to local state
+      setRawLeads(prev => [data.lead, ...prev]);
+
+      // Reset form
+      setSubdivForm({ county: '', state: 'TX', acreage: '', seller_name: '', agent_name: '', agent_phone: '', agent_email: '', parcel_id: '' });
+      setSubdivFormOpen(false);
+      showToast('Subdivision property created!', 'success', subdivForm.seller_name || 'New Property');
+    } catch (error) {
+      console.error('Error creating subdivision lead:', error);
+      showToast('Error: ' + error.message, 'error');
+    } finally {
+      setSubdivCreating(false);
+    }
+  };
+
+  // Check lead_assignments table to determine if lead is assigned
+  const unassignedLeads = allLeads.filter(l => l.status !== 'archived' && (!leadAssignments[l.id] || leadAssignments[l.id].length === 0));
+  const assignedLeads = allLeads.filter(l => leadAssignments[l.id] && leadAssignments[l.id].length > 0);
+
+  // ============================================================
+  // Session Analytics, data fetching & realtime
+  // ============================================================
+
+  const STEP_LABELS = {
+    1: 'Relationship', 2: 'Acreage', 3: 'Home on Property', 4: 'Listed w/ Realtor',
+    5: 'Inherited', 6: 'Owned 4+ Yrs', 7: 'Honest Statement', 8: 'Why Selling',
+    9: 'State', 10: 'County', 11: 'Address', 12: 'Name',
+    13: 'Names on Deed', 14: 'Email', 15: 'Phone', 16: 'OTP Verify',
+  };
+
+  // Fetch funnel data (step events aggregated)
+  const fetchFunnelData = async (days = 7) => {
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    const { data: sessions } = await supabase
+      .from('tracking_sessions')
+      .select('session_id, max_step_reached, completed, disqualified, disqualified_at_step, started_at')
+      .gte('started_at', since.toISOString());
+    if (!sessions) return;
+
+    const steps = [];
+    for (let i = 1; i <= 16; i++) {
+      const reached = sessions.filter(s => s.max_step_reached >= i).length;
+      const dqHere = sessions.filter(s => s.disqualified && s.disqualified_at_step === i).length;
+      steps.push({ step: i, label: STEP_LABELS[i], reached, dqHere });
+    }
+    setFunnelData(steps);
+  };
+
+  // Fetch all sessions for the replay list
+  const fetchTrackingSessions = async (days = 7) => {
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    const { data } = await supabase
+      .from('tracking_sessions')
+      .select('*')
+      .gte('started_at', since.toISOString())
+      .order('started_at', { ascending: false })
+      .limit(200);
+    if (data) setAllTrackingSessions(data);
+  };
+
+  // Fetch heatmap click data for a given step
+  const fetchHeatmapClicks = async (step) => {
+    const days = analyticsDateRange === '7d' ? 7 : analyticsDateRange === '30d' ? 30 : 1;
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    const { data } = await supabase
+      .from('tracking_click_events')
+      .select('x_percent, y_percent, element_tag, element_text')
+      .eq('step_number', step)
+      .gte('clicked_at', since.toISOString())
+      .limit(5000);
+    if (data) setHeatmapClicks(data);
+  };
+
+  // Load rrweb recording for replay
+  const loadReplaySession = async (session) => {
+    setSelectedReplaySession(session);
+    setReplayEvents(null);
+    setReplayLoading(true);
+
+    try {
+      // List all chunks for this session
+      const { data: files } = await supabase.storage
+        .from('session-recordings')
+        .list(session.session_id, { sortBy: { column: 'name', order: 'asc' } });
+
+      if (!files || files.length === 0) {
+        setReplayLoading(false);
+        return;
+      }
+
+      let allEvents = [];
+      for (const file of files) {
+        const { data: blob } = await supabase.storage
+          .from('session-recordings')
+          .download(`${session.session_id}/${file.name}`);
+        if (!blob) continue;
+
+        let text;
+        if (file.name.endsWith('.gz')) {
+          // Decompress gzip
+          const ds = new DecompressionStream('gzip');
+          const decompressed = blob.stream().pipeThrough(ds);
+          text = await new Response(decompressed).text();
+        } else {
+          text = await blob.text();
+        }
+        const events = JSON.parse(text);
+        allEvents = allEvents.concat(events);
+      }
+
+      setReplayEvents(allEvents);
+    } catch (err) {
+      console.error('Failed to load replay:', err);
+    } finally {
+      setReplayLoading(false);
+    }
+  };
+
+  // Initialize rrweb player when events are loaded
+  useEffect(() => {
+    if (!replayEvents || !replayContainerRef.current || replayEvents.length === 0) return;
+
+    // Clear previous player
+    replayContainerRef.current.innerHTML = '';
+
+    import('rrweb-player').then(({ default: RrwebPlayer }) => {
+      // Also import CSS
+      import('rrweb-player/dist/style.css').catch(() => {});
+      replayPlayerRef.current = new RrwebPlayer({
+        target: replayContainerRef.current,
+        props: {
+          events: replayEvents,
+          width: 900,
+          height: 550,
+          autoPlay: false,
+          showController: true,
+          speedOption: [1, 2, 4, 8],
+        },
+      });
+    }).catch(err => console.error('Failed to init rrweb-player:', err));
+
+    return () => {
+      if (replayPlayerRef.current) {
+        replayPlayerRef.current = null;
+      }
+    };
+  }, [replayEvents]);
+
+  // Supabase Realtime subscription for live sessions
+  useEffect(() => {
+    if (activeTab !== 'session-analytics') return;
+
+    // Initial fetch of active sessions
+    const fetchLive = async () => {
+      const cutoff = new Date(Date.now() - 30000).toISOString(); // active within 30s
+      const { data } = await supabase
+        .from('tracking_sessions')
+        .select('*')
+        .eq('is_active', true)
+        .gte('last_heartbeat_at', cutoff)
+        .order('last_heartbeat_at', { ascending: false });
+      if (data) setLiveSessions(data);
+    };
+    fetchLive();
+
+    // Subscribe to changes
+    const channel = supabase
+      .channel('tracking-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tracking_sessions' }, (payload) => {
+        if (payload.eventType === 'INSERT') {
+          setLiveSessions(prev => [payload.new, ...prev]);
+        } else if (payload.eventType === 'UPDATE') {
+          setLiveSessions(prev => {
+            const updated = prev.map(s => s.session_id === payload.new.session_id ? payload.new : s);
+            // Remove inactive sessions
+            return updated.filter(s => s.is_active && new Date(s.last_heartbeat_at) > new Date(Date.now() - 30000));
+          });
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [activeTab]);
+
+  // Fetch analytics data when tab becomes active or date range changes
+  useEffect(() => {
+    if (activeTab !== 'session-analytics') return;
+    const days = analyticsDateRange === '7d' ? 7 : analyticsDateRange === '30d' ? 30 : 1;
+    fetchFunnelData(days);
+    fetchTrackingSessions(days);
+  }, [activeTab, analyticsDateRange]);
+
+  // Fetch heatmap clicks when step changes
+  useEffect(() => {
+    if (activeTab === 'session-analytics' && analyticsSubTab === 'heatmaps') {
+      fetchHeatmapClicks(heatmapStep);
+    }
+  }, [activeTab, analyticsSubTab, heatmapStep, analyticsDateRange]);
+
+  // Time ago helper for analytics
+  const analyticsTimeAgo = (dateStr) => {
+    const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+    if (seconds < 60) return `${seconds}s ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  };
+
+
+  // Rich lead card shared by PPC Inflow and every pipeline-bucket tab.
+  const renderLeadCard = (lead) => (
+                  <div
+                    key={lead.id}
+                    id={`lead-card-${lead.id}`}
+                    className={`bg-slate-800/50 border rounded-xl overflow-hidden hover:border-blue-500/50 hover:shadow-xl hover:shadow-blue-500/10 transition-all ${
+                      highlightLeadId === lead.id
+                        ? 'border-blue-400 ring-2 ring-blue-400/70 shadow-xl shadow-blue-500/20'
+                        : 'border-slate-700/50'
+                    }`}
+                  >
+                    {/* NEXT TOUCH POINT BANNER - Always at TOP */}
+                    {(() => {
+                      const hasCallback = lead.next_callback_at && new Date(lead.next_callback_at) > new Date();
+                      const isOverdue = lead.next_callback_at && new Date(lead.next_callback_at) < new Date();
+                      const smartStatus = getSmartStatus(lead);
+                      const needsAction = smartStatus === 'NEW' || smartStatus === 'NEEDS_ATTENTION';
+
+                      if (hasCallback) {
+                        return (
+                          <div className="bg-orange-500/30 border-b border-orange-500/50 px-4 py-3 flex items-center gap-2">
+                            <svg className="w-5 h-5 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span className="font-semibold text-orange-300">
+                              Next Touch: {new Date(lead.next_callback_at).toLocaleDateString()} at {new Date(lead.next_callback_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                            </span>
+                          </div>
+                        );
+                      } else if (isOverdue) {
+                        return (
+                          <div className="bg-red-500/30 border-b border-red-500/50 px-4 py-3 flex items-center gap-2">
+                            <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                            <span className="font-semibold text-red-300">
+                              OVERDUE: Was due {new Date(lead.next_callback_at).toLocaleDateString()}
+                            </span>
+                          </div>
+                        );
+                      } else if (needsAction) {
+                        return (
+                          <div className={`${smartStatus === 'NEW' ? 'bg-green-500/30 border-green-500/50' : 'bg-red-500/30 border-red-500/50'} border-b px-4 py-3 flex items-center gap-2`}>
+                            <svg className={`w-5 h-5 ${smartStatus === 'NEW' ? 'text-green-400' : 'text-red-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                            </svg>
+                            <span className={`font-semibold ${smartStatus === 'NEW' ? 'text-green-300' : 'text-red-300'}`}>
+                              {smartStatus === 'NEW' ? 'NEW LEAD' : 'NEEDS ATTENTION - Follow Up!'}
+                            </span>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+
+                    {/* Imported (not from PPC): clearly mark subdivision leads. */}
+                    {lead.source === 'subdivision' && (
+                      <div className="bg-teal-500/15 border-b border-teal-500/40 px-4 py-2 flex items-center gap-2">
+                        <svg className="w-4 h-4 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                        </svg>
+                        <span className="text-xs font-bold uppercase tracking-wide text-teal-300">Subdivision</span>
+                      </div>
+                    )}
+
+                    <div className="p-5">
+                      {/* Tags row (interest/status signals) at the top of the card */}
+                      <div className="flex items-center gap-1.5 flex-wrap mb-3">
+                        <FreshBadge lead={lead} />
+                        {lead.map_uploaded ? <MappedBadge /> : <NotMappedBadge />}
+                        <HammerBadge lead={lead} />
+                        <TeammateBadge lead={lead} />
+                      </div>
+
+                      {/* Send to partner (Partners tab only) */}
+                      {activeTab === 'partners' && (
+                        <div className="mb-4">
+                          <MondayPushButton lead={lead} onToast={(m, t) => showToast(m, t)} onSaveSummary={(id, text) => patchLead(id, { partner_summary: text })} onSaveCoordinates={(id, text) => patchLead(id, { partner_coordinates: text })} />
+                        </div>
+                      )}
+
+                      {/* LAST CONTACTED + MESSAGES (Project Blue) */}
+                      {(() => {
+                        const meta = contactMeta[phoneKey(lead.phone || lead.owner_phone)];
+                        const unread = meta?.unread || 0;
+                        // Use whichever is newer: the recent-feed entry or the
+                        // last contact stamped on the lead (which is always there).
+                        const leadLast = lead.last_contact_at ? {
+                          created_at: lead.last_contact_at,
+                          direction: (lead.last_contact_dir || '').toUpperCase(),
+                          message_content: lead.last_contact_preview,
+                          activity_type: (lead.last_contact_channel || 'TEXT').toUpperCase(),
+                        } : null;
+                        const last = [meta?.last, leadLast].filter(Boolean)
+                          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0] || null;
+                        const needsResponse = last && last.direction === 'INBOUND';
+                        const awaitingSeller = last && last.direction === 'OUTBOUND';
+                        const whenDateTime = last ? new Date(last.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+                        return (
+                          <div className="mb-4 pb-3 border-b border-slate-700/40">
+                            {/* Contact info on its own, then action buttons on their own
+                                wrapping row below, so the badge can never get squeezed. */}
+                            {/* Each piece on its own line: label, badge, then the time. */}
+                            <div className="mb-2 space-y-1">
+                              <div className="text-[10px] uppercase tracking-wide text-slate-500">Last Contacted</div>
+                              {needsResponse && (
+                                <div>
+                                  <span className="inline-block px-2 py-0.5 rounded-md bg-red-500/25 text-red-300 text-[10px] font-bold">Needs Response · {whenDateTime}</span>
+                                </div>
+                              )}
+                              {awaitingSeller && (
+                                <div>
+                                  <span className="inline-block px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 text-[10px] font-bold">Awaiting Seller Reply</span>
+                                </div>
+                              )}
+                              <div className="text-sm font-bold text-slate-100 truncate">
+                                {last ? `${channelLabel(last)} · ${timeAgo(last.created_at)}` : 'No contact yet'}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                                {(lead.phone || lead.owner_phone) && (
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); setCallLead(lead); }}
+                                    title="Call"
+                                    className="px-3 py-1.5 rounded-lg bg-green-600/20 hover:bg-green-600/40 text-green-300 text-xs font-medium flex items-center gap-1.5"
+                                  >
+                                    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" /></svg>
+                                    Call
+                                  </button>
+                                )}
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); openConversation(lead); }}
+                                  title="Open conversation"
+                                  className="relative px-3 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 text-xs font-medium flex items-center gap-1.5"
+                                >
+                                  <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
+                                  </svg>
+                                  Messages
+                                  {unread > 0 && (
+                                    <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                                      {unread}
+                                    </span>
+                                  )}
+                                </button>
+                                {/* Add this lead to a follow-up campaign, right from the card */}
+                                <div className="relative">
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); setCampaignMenuLead(campaignMenuLead === lead.id ? null : lead.id); }}
+                                    title="Add to a follow-up campaign"
+                                    className="px-3 py-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 text-xs font-medium flex items-center gap-1.5"
+                                  >
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                                    Campaign
+                                  </button>
+                                  {campaignMenuLead === lead.id && (
+                                    <div className="absolute right-0 top-full mt-1 z-30 w-60 bg-slate-800 border border-slate-600 rounded-lg shadow-xl py-1" onClick={(e) => e.stopPropagation()}>
+                                      <div className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-700">Add to campaign</div>
+                                      {campaignList.length === 0 ? (
+                                        <div className="px-3 py-2 text-xs text-slate-400">No active campaigns. Create one in Follow-Up Campaigns.</div>
+                                      ) : campaignList.map(cp => {
+                                        const inIt = (campaignsByLead[lead.id] || new Set()).has(cp.id);
+                                        return (
+                                          <button
+                                            key={cp.id}
+                                            disabled={inIt}
+                                            onClick={() => !inIt && enrollLeadInCampaign(lead, cp.id)}
+                                            className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-2 ${inIt ? 'text-slate-500 cursor-default' : 'text-slate-200 hover:bg-slate-700'}`}
+                                          >
+                                            <span className="truncate">{cp.name}</span>
+                                            {inIt && <span className="text-[10px] text-emerald-400 flex-shrink-0">✓ In</span>}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                                {/* Push to partners, right from the card (same flow as the Partners tab) */}
+                                <MondayPushButton lead={lead} onToast={(m, t) => showToast(m, t)} compact />
+                            </div>
+                            {last?.message_content && (
+                              <div className={`text-xs mt-1 truncate ${unread ? 'text-slate-100 font-medium' : 'text-slate-400'}`}>
+                                {last.direction === 'INBOUND' ? '↩ ' : '→ '}
+                                {last.message_content}
+                              </div>
+                            )}
+                            {lead.last_call_at && (() => {
+                              const o = (lead.last_call_outcome || '').toLowerCase();
+                              const spoke = o === 'spoke' || o === 'connected';
+                              const dur = lead.last_call_duration;
+                              const label = spoke ? 'Call' : (o === 'voicemail' || o === 'left_vm') ? 'Voicemail' : 'No answer';
+                              const durStr = spoke && dur ? ` · ${Math.floor(dur / 60)}m ${dur % 60}s` : '';
+                              const when = new Date(lead.last_call_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+                              const cls = spoke ? 'text-green-300/90 bg-green-600/10 border-green-600/30' : 'text-red-300 bg-red-600/15 border-red-600/40';
+                              return (
+                                <div className={`mt-1.5 inline-flex items-center gap-1 text-[10px] font-medium border rounded px-1.5 py-0.5 ${cls}`}>
+                                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" /></svg>
+                                  {label}{durStr} · {when}
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        );
+                      })()}
+
+                      {renderNotesPreview(lead)}
+
+                      {/* STATUS DROPDOWN - Prominent at top */}
+                      <div className="mb-4">
+                        {(() => {
+                          const smartStatus = getSmartStatus(lead);
+                          const statusInfo = STATUS_CONFIG[smartStatus] || STATUS_CONFIG.NEW;
+                          return (
+                            <select
+                              value={smartStatus}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                updateLeadStatus(lead.id, e.target.value);
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              className={`w-full px-4 py-2.5 text-sm font-bold rounded-lg cursor-pointer border-2 focus:outline-none focus:ring-2 focus:ring-blue-500 ${statusInfo.color}`}
+                            >
+                              {PIPELINE_STATUSES.map(status => (
+                                <option key={status.value} value={status.value}>{status.label}</option>
+                              ))}
+                            </select>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Deal strip: offer, direction, follow-up */}
+                      <DealStrip
+                        lead={lead}
+                        repName={currentUserName}
+                        onSetOffer={setOfferAmount}
+                        onSetDirection={setDealDirection}
+                        onMoveToFollowUp={moveToFollowUp}
+                        onAdvance={advanceFollowUp}
+                        onSnooze={snoozeFollowUp}
+                        onRevive={reviveFollowUp}
+                        onMarkLost={markLost}
+                        onProduceOffer={(l) => setOfferModalLead(l)}
+                      />
+
+                      {/* Owner Name & Time */}
+                      <div className="mb-4">
+                        <LeadField
+                          initial={lead.name || lead.full_name || ''}
+                          onSave={(val) => patchLead(lead.id, { name: val, full_name: val })}
+                          className="w-full bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-2 text-white font-semibold text-lg focus:outline-none focus:border-blue-500/50"
+                          placeholder="Owner name"
+                        />
+                        <div className="mt-1 text-xs text-slate-500">Lead received {timeAgo(lead.created_at)}</div>
+                      </div>
+
+                    {/* Property Location */}
+                    <div className="space-y-2 mb-3 pb-3 border-b border-slate-700/50">
+                      <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Property Location</div>
+                      <LeadField
+                        initial={lead.form_data?.streetAddress || lead.street_address || lead.address || ''}
+                        onSave={(val) => patchLead(lead.id, { form_data: { ...lead.form_data, streetAddress: val }, street_address: val, address: val })}
+                        className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50"
+                        placeholder="Street address"
+                      />
+                      <div className="flex gap-2">
+                        <LeadField
+                          initial={lead.form_data?.propertyCounty || lead.property_county || lead.county || ''}
+                          onSave={(val) => patchLead(lead.id, { form_data: { ...lead.form_data, propertyCounty: val }, property_county: val, county: val })}
+                          className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50"
+                          placeholder="County"
+                        />
+                        <LeadField
+                          initial={lead.form_data?.propertyState || lead.property_state || lead.state || ''}
+                          onSave={(val) => patchLead(lead.id, { form_data: { ...lead.form_data, propertyState: val }, property_state: val, state: val })}
+                          className="w-20 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-blue-500/50"
+                          placeholder="State"
+                        />
+                      </div>
+                      <LeadField
+                        initial={lead.form_data?.acres || lead.acres || lead.acreage || ''}
+                        inputMode="decimal"
+                        onSave={(val) => patchLead(lead.id, { form_data: { ...lead.form_data, acres: val }, acres: parseFloat(val) || null, acreage: parseFloat(val) || null })}
+                        className="w-full bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-sm font-semibold text-orange-400 focus:outline-none focus:border-blue-500/50"
+                        placeholder="Acres"
+                      />
+                    </div>
+
+                    {/* Property Details */}
+                    <div className="space-y-2 mb-3 pb-3 border-b border-slate-700/50">
+                      <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Property Details</div>
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        {lead.form_data?.homeOnProperty && (
+                          <div>
+                            <span className="text-slate-500">Home:</span>{' '}
+                            <span className={lead.form_data.homeOnProperty === 'no' ? 'text-green-400 font-semibold' : 'text-yellow-400'}>
+                              {lead.form_data.homeOnProperty.toUpperCase()}
+                            </span>
+                          </div>
+                        )}
+                        {lead.form_data?.propertyListed && (
+                          <div>
+                            <span className="text-slate-500">Listed:</span>{' '}
+                            <span className={lead.form_data.propertyListed === 'no' ? 'text-green-400 font-semibold' : 'text-yellow-400'}>
+                              {lead.form_data.propertyListed.toUpperCase()}
+                            </span>
+                          </div>
+                        )}
+                        {lead.form_data?.isInherited && (
+                          <div>
+                            <span className="text-slate-500">Inherited:</span>{' '}
+                            <span className={lead.form_data.isInherited === 'yes' ? 'text-purple-400 font-semibold' : 'text-slate-300'}>
+                              {lead.form_data.isInherited.toUpperCase()}
+                            </span>
+                          </div>
+                        )}
+                        {lead.form_data?.ownedFourYears && (
+                          <div>
+                            <span className="text-slate-500">4+ Years:</span>{' '}
+                            <span className={lead.form_data.ownedFourYears === 'yes' ? 'text-green-400 font-semibold' : 'text-yellow-400'}>
+                              {lead.form_data.ownedFourYears.toUpperCase()}
+                            </span>
+                          </div>
+                        )}
+                        {lead.form_data?.namesOnDeed && (
+                          <div className="col-span-2">
+                            <span className="text-slate-500">On Deed:</span>{' '}
+                            <span className="text-slate-300">{lead.form_data.namesOnDeed}</span>
+                          </div>
+                        )}
+                        {lead.form_data?.priceRange && (
+                          <div className="col-span-2 mt-1 pt-1 border-t border-slate-700/30">
+                            <span className="text-slate-500">Price Range:</span>{' '}
+                            <span className="text-green-400 font-semibold">{lead.form_data.priceRange.replace(/-/g, ' ').replace('plus', '+').replace('under', 'Under ').replace('k', 'K').replace('m', 'M')}</span>
+                          </div>
+                        )}
+                        {lead.form_data?.whySelling && (
+                          <div className="col-span-2 mt-1 pt-1 border-t border-slate-700/30">
+                            <span className="text-slate-500">Why Selling:</span>{' '}
+                            <span className="text-cyan-400 italic">{lead.form_data.whySelling}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Contact Info */}
+                    <div className="space-y-2 text-sm mb-3">
+                      <div className="flex items-center gap-2">
+                        <svg className="w-4 h-4 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                        </svg>
+                        <LeadField
+                          type="email"
+                          initial={lead.email || lead.owner_email || ''}
+                          onSave={(val) => patchLead(lead.id, { email: val, owner_email: val })}
+                          className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-slate-300 focus:outline-none focus:border-blue-500/50"
+                          placeholder="Email"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <svg className="w-4 h-4 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                        </svg>
+                        <LeadField
+                          type="tel"
+                          initial={lead.phone || lead.owner_phone || ''}
+                          onSave={(val) => patchLead(lead.id, { phone: val, owner_phone: val })}
+                          className="flex-1 bg-slate-900/50 border border-slate-700/50 rounded px-2 py-1 text-slate-300 focus:outline-none focus:border-blue-500/50"
+                          placeholder="Phone"
+                        />
+                        {(lead.phone || lead.owner_phone) && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openConversation(lead);
+                            }}
+                            title="Open conversation"
+                            className="p-1.5 bg-blue-600/20 hover:bg-blue-600/40 rounded text-blue-400 transition flex-shrink-0"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                      {lead.ip_address && (
+                        <div className="flex items-center gap-2 text-slate-400 text-xs">
+                          <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+                          </svg>
+                          IP: {lead.ip_address}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Quick CRM Actions */}
+                    <div className="mt-3 pt-3 border-t border-slate-700/50">
+                      <div className="flex gap-1 mb-2">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openActivityModal(lead.id, 'CALL_OUTBOUND');
+                          }}
+                          title="Log Call"
+                          className="flex-1 px-2 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                          </svg>
+                          Call
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openActivityModal(lead.id, 'TEXT_SENT');
+                          }}
+                          title="Log Text"
+                          className="flex-1 px-2 py-1.5 bg-green-600/20 hover:bg-green-600/40 text-green-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                          </svg>
+                          Text
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openActivityModal(lead.id, 'EMAIL_SENT');
+                          }}
+                          title="Log Email"
+                          className="flex-1 px-2 py-1.5 bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                          </svg>
+                          Email
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openActivityModal(lead.id, 'NOTE_ADDED');
+                          }}
+                          title="Add Note"
+                          className="flex-1 px-2 py-1.5 bg-slate-600/20 hover:bg-slate-600/40 text-slate-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                          Note
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openScheduleModal(lead.id);
+                          }}
+                          title="Schedule Task"
+                          className="flex-1 px-2 py-1.5 bg-orange-600/20 hover:bg-orange-600/40 text-orange-400 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                          Schedule
+                        </button>
+                      </div>
+                      {/* Last Activity Indicator */}
+                      {lead.last_activity_at && (
+                        <div className="text-xs text-slate-500 mb-2">
+                          Last activity: {new Date(lead.last_activity_at).toLocaleDateString()} at {new Date(lead.last_activity_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Actions */}
+                    <div className="mt-2 pt-2 border-t border-slate-700/50 flex gap-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setLeadForMapSearch(lead);
+                          setFindMapModalOpen(true);
+                          setKmlFile(null);
+                          setUploadedGeometry(null);
+                        }}
+                        className={`flex-1 px-4 py-2 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2 ${lead.parcel_geometry ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}
+                      >
+                        {lead.parcel_geometry ? (
+                          <>
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            </svg>
+                            Map Attached
+                          </>
+                        ) : (
+                          <>
+                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+                            </svg>
+                            Attach Map
+                          </>
+                        )}
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openCalendarModal(lead);
+                        }}
+                        className="px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        Calendar
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openLeadDetails(lead);
+                        }}
+                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold rounded-lg transition-colors"
+                      >
+                        View Details
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedLead(lead);
+                          setAssignModalOpen(true);
+                          setSelectedOrgsForAssignment([]);
+                          setLeadPrice('');
+                        }}
+                        className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white text-sm font-semibold rounded-lg transition-colors"
+                      >
+                        Assign
+                      </button>
+                    </div>
+
+
+                    {/* Archive / Delete */}
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); archiveLead(lead.id); }}
+                        className="flex-1 px-3 py-1.5 bg-zinc-700/50 hover:bg-zinc-600/50 text-zinc-400 hover:text-zinc-300 text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>
+                        Archive
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); if (confirm(`Permanently delete ${lead.full_name || lead.name}? This cannot be undone.`)) deleteLead(lead.id); }}
+                        className="px-3 py-1.5 bg-red-900/30 hover:bg-red-800/40 text-red-400 hover:text-red-300 text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                        Delete
+                      </button>
+                    </div>
+
+                    {/* Footer */}
+                    <div className="mt-2 text-xs text-slate-500 text-center">
+                      {new Date(lead.created_at).toLocaleString()}
+                    </div>
+                    </div>{/* End p-5 wrapper */}
+                  </div>
+  );
+
+  // Client-only: skip server render entirely to avoid SSR/prerender crashes.
+  if (!hasMounted) return <div className="min-h-screen bg-slate-900" />;
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
+      {/* Toast Notification */}
+      {conversationLead && (
+        <ConversationModal
+          lead={conversationLead}
+          currentUserId={currentUserId}
+          currentUserName={currentUserName}
+          initialDraft={prefillDraft}
+          onClose={() => { setConversationLead(null); setPrefillDraft(''); }}
+          onActivity={() => setContactRefresh((t) => t + 1)}
+          onCall={(l) => setCallLead(l)}
+          onOpenLead={(l) => navigateToLeadCard(l)}
+          onSetDirection={(id, val) => setDealDirection(id, val)}
+          onScheduleFollowUp={scheduleSmartFollowUp}
+          onAssignTask={assignTask}
+          onSetStage={(id, stage) => updateLeadStatus(id, stage)}
+        />
+      )}
+      {notesModalLead && (
+        <NotesModal
+          lead={notesModalLead}
+          currentUserId={currentUserId}
+          currentUserName={currentUserName}
+          roster={noteRoster}
+          usersById={usersById}
+          postCall={notesPostCall}
+          onClose={() => { setNotesModalLead(null); setNotesPostCall(false); }}
+          onPosted={() => setNotesRefresh((t) => t + 1)}
+          onOpenLead={(l) => navigateToLeadCard(l)}
+          onSetDirection={(id, val) => setDealDirection(id, val)}
+          onScheduleFollowUp={scheduleSmartFollowUp}
+          onAssignTask={assignTask}
+          onSetStage={(id, stage) => updateLeadStatus(id, stage)}
+        />
+      )}
+      {callLead && (
+        <CallModal
+          lead={callLead}
+          currentUserId={currentUserId}
+          onClose={() => setCallLead(null)}
+          onLogged={() => setContactRefresh((t) => t + 1)}
+          onEnded={(l, outcome) => {
+            if (outcome === 'spoke') { setNotesPostCall(true); setNotesModalLead(l); }
+            else { setPrefillDraft(buildNoAnswerText(l)); setConversationLead(l); } // no answer -> text screen, pre-filled
+          }}
+          onOpenNotes={(l) => setNotesModalLead(l)}
+        />
+      )}
+      {offerModalLead && (
+        <OfferModal
+          lead={offerModalLead}
+          showToast={showToast}
+          onClose={() => setOfferModalLead(null)}
+          onSaved={(updated) => {
+            setRawLeads((prev) => prev.map((l) => (l.id === updated.id ? { ...l, ...updated } : l)));
+            setOfferModalLead((prev) => (prev && prev.id === updated.id ? { ...prev, ...updated } : prev));
+            if (selectedLead && selectedLead.id === updated.id) setSelectedLead((prev) => ({ ...prev, ...updated }));
+          }}
+        />
+      )}
+      {toast && (
+        <div className={`fixed top-4 right-4 z-50 px-6 py-4 rounded-xl shadow-2xl transform transition-all duration-300 animate-slide-in ${
+          toast.type === 'success' ? 'bg-green-600 border border-green-400' : 'bg-red-600 border border-red-400'
+        }`}>
+          <div className="flex items-center gap-3">
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+              toast.type === 'success' ? 'bg-green-500' : 'bg-red-500'
+            }`}>
+              {toast.type === 'success' ? (
+                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : (
+                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              )}
+            </div>
+            <div>
+              <div className="font-bold text-white">{toast.leadName}</div>
+              <div className="text-sm text-white/90">{toast.message}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Header */}
+      <div className="bg-slate-800/50 backdrop-blur-sm border-b border-slate-700/50 px-6 py-4 sticky top-0 z-10">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <img src="/parcelreach-logo.png" alt="ParcelReach" className="h-20" />
+          </div>
+          <div className="flex items-center gap-4">
+            {currentUserRole && (
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-slate-400">{currentUserName}</span>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${isAdmin ? 'bg-blue-900/40 text-blue-300 border border-blue-700/50' : 'bg-purple-900/40 text-purple-300 border border-purple-700/50'}`}>
+                  {isAdmin ? 'Admin' : 'Acquisition Manager'}
+                </span>
+              </div>
+            )}
+            {currentUserId && (() => {
+              const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+              const dueRaw = scheduledTasks.filter((t) =>
+                t.status === 'pending' &&
+                t.due_at && new Date(t.due_at) <= todayEnd &&
+                (t.assigned_to === currentUserId || (isAdmin && !t.assigned_to))
+              );
+              // Collapse stacked follow-ups/callbacks to one row per lead (the
+              // earliest due), so a lead with three follow-ups shows once instead
+              // of three times. Appointments and lead-less tasks always show.
+              const FU_TYPES = ['follow_up', 'callback'];
+              const seenFollowUp = new Set();
+              const dueTasks = [];
+              for (const t of dueRaw.sort((a, b) => new Date(a.due_at) - new Date(b.due_at))) {
+                if (t.lead_id && FU_TYPES.includes(t.task_type)) {
+                  if (seenFollowUp.has(t.lead_id)) continue;
+                  seenFollowUp.add(t.lead_id);
+                }
+                dueTasks.push(t);
+              }
+              const leadsById = Object.fromEntries(allLeads.map((l) => [l.id, l]));
+              // The follow-up types that stack and should be cleared together.
+              // Appointments/meetings are left alone so a future appt survives.
+              const STACKABLE = ['follow_up', 'callback'];
+              const completeTask = async (task) => {
+                const clearStack = task.lead_id && STACKABLE.includes(task.task_type);
+                // Clear the whole due/overdue stack for this lead so superseded
+                // duplicates don't pop back after a refresh. A non-stackable task
+                // (appointment) or one without a lead just clears itself.
+                setScheduledTasks((prev) => prev.filter((t) => {
+                  if (!clearStack) return t.id !== task.id;
+                  if (t.lead_id !== task.lead_id || t.status !== 'pending' || !STACKABLE.includes(t.task_type)) return true;
+                  return new Date(t.due_at) > todayEnd; // keep future ones
+                }));
+                try {
+                  const { data: { user } } = await supabase.auth.getUser();
+                  const patch = { status: 'completed', completed_at: new Date().toISOString(), completed_by: user?.id || null };
+                  if (clearStack) {
+                    await supabase.from('scheduled_tasks').update(patch)
+                      .eq('lead_id', task.lead_id).eq('status', 'pending')
+                      .in('task_type', STACKABLE).lte('due_at', todayEnd.toISOString());
+                  } else {
+                    await supabase.from('scheduled_tasks').update(patch).eq('id', task.id);
+                  }
+                } catch {}
+              };
+              return null; /* FollowUpsBell hidden for now: not working right */
+              // eslint-disable-next-line no-unreachable
+              return <FollowUpsBell tasks={dueTasks} leadsById={leadsById} onOpenLead={(l) => navigateToLeadCard(l)} onComplete={completeTask} />;
+            })()}
+            {currentUserId && <NotificationBell userId={currentUserId} onOpen={handleOpenNotification} />}
+            <button
+              onClick={async () => {
+                await supabase.auth.signOut();
+                if (typeof window !== 'undefined') localStorage.removeItem('parcelreach_current_user');
+                router.push('/admin/login');
+              }}
+              className="bg-red-600/80 hover:bg-red-600 text-white px-4 py-2 rounded-lg transition-colors text-sm font-semibold"
+            >
+              Sign Out
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Daily Action Tray: HIDDEN for now (confusing / not working right). The
+          pipeline redesign will replace this. Flip `false` to re-enable. */}
+      {false && (() => {
+        const now = Date.now();
+        const endToday = new Date(); endToday.setHours(23, 59, 59, 999);
+        // Fresh system only: show tasks OUR flows created, never the old
+        // auto-cadence ghosts. We gate on recency (created since the follow-up
+        // system launched) OR source='pipeline', so it works whether or not the
+        // `source` column was ever migrated. Admin (Jordan) sees the whole
+        // team's due tasks, his own AND anything he set for Anthony or that
+        // Anthony is working; a rep sees only their own. NOT scoped to Clean
+        // View, so a task never hides just because its lead isn't pushed.
+        const FRESH_SINCE = new Date('2026-08-08T00:00:00Z').getTime();
+        const due = scheduledTasks
+          .filter((t) => t.status === 'pending'
+            && (isAdmin || t.assigned_to === currentUserId)
+            && new Date(t.due_at).getTime() <= endToday.getTime()
+            && (t.source === 'pipeline' || new Date(t.created_at || 0).getTime() >= FRESH_SINCE))
+          // New-lead "call ASAP" tasks (priority high) pin to the very top,
+          // newest first, so a fresh lead is always the first thing you see.
+          // Everything else falls in by due time.
+          .sort((a, b) => {
+            const hi = (t) => (t.priority === 'high' ? 0 : 1);
+            if (hi(a) !== hi(b)) return hi(a) - hi(b);
+            if (hi(a) === 0) return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+            return new Date(a.due_at) - new Date(b.due_at);
+          });
+        const overdueCount = due.filter((t) => new Date(t.due_at).getTime() < now - 12 * 3600 * 1000).length;
+        return (
+          <div className="bg-slate-900 border-b border-slate-700/70">
+            <div className="px-6 py-2 flex items-center gap-3">
+              <button onClick={() => setTrayOpen((v) => !v)} className="flex items-center gap-2 text-sm font-semibold text-white">
+                <svg className={`w-4 h-4 text-cyan-400 transition-transform ${trayOpen ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
+                Today
+                <span className={`px-2 py-0.5 rounded-full text-xs ${due.length ? 'bg-cyan-500/20 text-cyan-300' : 'bg-slate-700 text-slate-400'}`}>{due.length} to work</span>
+                {overdueCount > 0 && <span className="px-2 py-0.5 rounded-full text-xs bg-rose-500/20 text-rose-300">{overdueCount} overdue</span>}
+              </button>
+              <div className="ml-auto flex items-center gap-2">
+                <button onClick={runDailyScan} disabled={scanLoading} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 text-xs font-semibold disabled:opacity-50">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
+                  {scanLoading ? 'Scanning…' : 'AI Scan My Day'}
+                </button>
+              </div>
+            </div>
+            {trayOpen && (
+              <div className="px-6 pb-3">
+                {dailyScan && (
+                  <div className="mb-2 rounded-lg border border-cyan-500/30 bg-cyan-500/5 px-3 py-2 text-sm text-slate-200 whitespace-pre-wrap">
+                    {dailyScan.error ? <span className="text-rose-300">{dailyScan.error}</span> : dailyScan.summary}
+                    <button onClick={() => setDailyScan(null)} className="ml-2 text-slate-500 hover:text-slate-300 text-xs">dismiss</button>
+                  </div>
+                )}
+                {due.length === 0 ? (
+                  <div className="text-sm text-slate-500 py-2">Nothing due today. Nice and clear.</div>
+                ) : (
+                  <div className="grid gap-1.5 max-h-64 overflow-y-auto">
+                    {due.map((task) => {
+                      const lead = rawLeads.find((l) => l.id === task.lead_id);
+                      const nm = lead?.full_name || lead?.name || 'Lead';
+                      const overMs = now - new Date(task.due_at).getTime();
+                      const overdue = overMs > 12 * 3600 * 1000;
+                      const overdueDays = Math.floor(overMs / 86400000);
+                      // What to do (title minus the redundant name) and why (description).
+                      const action = (task.title || 'Follow up').replace(new RegExp(nm, 'ig'), '').replace(/^[\s:,-]+|[\s:,-]+$/g, '').trim() || 'Follow up';
+                      const why = task.description && !/^(assigned from|scheduled from|jordan flagged)/i.test(task.description) ? task.description : '';
+                      const whenLabel = overdue ? (overdueDays >= 1 ? `Overdue ${overdueDays} day${overdueDays > 1 ? 's' : ''}` : 'Overdue') : `Due ${new Date(task.due_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+                      // Whose task it is (only worth showing when it's not yours).
+                      const forWho = task.assigned_to && task.assigned_to !== currentUserId ? (usersById[task.assigned_to]?.split(' ')[0] || null) : null;
+                      return (
+                        <div key={task.id} className="flex items-center gap-2 rounded-lg bg-slate-800/60 border border-slate-700/50 px-3 py-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <button onClick={() => lead && navigateToLeadCard(lead)} className="text-sm text-slate-100 font-medium truncate hover:text-cyan-300 hover:underline text-left">{nm}</button>
+                              {forWho && <span className="flex-shrink-0 px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-200 text-[10px] font-semibold">for {forWho}</span>}
+                            </div>
+                            <div className="text-xs text-slate-300 truncate">{action}{why ? ` (${why})` : ''}</div>
+                            <div className={`text-[11px] ${overdue ? 'text-rose-300' : 'text-slate-500'}`}>{whenLabel}</div>
+                          </div>
+                          {lead && (lead.phone || lead.owner_phone) && (
+                            <button onClick={() => setCallLead(lead)} title="Call" className="px-3 py-1.5 rounded-lg bg-green-600/20 hover:bg-green-600/40 text-green-300 text-xs font-semibold">Call</button>
+                          )}
+                          <button onClick={() => completeTaskQuick(task)} title="Mark done and clear" className="px-2.5 py-1.5 rounded-lg bg-slate-700/60 hover:bg-green-600/40 text-slate-200 hover:text-green-200 text-xs font-medium">Done</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Tabs */}
+      <div className="bg-slate-800/30 border-b border-slate-700/50 px-6">
+        <div className="flex items-center gap-2">
+          {(() => {
+            // Four left-to-right pipeline stages up front; everything else lives in
+            // the "More" overflow menu so the board stays clean.
+            const MAIN_TABS = ['ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent', 'campaigns'];
+            const hasOffer = (l) => l.offer_amount != null && Number(l.offer_amount) !== 0;
+            const overflow = isAdmin
+              ? ['shared-calendar', 'follow-up', 'lost', 'activity-log', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search', 'investors']
+              : ['shared-calendar', 'follow-up', 'lost', 'subdivision-inflow', 'all-leads', 'investors'];
+            const up = (l) => (l.pipeline_status || l.status || '').toUpperCase();
+            const labelFor = (tab) => tab === 'needs-touch' ? 'Needs a Touch' : tab === 'ppc-inflow' ? 'PPC Inflow' : tab === 'appointment-set' ? 'Mapped & Appointment Set' : tab === 'offer-curated' ? 'Offer Curated' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Signed Contracts' : tab === 'om-search' ? 'OM Search' : tab === 'campaigns' ? 'Follow-Up Campaigns' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab === 'investors' ? 'Investors' : tab === 'organizations' ? 'Organizations' : tab === 'unassigned' ? 'Unassigned' : tab === 'create-lead' ? 'Create Lead' : tab === 'all-leads' ? 'All Leads' : tab.replace('-', ' ');
+            const countFor = (tab) => {
+              if (tab === 'needs-touch') { const n = needsTouchLeads().length; return n ? ` (${n})` : ''; }
+              if (tab === 'unassigned') return ` (${unassignedLeads.length})`;
+              if (tab === 'ppc-inflow') return ` (${allLeads.filter(l => ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(up(l)) && l.status !== 'archived' && !inCampaign(l) && (inflowDays <= 0 || (l.created_at && new Date(l.created_at).getTime() >= Date.now() - inflowDays * 86400000))).length})`;
+              if (tab === 'appointment-set') return ` (${(scheduledTasks || []).filter(t => t.task_type === 'meeting').length})`;
+              if (tab === 'offer-curated') return ` (${allLeads.filter(l => hasOffer(l) && ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED', 'APPT_SET_FOR_JORDAN'].includes(up(l)) && l.status !== 'archived').length})`;
+              if (tab === 'offer-made') return ` (${allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING'].includes(up(l))).length})`;
+              if (tab === 'agreement-sent') return ` (${allLeads.filter(l => ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(up(l))).length})`;
+              if (tab === 'follow-up') return ` (${allLeads.filter(l => up(l) === 'FOLLOW_UP').length})`;
+              if (tab === 'lost') return ` (${allLeads.filter(l => up(l) === 'LOST').length})`;
+              if (tab === 'subdivision-inflow') return ` (${allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived').length})`;
+              if (tab === 'archive') return ` (${allLeads.filter(l => l.status === 'archived').length})`;
+              if (tab === 'investors') return ` (${allLeads.filter(l => l.source === 'go-west-lands').length})`;
+              return '';
+            };
+            // New-activity count per tab (shares the same event engine as the panel).
+            // Campaigns bubbles on due campaign CALLS so they get made.
+            const dueCampaignCalls = (scheduledTasks || []).filter(t => t.status === 'pending' && (t.source === 'campaign' || /^campaign:/i.test(t.description || '')) && new Date(t.due_at) <= new Date()).length;
+            // Campaigns bubble = due campaign calls + replies from enrolled leads
+            // (their notifications route here via notifTab), so campaign responses
+            // show up under Follow-Up Campaigns, not PPC Inflow.
+            const newCountFor = (tab) => tab === 'campaigns'
+              ? dueCampaignCalls + tabEventsFor('campaigns').length
+              : tab === 'appointment-set'
+                ? tabEventsFor('appointment-set').length + imminentAppts.length // + imminent appointments (within 30 min)
+                : tabEventsFor(tab).length;
+            const Bubble = ({ n }) => n > 0 ? (
+              <span className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[11px] font-bold align-middle">{n > 99 ? '99+' : n}</span>
+            ) : null;
+            const tabBtn = (tab, active) => (
+              <button
+                onClick={() => { setActiveTab(tab); setMoreOpen(false); }}
+                className={`px-4 py-3 font-medium border-b-2 transition whitespace-nowrap ${active ? 'border-blue-500 text-blue-400' : 'border-transparent text-slate-400 hover:text-white'}`}
+              >
+                {labelFor(tab)}{countFor(tab)}<Bubble n={newCountFor(tab)} />
+              </button>
+            );
+            return (
+              <>
+                <div className="flex items-center gap-2 overflow-x-auto flex-1 min-w-0">
+                {MAIN_TABS.map((tab, i) => {
+                  const PIPELINE = ['ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent'];
+                  const chevron = PIPELINE.includes(tab) && PIPELINE.includes(MAIN_TABS[i - 1]);
+                  const divider = tab === 'campaigns';
+                  return (
+                    <div key={tab} className="flex items-center flex-shrink-0">
+                      {divider && <span className="w-px h-6 bg-slate-700 mx-2 flex-shrink-0" />}
+                      {chevron && (
+                        <svg className="w-4 h-4 text-slate-600 mx-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
+                        </svg>
+                      )}
+                      {tabBtn(tab, activeTab === tab)}
+                    </div>
+                  );
+                })}
+                </div>
+                <div className="relative flex-shrink-0 ml-1">
+                  <button
+                    onClick={() => setMoreOpen(v => !v)}
+                    className={`px-4 py-3 font-medium border-b-2 transition whitespace-nowrap inline-flex items-center gap-1 ${overflow.includes(activeTab) ? 'border-blue-500 text-blue-400' : 'border-transparent text-slate-400 hover:text-white'}`}
+                  >
+                    More
+                    <Bubble n={overflow.reduce((s, t) => s + newCountFor(t), 0)} />
+                    <svg className={`w-4 h-4 transition-transform ${moreOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                  </button>
+                  {moreOpen && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setMoreOpen(false)} />
+                      <div className="absolute right-0 mt-1 z-50 bg-slate-800 border border-slate-700 rounded-lg shadow-2xl py-1 min-w-[210px] max-h-[70vh] overflow-y-auto">
+                        {overflow.map(tab => (
+                          <button
+                            key={tab}
+                            onClick={() => { setActiveTab(tab); setMoreOpen(false); }}
+                            className={`block w-full text-left px-4 py-2 text-sm ${activeTab === tab ? 'bg-blue-600/20 text-blue-300' : 'text-slate-300 hover:bg-slate-700'}`}
+                          >
+                            {labelFor(tab)}{countFor(tab)}<Bubble n={newCountFor(tab)} />
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      </div>
+
+      <div className="p-6">
+        {/* WHAT'S NEW panel: what changed in this tab since you last looked. */}
+        {(() => {
+          const events = tabEventsFor(activeTab);
+          if (events.length === 0) return null;
+          const fmt = (ts) => { const m = Math.round((Date.now() - ts) / 60000); if (m < 60) return `${m}m ago`; const h = Math.round(m / 60); if (h < 24) return `${h}h ago`; return `${Math.round(h / 24)}d ago`; };
+          return (
+            <div className="mb-5 bg-slate-800/60 border border-slate-700 rounded-xl overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-700/70 bg-slate-800">
+                <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                  <span className="inline-flex items-center justify-center min-w-[20px] h-[20px] px-1 rounded-full bg-red-500 text-white text-[11px] font-bold">{events.length}</span>
+                  New since you last looked
+                </div>
+                <button onClick={() => markTabSeen(activeTab)} className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">Mark all seen</button>
+              </div>
+              <div className="max-h-56 overflow-y-auto divide-y divide-slate-700/50">
+                {events.slice(0, 25).map(ev => (
+                  <div key={ev.lead.id} className="w-full px-4 py-2.5 hover:bg-slate-700/40 flex items-center gap-3">
+                    <button onClick={() => navigateToLeadCard(ev.lead)} className="flex-1 min-w-0 text-left flex items-center gap-3">
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${ev.dot}`} />
+                      <span className={`text-xs font-semibold uppercase tracking-wide flex-shrink-0 ${ev.color}`}>{ev.kind}</span>
+                      <span className="text-sm text-white truncate">{ev.lead.full_name || ev.lead.name || 'Lead'}</span>
+                      {(ev.lead.last_contact_preview && ev.kind === 'New message') && <span className="text-xs text-slate-400 truncate hidden md:inline">“{ev.lead.last_contact_preview}”</span>}
+                      <span className="ml-auto text-xs text-slate-500 flex-shrink-0">{fmt(ev.ts)}</span>
+                    </button>
+                    <button onClick={() => dismissEvent(ev.lead, ev.ts)} title="Clear this notification" className="flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center text-slate-500 hover:text-white hover:bg-slate-600/60">✕</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* NEEDS A TOUCH, the daily call sheet of overdue leads */}
+        {activeTab === 'needs-touch' && (() => {
+          const list = needsTouchLeads();
+          return (
+            <div className="space-y-5">
+              <div className="bg-gradient-to-br from-red-500/10 to-rose-600/5 border border-red-500/40 rounded-xl p-6">
+                <h2 className="text-2xl font-bold text-red-300">Needs a Touch</h2>
+                <p className="text-slate-400 text-sm mt-1">Your call sheet, most urgent first. People who replied and are waiting on us rise to the top, then uncontacted leads, then anyone we have not heard back from. Work it top to bottom.</p>
+              </div>
+              {list.length === 0 ? (
+                <div className="text-center py-16 text-slate-400">
+                  <p className="text-lg text-slate-200 font-medium">All caught up.</p>
+                  <p className="text-sm mt-1">Nobody is overdue for a touch right now.</p>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {list.slice(0, cardLimit).map(({ lead, reason, color }) => (
+                      <div key={lead.id}>
+                        <div className={`flex items-center gap-2 mb-1.5 text-xs font-semibold ${color === 'red' ? 'text-red-300' : 'text-amber-300'}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${color === 'red' ? 'bg-red-400' : 'bg-amber-400'}`} />{reason}
+                        </div>
+                        {renderLeadCard(lead)}
+                      </div>
+                    ))}
+                  </div>
+                  {list.length > cardLimit && (
+                    <div className="text-center mt-5">
+                      <button onClick={() => setCardLimit(c => c + 60)} className="px-5 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 text-sm font-semibold">Show more ({list.length - cardLimit} more)</button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* DAILY RUNDOWN TAB */}
+        {activeTab === 'daily-rundown' && (
+          <div className="space-y-6">
+            {/* Acquisition Manager Activity Panel (admin only) */}
+            {isAdmin && (() => {
+              const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+              const tomorrowStart = new Date(todayStart); tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+              // Tasks assigned to someone other than Jordan (= acquisition managers)
+              const amTasks = scheduledTasks.filter(t =>
+                t.assigned_to && t.assigned_to !== currentUserId
+              );
+              const amTodayTasks = amTasks.filter(t => { const d = new Date(t.due_at); return d >= todayStart && d < tomorrowStart; });
+              const amTomorrowTasks = amTasks.filter(t => {
+                const d = new Date(t.due_at);
+                const dayAfter = new Date(tomorrowStart); dayAfter.setDate(dayAfter.getDate() + 1);
+                return d >= tomorrowStart && d < dayAfter;
+              });
+              // "Touches today" = any lead Anthony took action on today (VM, msg, spoke,
+              // status change, appt booking, etc.), measured by last_activity_at on his
+              // owned leads. Counts attempts, not just successful contacts.
+              const contactedToday = allLeads.filter(l => {
+                // Count unassigned leads as Anthony's (default owner for new form leads).
+                if (l.current_owner_id && l.current_owner_id !== acquisitionManagerId) return false;
+                const t = l.last_activity_at ? new Date(l.last_activity_at) : null;
+                return t && t >= todayStart && t < tomorrowStart;
+              });
+              const apptsBooked = allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN');
+
+              if (amTasks.length === 0 && contactedToday.length === 0 && apptsBooked.length === 0) return null;
+
+              return (
+                <div className="bg-gradient-to-r from-purple-900/30 to-slate-900 rounded-xl border border-purple-700/40 overflow-hidden">
+                  <div className="bg-purple-900/40 px-4 py-3 border-b border-purple-700/40 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <svg className="w-5 h-5 text-purple-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-2a4 4 0 100-8 4 4 0 000 8zm6 2a4 4 0 100-8 4 4 0 000 8z" />
+                      </svg>
+                      <span className="font-semibold text-white text-lg">Acquisition Manager Activity</span>
+                    </div>
+                    <span className="text-purple-300 text-sm">Live</span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-4 p-4">
+                    <button
+                      onClick={() => setRundownFilter(rundownFilter === 'anthony' ? null : 'anthony')}
+                      className={`bg-slate-800/60 border rounded-lg p-3 text-left hover:bg-slate-800 transition ${rundownFilter === 'anthony' ? 'border-purple-400 ring-2 ring-purple-500/40' : 'border-slate-700/50'}`}
+                    >
+                      <div className="text-2xl font-bold text-purple-300">{amTodayTasks.length}</div>
+                      <div className="text-xs text-slate-400 uppercase tracking-wide mt-1">Working today {rundownFilter === 'anthony' && '✓'}</div>
+                    </button>
+                    <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3">
+                      <div className="text-2xl font-bold text-cyan-300">{contactedToday.length}</div>
+                      <div className="text-xs text-slate-400 uppercase tracking-wide mt-1">Touches today</div>
+                    </div>
+                    <button
+                      onClick={() => setRundownFilter(rundownFilter === 'my_appts' ? null : 'my_appts')}
+                      className={`bg-slate-800/60 border rounded-lg p-3 text-left hover:bg-slate-800 transition ${rundownFilter === 'my_appts' ? 'border-green-400 ring-2 ring-green-500/40' : 'border-slate-700/50'}`}
+                    >
+                      <div className="text-2xl font-bold text-green-300">{apptsBooked.length}</div>
+                      <div className="text-xs text-slate-400 uppercase tracking-wide mt-1">Appts booked for you {rundownFilter === 'my_appts' && '✓'}</div>
+                    </button>
+                    <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3">
+                      <div className="text-2xl font-bold text-blue-300">{amTomorrowTasks.length}</div>
+                      <div className="text-xs text-slate-400 uppercase tracking-wide mt-1">On deck tomorrow</div>
+                    </div>
+                  </div>
+                  {apptsBooked.length > 0 && (
+                    <div className="border-t border-purple-700/30 p-4">
+                      <div className="text-xs font-semibold text-purple-300 uppercase tracking-wide mb-2">Appointments waiting for you</div>
+                      <div className="space-y-2">
+                        {apptsBooked.slice(0, 5).map(lead => {
+                          const apptTask = scheduledTasks.find(t => t.lead_id === lead.id && t.task_type === 'meeting' && t.status === 'pending');
+                          const when = apptTask ? new Date(apptTask.due_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'TBD';
+                          return (
+                            <button
+                              key={lead.id}
+                              onClick={() => openLeadDetails(lead)}
+                              className="w-full flex items-center justify-between bg-slate-800/40 hover:bg-slate-800/80 rounded-lg p-2 text-left transition-colors"
+                            >
+                              <div>
+                                <div className="font-medium text-white text-sm">{lead.full_name || lead.name}{lead.map_uploaded ? <MappedBadge /> : <NotMappedBadge />}</div>
+                                <div className="text-xs text-slate-400">{lead.phone || 'No phone'} · {lead.property_county || lead.county || '?'}, {lead.property_state || lead.state || '?'}</div>
+                              </div>
+                              <div className="text-xs text-green-300 font-semibold">{when}</div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Daily Schedule - Single Unified Board */}
+            <div className="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden">
+              <div className="bg-slate-800 px-4 py-3 border-b border-slate-700 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <svg className="w-5 h-5 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  <span className="font-semibold text-white text-lg">Daily Schedule - {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</span>
+                  {rundownFilter && (
+                    <button
+                      onClick={() => setRundownFilter(null)}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-semibold ${rundownFilter === 'anthony' ? 'bg-purple-900/40 border-purple-600/50 text-purple-200' : 'bg-green-900/40 border-green-600/50 text-green-200'} hover:opacity-80 transition`}
+                      title="Clear filter"
+                    >
+                      Showing: {rundownFilter === 'anthony' ? "Anthony's queue" : 'My appointments'}
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                  )}
+                </div>
+                <span className="text-slate-400 text-sm">
+                  {(() => {
+                    const ts = new Date(); ts.setHours(0,0,0,0);
+                    const tmrw = new Date(ts); tmrw.setDate(tmrw.getDate() + 1);
+                    const isMineOrSharedCount = (t) => isAdmin ? true : t.assigned_to === currentUserId;
+                    return scheduledTasks.filter(t => { const d = new Date(t.due_at); return d < tmrw && isMineOrSharedCount(t); }).length;
+                  })()} tasks
+                </span>
+              </div>
+              <div className="divide-y divide-slate-800">
+                {(() => {
+                  const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+                  const tomorrowStart = new Date(todayStart); tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+                  const archivedLeadIds = new Set(allLeads.filter(l => l.status === 'archived').map(l => l.id));
+                  // Role-scoped rundown: each user sees their own tasks. Jordan also inherits
+                  // legacy null-assigned tasks. Overdue rolls forward. Also hide tasks for leads
+                  // in terminal status so closed/dead leads stop cluttering.
+                  const terminalLeadIds = new Set(allLeads.filter(l => {
+                    const s = (l.pipeline_status || l.status || '').toUpperCase();
+                    // UNDER_CONTRACT stays visible, deals in motion still need rundown tasks
+                    return ['CLOSED', 'DEAD', 'ARCHIVED', 'NURTURE'].includes(s);
+                  }).map(l => l.id));
+                  const leadById = new Map(allLeads.map(l => [l.id, l]));
+                  // Both roles default to ONLY their own tasks now. Admin sees Anthony's via the
+                  // tile-click filter ('Working today' in the AM panel), not by default. Stops
+                  // Anthony's firehose from polluting Jordan's action board.
+                  const isMineOrShared = (t) => {
+                    if (t.assigned_to !== currentUserId) return false;
+                    if (isAdmin) return true;
+                    const leadForTask = leadById.get(t.lead_id);
+                    const ownerId = leadForTask?.current_owner_id;
+                    return !ownerId || ownerId === currentUserId;
+                  };
+                  // Filter mode (admin only):
+                  //   null         → both my tasks and Anthony's (default)
+                  //   'anthony'    → narrow to Anthony's queue only
+                  //   'my_appts'   → narrow to APPT_SET_FOR_JORDAN leads only
+                  const apptLeadIds = new Set(
+                    allLeads
+                      .filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN')
+                      .map(l => l.id)
+                  );
+                  const taskMatchesFilter = (t) => {
+                    if (rundownFilter === 'anthony') return t.assigned_to && t.assigned_to !== currentUserId;
+                    if (rundownFilter === 'my_appts') return apptLeadIds.has(t.lead_id);
+                    return isMineOrShared(t);
+                  };
+                  const todayTasksAll = scheduledTasks
+                    .filter(t => {
+                      const d = new Date(t.due_at);
+                      return d < tomorrowStart && !archivedLeadIds.has(t.lead_id) && !terminalLeadIds.has(t.lead_id) && taskMatchesFilter(t);
+                    })
+                    .sort((a, b) => {
+                      // Newest leads first (speed-to-lead). Fall back to due_at when leads tie.
+                      const la = leadById.get(a.lead_id);
+                      const lb = leadById.get(b.lead_id);
+                      const ca = la ? new Date(la.created_at).getTime() : 0;
+                      const cb = lb ? new Date(lb.created_at).getTime() : 0;
+                      if (cb !== ca) return cb - ca;
+                      return new Date(a.due_at) - new Date(b.due_at);
+                    });
+                  // Deduplicate by lead_id, keep the first task per lead (which is already the
+                  // priority pick from the sort above: newest lead first, soonest due_at tiebreak).
+                  const seenLeads = new Set();
+                  const todayTasks = todayTasksAll.filter(t => {
+                    if (!t.lead_id) return true;
+                    if (seenLeads.has(t.lead_id)) return false;
+                    seenLeads.add(t.lead_id);
+                    return true;
+                  });
+
+                  if (todayTasks.length === 0) {
+                    return (
+                      <div className="p-10 text-center">
+                        <svg className="w-12 h-12 text-slate-600 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <p className="text-slate-400 text-lg font-medium">All caught up</p>
+                        <p className="text-slate-500 text-sm mt-1">No open tasks. New leads and follow-ups will appear here.</p>
+                      </div>
+                    );
+                  }
+
+                  return todayTasks.slice(0, rundownVisibleCount).map(task => {
+                    const lead = allLeads.find(l => l.id === task.lead_id);
+                    const leadName = lead?.full_name || lead?.name || 'Unknown';
+                    const dueTime = (() => {
+                      const d = new Date(task.due_at);
+                      const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+                      const today = new Date(); today.setHours(0, 0, 0, 0);
+                      const tmrw = new Date(today); tmrw.setDate(tmrw.getDate() + 1);
+                      const dayAfter = new Date(tmrw); dayAfter.setDate(dayAfter.getDate() + 1);
+                      const dDay = new Date(d); dDay.setHours(0, 0, 0, 0);
+                      if (dDay.getTime() === today.getTime()) return time;
+                      if (dDay.getTime() === tmrw.getTime()) return `Tomorrow ${time}`;
+                      if (dDay < today) return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+                      return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+                    })();
+                    // Drive the "New Lead" pill off the lead's LIVE status, not the task title
+                    // (which is baked in at creation). When status changes anywhere in the app,
+                    // the rundown pill mirrors immediately.
+                    const liveLeadStatus = (lead?.pipeline_status || lead?.status || '').toUpperCase();
+                    const isNewLead = !liveLeadStatus || liveLeadStatus === 'NEW';
+                    // Lead is FRESH if it came in within the last 24h, suppress the OVERDUE label
+                    // in that window since speed-to-lead beats the auto-scheduled due_at.
+                    const isFresh = lead?.created_at && (Date.now() - new Date(lead.created_at).getTime()) < 24 * 60 * 60 * 1000;
+                    // Friendlier than a red "OVERDUE": say what the lead actually needs.
+                    // Never spoken to them at all -> discovery call. Been trying (VMs,
+                    // CONTACTING) but not connected -> callback time.
+                    const pastDue = new Date(task.due_at) < new Date() && !isFresh;
+                    let urgentLabel = null;
+                    if (pastDue) {
+                      if (isNewLead) urgentLabel = 'Needs Discovery Call';
+                      else if (liveLeadStatus === 'CONTACTING') urgentLabel = 'Callback Time';
+                    }
+                    const normalizedType = normalizeTaskType(task.task_type);
+                    const taskTypeColor = isNewLead ? 'bg-green-500/20 text-green-400 border-green-500/50' : TASK_TYPE_COLORS[normalizedType];
+
+                    return (
+                      <div key={task.id} className={`p-4 hover:bg-slate-800/50 transition-all ${urgentLabel ? 'bg-amber-900/10' : ''}`}>
+                        <div className="flex items-start gap-4">
+                          {/* Lead Info */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              {isNewLead ? (
+                                <span className={`px-2 py-0.5 rounded border text-xs font-bold ${taskTypeColor}`}>New Lead</span>
+                              ) : (
+                                <select
+                                  value={normalizedType}
+                                  onChange={(e) => updateTaskType(task.id, e.target.value)}
+                                  className={`px-2 py-0.5 rounded border text-xs font-bold cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-500 ${taskTypeColor}`}
+                                >
+                                  {Object.entries(TASK_TYPE_LABELS).map(([key, label]) => (
+                                    <option key={key} value={key}>{label}</option>
+                                  ))}
+                                </select>
+                              )}
+                              <span className="font-semibold text-white truncate inline-flex items-center gap-2">
+                                {leadName}
+                                {lead && <FreshBadge lead={lead} />}
+                                {lead && (lead.map_uploaded ? <MappedBadge /> : <NotMappedBadge />)}
+                                {lead && <HammerBadge lead={lead} />}
+                                {lead && <TeammateBadge lead={lead} />}
+                              </span>
+                              {editingTaskTime === task.id ? (
+                                <div className="flex items-center gap-1">
+                                  <input
+                                    type="date"
+                                    value={editingDateValue}
+                                    onChange={(e) => setEditingDateValue(e.target.value)}
+                                    min={new Date().toISOString().split('T')[0]}
+                                    className="w-32 px-1.5 py-0.5 bg-slate-900 border border-blue-500 rounded text-xs text-white focus:outline-none"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={editingTimeValue}
+                                    onChange={(e) => setEditingTimeValue(e.target.value)}
+                                    onBlur={(e) => { const p = parseTimeInput(e.target.value); if (p) setEditingTimeValue(p); }}
+                                    placeholder="2pm"
+                                    autoFocus
+                                    className="w-16 px-1.5 py-0.5 bg-slate-900 border border-blue-500 rounded text-xs text-white focus:outline-none"
+                                    onKeyDown={(e) => { if (e.key === 'Enter') saveTaskReschedule(task.id); if (e.key === 'Escape') setEditingTaskTime(null); }}
+                                  />
+                                  <button onClick={() => saveTaskReschedule(task.id)} className="px-2 py-0.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-medium text-white">Save</button>
+                                  <button onClick={() => setEditingTaskTime(null)} className="px-1.5 py-0.5 text-slate-400 hover:text-white text-xs">&times;</button>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={() => {
+                                    setEditingTaskTime(task.id);
+                                    setEditingDateValue(new Date(task.due_at).toISOString().split('T')[0]);
+                                    setEditingTimeValue(dueTime);
+                                  }}
+                                  className={`text-xs hover:underline cursor-pointer ${urgentLabel ? 'text-amber-300 font-semibold' : 'text-slate-500 hover:text-blue-400'}`}
+                                  title="Click to reschedule"
+                                >
+                                  {urgentLabel ? `${urgentLabel} · ` : ''}{dueTime}
+                                </button>
+                              )}
+                            </div>
+                            {task.description && (
+                              <div className="text-sm text-slate-400 mb-1">{task.description}</div>
+                            )}
+                            {lead && (
+                              <div className="text-sm text-slate-500">
+                                {lead.phone || 'No phone'} &middot; {lead.property_county || lead.county}, {lead.property_state || lead.state} &middot; {lead.acres || lead.acreage || '?'} acres
+                              </div>
+                            )}
+                            {lead && renderNotesPreview(lead)}
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <button
+                              onClick={() => rundownVM(task)}
+                              disabled={!!actionInProgress}
+                              className={`px-3 py-2 bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-400 active:scale-95 rounded text-sm font-medium transition-all ${actionInProgress ? 'opacity-50 cursor-not-allowed' : ''}`}
+                              title="Left Voicemail - auto-schedules retry"
+                            >
+                              VM
+                            </button>
+                            <button
+                              onClick={() => rundownSentMessage(task)}
+                              disabled={!!actionInProgress}
+                              className={`px-3 py-2 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 active:scale-95 rounded text-sm font-medium transition-all ${actionInProgress ? 'opacity-50 cursor-not-allowed' : ''}`}
+                              title="Sent text/message - schedules follow-up tomorrow"
+                            >
+                              Sent Msg
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (isAcquisitionManager) {
+                                  // Anthony spoke with seller → book appt for Jordan
+                                  updateLeadStatus(task.lead_id, 'APPT_SET_FOR_JORDAN');
+                                } else {
+                                  openConvoComplete(task);
+                                }
+                              }}
+                              className="px-3 py-2 bg-green-600 hover:bg-green-500 active:scale-95 rounded text-sm font-medium transition-all text-white"
+                              title={isAcquisitionManager ? 'Spoke with them - book appt for Jordan' : 'Spoke with them - add notes & schedule next'}
+                            >
+                              {isAcquisitionManager ? 'Set Appt' : 'Spoke'}
+                            </button>
+                            {lead && (
+                              <>
+                                {isAdmin && acquisitionManagerId && (
+                                  <button
+                                    onClick={() => pushToAcquisitionManager(lead.id)}
+                                    className="px-3 py-2 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 active:scale-95 rounded text-sm font-medium transition-all"
+                                    title="Push to Anthony's queue"
+                                  >
+                                    Push to AM
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => openLeadDetails(lead)}
+                                  className="px-3 py-2 bg-slate-700 hover:bg-slate-600 active:scale-95 rounded text-sm font-medium transition-all"
+                                >
+                                  View
+                                </button>
+                                <button
+                                  onClick={() => openScheduleModal(lead.id)}
+                                  className="px-3 py-2 bg-orange-600/20 hover:bg-orange-600/40 text-orange-400 active:scale-95 rounded text-sm font-medium transition-all"
+                                  title="Schedule Task"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                                </button>
+                                <button
+                                  onClick={() => openCalendarModal(lead)}
+                                  className="px-3 py-2 bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 active:scale-95 rounded text-sm font-medium transition-all"
+                                  title="Calendar"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                                </button>
+                                <button
+                                  onClick={() => archiveLead(lead.id)}
+                                  className="px-3 py-2 bg-zinc-700/30 hover:bg-zinc-600/40 text-zinc-400 hover:text-zinc-300 active:scale-95 rounded text-sm font-medium transition-all"
+                                  title="Archive"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>
+                                </button>
+                                <button
+                                  onClick={() => { if (confirm(`Permanently delete ${leadName}?`)) deleteLead(lead.id); }}
+                                  className="px-3 py-2 bg-red-900/20 hover:bg-red-800/30 text-red-400 hover:text-red-300 active:scale-95 rounded text-sm font-medium transition-all"
+                                  title="Delete"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
+                {(() => {
+                  // Use the SAME filter + dedupe + rundownFilter logic as the rundown row render
+                  // so 'Show More' reflects what would actually appear. Bug fix: previously counted
+                  // raw scheduled_tasks without dedupe, so 'Show More' would say 478 remaining but
+                  // clicking it never grew the list (everything was already dedup-collapsed).
+                  const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+                  const tomorrowStart = new Date(todayStart); tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+                  const archivedLeadIdsShow = new Set(allLeads.filter(l => l.status === 'archived').map(l => l.id));
+                  const terminalLeadIdsShow = new Set(allLeads.filter(l => {
+                    const s = (l.pipeline_status || l.status || '').toUpperCase();
+                    return TERMINAL_STATUSES.includes(s);
+                  }).map(l => l.id));
+                  const leadByIdShow = new Map(allLeads.map(l => [l.id, l]));
+                  const apptLeadIdsShow = new Set(
+                    allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN').map(l => l.id)
+                  );
+                  const isMineOrSharedShow = (t) => {
+                    if (isAdmin) return true;
+                    if (t.assigned_to !== currentUserId) return false;
+                    const leadForTask = leadByIdShow.get(t.lead_id);
+                    const ownerId = leadForTask?.current_owner_id;
+                    return !ownerId || ownerId === currentUserId;
+                  };
+                  const taskMatchesFilterShow = (t) => {
+                    if (rundownFilter === 'anthony') return t.assigned_to && t.assigned_to !== currentUserId;
+                    if (rundownFilter === 'my_appts') return apptLeadIdsShow.has(t.lead_id);
+                    return isMineOrSharedShow(t);
+                  };
+                  const seen = new Set();
+                  const total = scheduledTasks
+                    .filter(t => {
+                      const d = new Date(t.due_at);
+                      return d < tomorrowStart && !archivedLeadIdsShow.has(t.lead_id) && !terminalLeadIdsShow.has(t.lead_id) && taskMatchesFilterShow(t);
+                    })
+                    .filter(t => {
+                      if (!t.lead_id) return true;
+                      if (seen.has(t.lead_id)) return false;
+                      seen.add(t.lead_id);
+                      return true;
+                    }).length;
+                  if (total > rundownVisibleCount) return (
+                    <div className="p-4 text-center border-t border-slate-700/50">
+                      <button
+                        onClick={() => setRundownVisibleCount(prev => prev + 20)}
+                        className="px-6 py-2 bg-slate-700 hover:bg-slate-600 active:scale-95 rounded-lg text-sm font-medium transition-all text-slate-300"
+                      >
+                        Show More ({total - rundownVisibleCount} remaining)
+                      </button>
+                    </div>
+                  );
+                  return null;
+                })()}
+              </div>
+            </div>
+
+            {/* Stats Row: action-oriented for Acquisition Manager */}
+            {isAcquisitionManager ? (() => {
+              const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+              const cutoff72h = new Date(Date.now() - 72 * 60 * 60 * 1000);
+              const newUncontacted = allLeads.filter(l => {
+                const status = (l.pipeline_status || l.status || '').toUpperCase();
+                return new Date(l.created_at) >= cutoff72h && !['ANTHONY_CONTACTED', 'APPT_SET_FOR_JORDAN', 'CLOSED', 'DEAD', 'ARCHIVED'].includes(status);
+              }).length;
+              // Touches today = any lead the acquisition manager took action on today.
+              const contactedToday = allLeads.filter(l => {
+                // Count unassigned leads as Anthony's (default owner for new form leads).
+                if (l.current_owner_id && l.current_owner_id !== acquisitionManagerId) return false;
+                const t = l.last_activity_at ? new Date(l.last_activity_at) : null;
+                return t && t >= todayStart;
+              }).length;
+              const apptsSet = allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN').length;
+              const pendingFollowups = scheduledTasks.filter(t => t.assigned_to === currentUserId && t.status === 'pending').length;
+              return (
+                <div className="grid grid-cols-4 gap-4">
+                  <div className="bg-orange-500/10 border border-orange-500/30 rounded-lg p-4 text-center">
+                    <div className="text-3xl font-bold text-orange-400">{newUncontacted}</div>
+                    <div className="text-sm text-orange-300">New Leads (72h)</div>
+                  </div>
+                  <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-lg p-4 text-center">
+                    <div className="text-3xl font-bold text-cyan-400">{contactedToday}</div>
+                    <div className="text-sm text-cyan-300">Touches Today</div>
+                  </div>
+                  <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 text-center">
+                    <div className="text-3xl font-bold text-green-400">{apptsSet}</div>
+                    <div className="text-sm text-green-300">Appts Set for Jordan</div>
+                  </div>
+                  <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4 text-center">
+                    <div className="text-3xl font-bold text-purple-400">{pendingFollowups}</div>
+                    <div className="text-sm text-purple-300">Pending Follow-ups</div>
+                  </div>
+                </div>
+              );
+            })() : (
+              <div className="grid grid-cols-5 gap-4">
+                <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-center">
+                  <div className="text-3xl font-bold text-red-400">{allLeads.filter(l => getSmartStatus(l) === 'NEEDS_ATTENTION').length}</div>
+                  <div className="text-sm text-red-300">Needs Attention</div>
+                </div>
+                <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 text-center">
+                  <div className="text-3xl font-bold text-green-400">{allLeads.filter(l => getSmartStatus(l) === 'NEW').length}</div>
+                  <div className="text-sm text-green-300">New (&lt;48hrs)</div>
+                </div>
+                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 text-center">
+                  <div className="text-3xl font-bold text-yellow-400">{allLeads.filter(l => getSmartStatus(l) === 'CONTACTING').length}</div>
+                  <div className="text-sm text-yellow-300">Contacting</div>
+                </div>
+                <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 text-center">
+                  <div className="text-3xl font-bold text-blue-400">{allLeads.filter(l => getSmartStatus(l) === 'CONTACTED').length}</div>
+                  <div className="text-sm text-blue-300">Contacted</div>
+                </div>
+                <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4 text-center">
+                  <div className="text-3xl font-bold text-purple-400">{allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING', 'UNDER_CONTRACT'].includes(getSmartStatus(l))).length}</div>
+                  <div className="text-sm text-purple-300">Working Deals</div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ORGANIZATIONS TAB */}
+        {activeTab === 'organizations' && (
+          <div className="space-y-6">
+            {/* Stats */}
+            <div className="grid grid-cols-4 gap-4">
+              <div className="bg-gradient-to-br from-blue-500/20 to-blue-600/20 border border-blue-500/30 rounded-xl p-6">
+                <div className="text-3xl font-bold text-blue-400">{organizations.length}</div>
+                <div className="text-slate-300 text-sm mt-1">Total Organizations</div>
+              </div>
+              <div className="bg-gradient-to-br from-green-500/20 to-green-600/20 border border-green-500/30 rounded-xl p-6">
+                <div className="text-3xl font-bold text-green-400">{allLeads.length}</div>
+                <div className="text-slate-300 text-sm mt-1">Total Leads</div>
+              </div>
+              <div className="bg-gradient-to-br from-purple-500/20 to-purple-600/20 border border-purple-500/30 rounded-xl p-6">
+                <div className="text-3xl font-bold text-purple-400">{unassignedLeads.length}</div>
+                <div className="text-slate-300 text-sm mt-1">Unassigned Leads</div>
+              </div>
+              <div className="bg-gradient-to-br from-orange-500/20 to-orange-600/20 border border-orange-500/30 rounded-xl p-6">
+                <div className="text-3xl font-bold text-orange-400">{assignedLeads.length}</div>
+                <div className="text-slate-300 text-sm mt-1">Assigned Leads</div>
+              </div>
+            </div>
+
+            {/* Organizations List */}
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
+              <div className="p-4 border-b border-slate-700/50">
+                <h3 className="text-xl font-bold">All Organizations</h3>
+              </div>
+              <div className="divide-y divide-slate-700/50">
+                {organizations.length === 0 ? (
+                  <div className="text-center py-12 text-slate-400">
+                    No organizations yet
+                  </div>
+                ) : (
+                  organizations.map((org) => {
+                    // Count leads assigned to this org from junction table
+                    const orgLeadCount = Object.entries(leadAssignments).filter(([leadId, assignments]) =>
+                      assignments.some(a => a.team_id === org.id)
+                    ).length;
+                    const monthlyLeads = organizations.filter(o => o.subscription_type === 'monthly').length;
+
+                    return (
+                      <div key={org.id} className="p-6 hover:bg-slate-700/30 transition-colors">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-3">
+                              <h4 className="text-lg font-semibold text-white">{org.name}</h4>
+                              <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                                org.subscription_type === 'monthly'
+                                  ? 'bg-green-500/20 text-green-400 border border-green-500/50'
+                                  : org.subscription_type === 'enterprise'
+                                  ? 'bg-purple-500/20 text-purple-400 border border-purple-500/50'
+                                  : 'bg-blue-500/20 text-blue-400 border border-blue-500/50'
+                              }`}>
+                                {org.subscription_type || 'pay-per-lead'}
+                              </span>
+                            </div>
+                            <div className="mt-3 grid grid-cols-4 gap-4 text-sm">
+                              <div>
+                                <span className="text-slate-400">Members:</span>
+                                <span className="ml-2 font-semibold text-white">
+                                  {org.team_members?.[0]?.count || 0}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="text-slate-400">Total Leads:</span>
+                                <span className="ml-2 font-semibold text-white">{orgLeadCount}</span>
+                              </div>
+                              <div>
+                                <span className="text-slate-400">Joined:</span>
+                                <span className="ml-2 font-semibold text-white">
+                                  {new Date(org.created_at).toLocaleDateString()}
+                                </span>
+                              </div>
+                              {org.subscription_type === 'monthly' && (
+                                <div>
+                                  <span className="text-slate-400">Monthly Allocation:</span>
+                                  <span className="ml-2 font-semibold text-white">
+                                    {org.leads_used_this_month || 0} / {org.monthly_lead_allocation || 0}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handleViewDashboard(org.id)}
+                              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors font-semibold text-sm"
+                            >
+                              View Dashboard
+                            </button>
+                            <button
+                              onClick={() => {
+                                setSelectedOrg(org);
+                                setActiveTab('unassigned');
+                              }}
+                              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-500 transition-colors font-semibold text-sm"
+                            >
+                              Assign Lead
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* PPC INFLOW TAB */}
+        {activeTab === 'activity-log' && isAdmin && (() => {
+          const byUser = {};
+          for (const it of activityLog) {
+            const u = it.user_id || 'system';
+            byUser[u] = byUser[u] || { texts: 0, calls: 0, notes: 0 };
+            if (it.activity_type === 'NOTE') byUser[u].notes++;
+            else if (it.activity_type === 'CALL') byUser[u].calls++;
+            else if (it.activity_type === 'TEXT') byUser[u].texts++;
+          }
+          const actionLabel = (it) => {
+            if (it.activity_type === 'NOTE') return 'Note';
+            if (it.activity_type === 'CALL') return it.outcome ? `Call · ${it.outcome}` : 'Call';
+            if (it.activity_type === 'TEXT') return it.direction === 'INBOUND' ? 'Text received' : 'Text sent';
+            if (it.activity_type === 'STATUS_CHANGE') return 'Status change';
+            return it.activity_type || 'Activity';
+          };
+          const shiftDay = (delta) => {
+            const d = new Date(activityLogDate + 'T00:00:00');
+            d.setDate(d.getDate() + delta);
+            setActivityLogDate(d.toISOString().split('T')[0]);
+          };
+          return (
+            <div className="space-y-6">
+              <div className="bg-gradient-to-br from-cyan-500/10 to-cyan-600/5 border border-cyan-500/40 rounded-xl p-6">
+                <div className="flex items-center justify-between flex-wrap gap-4">
+                  <div>
+                    <h2 className="text-2xl font-bold text-cyan-300">Activity Log</h2>
+                    <p className="text-slate-400 text-sm mt-1">Every call, text, and note for the day, and who did it</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => shiftDay(-1)} className="px-2.5 py-1 bg-slate-800 border border-slate-700 rounded text-slate-300 hover:bg-slate-700">‹</button>
+                    <input type="date" value={activityLogDate} onChange={(e) => setActivityLogDate(e.target.value)} className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200 text-sm" />
+                    <button onClick={() => shiftDay(1)} className="px-2.5 py-1 bg-slate-800 border border-slate-700 rounded text-slate-300 hover:bg-slate-700">›</button>
+                  </div>
+                </div>
+                <div className="flex gap-3 mt-4 flex-wrap">
+                  {[adminUserId, acquisitionManagerId].filter(Boolean).map((uid) => {
+                    const s = byUser[uid] || { texts: 0, calls: 0, notes: 0 };
+                    const nm = usersById[uid] || 'User';
+                    const isJ = uid === adminUserId;
+                    return (
+                      <div key={uid} className={`px-4 py-2 rounded-lg border ${isJ ? 'bg-blue-900/30 border-blue-700/50' : 'bg-purple-900/30 border-purple-700/50'}`}>
+                        <div className={`font-semibold ${isJ ? 'text-blue-300' : 'text-purple-300'}`}>{nm}</div>
+                        <div className="text-xs text-slate-400 mt-0.5">{s.calls} calls · {s.texts} texts · {s.notes} notes</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {activityLogLoading ? (
+                <div className="text-center py-12 text-slate-500">Loading…</div>
+              ) : activityLog.length === 0 ? (
+                <div className="text-center py-20 text-slate-500">
+                  <p className="text-lg">No activity logged on this day.</p>
+                  <p className="text-sm mt-1">Calls, texts, and notes show up here as they happen.</p>
+                </div>
+              ) : (
+                <div className="bg-slate-900 rounded-xl border border-slate-700 divide-y divide-slate-800">
+                  {activityLog.map((it) => {
+                    const lead = allLeads.find((l) => l.id === it.lead_id);
+                    const name = lead?.full_name || lead?.name || 'Lead';
+                    const isJ = it.user_id === adminUserId;
+                    const who = usersById[it.user_id] ? usersById[it.user_id].split(' ')[0] : (it.user_id ? 'Team' : 'System');
+                    const chip = isJ ? 'bg-blue-900/40 text-blue-300 border-blue-700/50' : (it.user_id === acquisitionManagerId ? 'bg-purple-900/40 text-purple-300 border-purple-700/50' : 'bg-slate-700/40 text-slate-400 border-slate-600/50');
+                    const time = parseTs(it.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+                    return (
+                      <button key={`${it.kind}-${it.id}`} onClick={() => lead && openLeadDetails(lead)} className="w-full text-left px-4 py-2.5 hover:bg-slate-800/40 transition flex items-center gap-3">
+                        <span className="text-xs text-slate-500 w-16 flex-shrink-0">{time}</span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full border flex-shrink-0 ${chip}`}>{who}</span>
+                        <span className="text-xs font-medium text-slate-300 w-28 flex-shrink-0">{actionLabel(it)}</span>
+                        <span className="text-sm text-white truncate w-40 flex-shrink-0">{name}</span>
+                        <span className="text-xs text-slate-500 truncate flex-1">{it.message_content || ''}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {activeTab === 'shared-calendar' && (() => {
+          const start = new Date(); start.setHours(0, 0, 0, 0);
+          const upcoming = (scheduledTasks || [])
+            .filter((t) => t.due_at && new Date(t.due_at) >= start)
+            .sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+          const byDay = {};
+          for (const t of upcoming) {
+            const key = new Date(t.due_at).toDateString();
+            (byDay[key] = byDay[key] || []).push(t);
+          }
+          const days = Object.keys(byDay).sort((a, b) => new Date(a) - new Date(b));
+          const jordanName = usersById[adminUserId] || 'Jordan';
+          const anthonyName = usersById[acquisitionManagerId] || 'Anthony';
+          const jordanTotal = upcoming.filter((t) => t.assigned_to === adminUserId).length;
+          const anthonyTotal = upcoming.filter((t) => t.assigned_to === acquisitionManagerId).length;
+          return (
+            <div className="space-y-6">
+              <div className="bg-gradient-to-br from-indigo-500/10 to-indigo-600/5 border border-indigo-500/40 rounded-xl p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-2xl font-bold text-indigo-300">Shared Calendar</h2>
+                    <p className="text-slate-400 text-sm mt-1">Upcoming tasks for {jordanName} and {anthonyName}</p>
+                  </div>
+                  <div className="flex items-center gap-5 text-center">
+                    <div>
+                      <div className="text-3xl font-bold text-blue-300">{jordanTotal}</div>
+                      <div className="text-xs text-slate-500 uppercase tracking-wide">{jordanName}</div>
+                    </div>
+                    <div>
+                      <div className="text-3xl font-bold text-purple-300">{anthonyTotal}</div>
+                      <div className="text-xs text-slate-500 uppercase tracking-wide">{anthonyName}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {days.length === 0 ? (
+                <div className="text-center py-20 text-slate-500">
+                  <p className="text-lg">No upcoming tasks scheduled.</p>
+                  <p className="text-sm mt-1">Tasks appear here when an appointment or follow-up is scheduled.</p>
+                </div>
+              ) : (
+                days.map((day) => {
+                  const tasks = byDay[day];
+                  const d = new Date(day);
+                  const isToday = d.toDateString() === new Date().toDateString();
+                  const jCount = tasks.filter((t) => t.assigned_to === adminUserId).length;
+                  const aCount = tasks.filter((t) => t.assigned_to === acquisitionManagerId).length;
+                  return (
+                    <div key={day} className="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden">
+                      <div className="flex items-center justify-between px-4 py-3 bg-slate-800/60 border-b border-slate-700">
+                        <div className="font-semibold text-white">
+                          {isToday ? 'Today · ' : ''}{d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                        </div>
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="px-2 py-0.5 rounded-full bg-blue-900/40 text-blue-300 border border-blue-700/50">{jordanName} {jCount}</span>
+                          <span className="px-2 py-0.5 rounded-full bg-purple-900/40 text-purple-300 border border-purple-700/50">{anthonyName} {aCount}</span>
+                        </div>
+                      </div>
+                      <div className="divide-y divide-slate-800">
+                        {tasks.map((t) => {
+                          const lead = allLeads.find((l) => l.id === t.lead_id);
+                          const name = lead?.full_name || lead?.name || 'Lead';
+                          const isJordan = t.assigned_to === adminUserId;
+                          const who = isJordan ? jordanName : (t.assigned_to === acquisitionManagerId ? anthonyName : (usersById[t.assigned_to] || 'Team'));
+                          const chip = isJordan ? 'bg-blue-900/40 text-blue-300 border-blue-700/50' : 'bg-purple-900/40 text-purple-300 border-purple-700/50';
+                          const time = new Date(t.due_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+                          const typeLabel = TASK_TYPE_LABELS[normalizeTaskType(t.task_type)] || 'Task';
+                          return (
+                            <div key={t.id} className="px-4 py-2.5 hover:bg-slate-800/40 transition flex items-center gap-3">
+                              {editingTaskTime === t.id ? (
+                                <div className="flex items-center gap-1 flex-shrink-0">
+                                  <input type="date" value={editingDateValue} onChange={(e) => setEditingDateValue(e.target.value)} min={new Date().toISOString().split('T')[0]} className="w-32 px-1.5 py-0.5 bg-slate-900 border border-blue-500 rounded text-xs text-white focus:outline-none" />
+                                  <input type="text" value={editingTimeValue} onChange={(e) => setEditingTimeValue(e.target.value)} onBlur={(e) => { const p = parseTimeInput(e.target.value); if (p) setEditingTimeValue(p); }} placeholder="2pm" autoFocus className="w-16 px-1.5 py-0.5 bg-slate-900 border border-blue-500 rounded text-xs text-white focus:outline-none" onKeyDown={(e) => { if (e.key === 'Enter') saveTaskReschedule(t.id); if (e.key === 'Escape') setEditingTaskTime(null); }} />
+                                  <button onClick={() => saveTaskReschedule(t.id)} className="px-2 py-0.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-medium text-white">Save</button>
+                                  <button onClick={() => setEditingTaskTime(null)} className="px-1.5 py-0.5 text-slate-400 hover:text-white text-xs">&times;</button>
+                                </div>
+                              ) : (
+                                <button onClick={() => { setEditingTaskTime(t.id); setEditingDateValue(new Date(t.due_at).toISOString().split('T')[0]); setEditingTimeValue(time); }} title="Reschedule" className="text-sm text-slate-400 w-20 flex-shrink-0 text-left hover:text-blue-400 hover:underline">{time}</button>
+                              )}
+                              <button onClick={() => reassignTask(t.id, isJordan ? acquisitionManagerId : adminUserId)} title="Click to reassign" className={`text-[10px] px-2 py-0.5 rounded-full border flex-shrink-0 hover:opacity-80 ${chip}`}>{who}</button>
+                              <button onClick={() => lead && openLeadDetails(lead)} className="text-sm text-white truncate flex-1 text-left hover:underline">{name}</button>
+                              <span className="text-xs text-slate-500 flex-shrink-0">{typeLabel}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Upcoming appointments (next 4 hrs), visible on every tab. Imminent ones
+            (within 30 min) glow brighter and also fire a toast + OS notification. */}
+        {upcomingAppts.length > 0 && (
+          <div className="mb-5 space-y-2">
+            {upcomingAppts.slice(0, 4).map(({ task, mins }) => {
+              const lead = (allLeads || []).find(l => l.id === task.lead_id) || (rawLeads || []).find(l => l.id === task.lead_id);
+              const nm = lead?.full_name || lead?.name || 'Seller';
+              const when = new Date(task.due_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+              const soon = mins <= 30;
+              return (
+                <button key={task.id} onClick={() => lead && navigateToLeadCard(lead)} className={`w-full text-left rounded-xl px-4 py-3 flex items-center gap-3 transition border ${soon ? 'bg-amber-500/20 border-amber-500/60 hover:bg-amber-500/30' : 'bg-slate-800/60 border-slate-600/50 hover:bg-slate-700/60'}`}>
+                  <svg className={`w-5 h-5 flex-shrink-0 ${soon ? 'text-amber-300' : 'text-slate-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  <span className={`font-semibold ${soon ? 'text-amber-200' : 'text-slate-200'}`}>Appointment with {nm} {mins <= 1 ? 'now' : fmtCountdown(mins)}</span>
+                  <span className={`text-sm ${soon ? 'text-amber-200/70' : 'text-slate-400'}`}>· {when}</span>
+                  <span className={`ml-auto text-xs font-semibold ${soon ? 'text-amber-200/80' : 'text-slate-400'}`}>Open card →</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {activeTab === 'ppc-inflow' && (
+          <div className="space-y-6">
+            {/* Conveyor belt: campaign follow-up calls that are due. Who to call, which
+                campaign, open the card, and clear it when done. */}
+            {(() => {
+              const calls = (scheduledTasks || [])
+                .filter(t => t.status === 'pending' && t.lead_id && new Date(t.due_at) <= new Date() && (t.source === 'campaign' || /^campaign:/i.test(t.description || '') || /follow-?up call/i.test(t.title || '')))
+                .sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+              if (!calls.length) return null;
+              const campOf = (t) => (String(t.description || '').match(/campaign:\s*([^\n]+)/i) || [])[1]?.trim() || (String(t.title || '').match(/:\s*(.+)$/) || [])[1]?.trim() || 'a campaign';
+              return (
+                <div className="bg-amber-500/10 border border-amber-500/40 rounded-xl overflow-hidden">
+                  <div className="px-4 py-2.5 border-b border-amber-500/30 bg-amber-500/10 flex items-center gap-2 text-sm font-bold text-amber-200">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
+                    <span className="inline-flex items-center justify-center min-w-[20px] h-[20px] px-1 rounded-full bg-amber-500 text-slate-900 text-[11px] font-extrabold">{calls.length}</span>
+                    Follow-up calls to make
+                  </div>
+                  <div className="max-h-64 overflow-y-auto divide-y divide-amber-500/15">
+                    {calls.slice(0, 40).map(t => {
+                      const lead = allLeads.find(l => l.id === t.lead_id) || rawLeads.find(l => l.id === t.lead_id);
+                      const nm = lead?.full_name || lead?.name || 'Lead';
+                      return (
+                        <div key={t.id} className="px-4 py-2.5 flex items-center gap-3 hover:bg-amber-500/5">
+                          <button onClick={() => lead && navigateToLeadCard(lead)} className="flex-1 min-w-0 text-left flex items-center gap-2">
+                            <span className="text-sm font-semibold text-white truncate">{nm}</span>
+                            <span className="text-xs text-amber-200/80 flex-shrink-0">· {campOf(t)}</span>
+                          </button>
+                          {(lead?.phone || lead?.owner_phone) && (
+                            <button onClick={() => { setCallLead(lead); }} className="flex-shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg bg-green-600/20 text-green-300 hover:bg-green-600/40">Call</button>
+                          )}
+                          <button onClick={() => completeTaskQuick(t)} className="flex-shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700/60 text-slate-200 hover:bg-slate-600">Done</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Stats: action-oriented for Acquisition Manager, PPC funnel for admin */}
+            {isAcquisitionManager ? (() => {
+              const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+              const cutoff72h = new Date(Date.now() - 72 * 60 * 60 * 1000);
+              const newUncontacted = allLeads.filter(l => {
+                const status = (l.pipeline_status || l.status || '').toUpperCase();
+                return new Date(l.created_at) >= cutoff72h && !['ANTHONY_CONTACTED', 'APPT_SET_FOR_JORDAN', 'CLOSED', 'DEAD', 'ARCHIVED'].includes(status);
+              }).length;
+              // Touches today = any lead the acquisition manager took action on today.
+              const contactedToday = allLeads.filter(l => {
+                // Count unassigned leads as Anthony's (default owner for new form leads).
+                if (l.current_owner_id && l.current_owner_id !== acquisitionManagerId) return false;
+                const t = l.last_activity_at ? new Date(l.last_activity_at) : null;
+                return t && t >= todayStart;
+              }).length;
+              const apptsSet = allLeads.filter(l => (l.pipeline_status || l.status || '').toUpperCase() === 'APPT_SET_FOR_JORDAN').length;
+              const pendingFollowups = scheduledTasks.filter(t => t.assigned_to === currentUserId && t.status === 'pending').length;
+              return (
+                <div className="grid grid-cols-4 gap-4">
+                  <div className="bg-gradient-to-br from-orange-500/20 to-orange-600/20 border border-orange-500/30 rounded-xl p-6">
+                    <div className="text-3xl font-bold text-orange-400">{newUncontacted}</div>
+                    <div className="text-slate-300 text-sm mt-1">New Leads (72h, uncontacted)</div>
+                  </div>
+                  <div className="bg-gradient-to-br from-cyan-500/20 to-cyan-600/20 border border-cyan-500/30 rounded-xl p-6">
+                    <div className="text-3xl font-bold text-cyan-400">{contactedToday}</div>
+                    <div className="text-slate-300 text-sm mt-1">Touches Today</div>
+                  </div>
+                  <div className="bg-gradient-to-br from-green-500/20 to-green-600/20 border border-green-500/30 rounded-xl p-6">
+                    <div className="text-3xl font-bold text-green-400">{apptsSet}</div>
+                    <div className="text-slate-300 text-sm mt-1">Appts Set for Jordan</div>
+                  </div>
+                  <div className="bg-gradient-to-br from-purple-500/20 to-purple-600/20 border border-purple-500/30 rounded-xl p-6">
+                    <div className="text-3xl font-bold text-purple-400">{pendingFollowups}</div>
+                    <div className="text-slate-300 text-sm mt-1">Pending Follow-ups</div>
+                  </div>
+                </div>
+              );
+            })() : (
+              (() => {
+                // Pipeline funnel tiles. Click any to jump straight to that bucket.
+                const statusOf = (l) => (l.pipeline_status || l.status || '').toUpperCase();
+                const inflow = allLeads.filter(l => ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(statusOf(l)) && l.status !== 'archived' && !inCampaign(l) && (inflowDays <= 0 || (l.created_at && new Date(l.created_at).getTime() >= Date.now() - inflowDays * 86400000))).length;
+                const apptSet = (scheduledTasks || []).filter(t => t.task_type === 'meeting').length;
+                const offerCurated = allLeads.filter(l => l.offer_amount != null && Number(l.offer_amount) !== 0 && ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED', 'APPT_SET_FOR_JORDAN'].includes(statusOf(l)) && l.status !== 'archived').length;
+                const offerMade = allLeads.filter(l => ['OFFER_SENT', 'NEGOTIATING'].includes(statusOf(l))).length;
+                const signed = allLeads.filter(l => ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(statusOf(l))).length;
+                const tiles = [
+                  { label: 'PPC Inflow',             count: inflow,       tab: 'ppc-inflow',      color: 'orange'  },
+                  { label: 'Mapped & Appt Set',      count: apptSet,      tab: 'appointment-set', color: 'green'   },
+                  { label: 'Offer Curated',          count: offerCurated, tab: 'offer-curated',   color: 'amber'   },
+                  { label: 'Offer Made',             count: offerMade,    tab: 'offer-made',      color: 'purple'  },
+                  { label: 'Signed Contracts',       count: signed,       tab: 'agreement-sent',  color: 'emerald' },
+                ];
+                const colorMap = {
+                  orange:  'from-orange-500/20 to-orange-600/20 border-orange-500/30 text-orange-400',
+                  green:   'from-green-500/20 to-green-600/20 border-green-500/30 text-green-400',
+                  purple:  'from-purple-500/20 to-purple-600/20 border-purple-500/30 text-purple-400',
+                  amber:   'from-amber-500/20 to-amber-600/20 border-amber-500/30 text-amber-400',
+                  blue:    'from-blue-500/20 to-blue-600/20 border-blue-500/30 text-blue-400',
+                  emerald: 'from-emerald-500/20 to-emerald-600/20 border-emerald-500/30 text-emerald-400',
+                };
+                return (
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                    {tiles.map(t => (
+                      <button
+                        key={t.tab}
+                        onClick={() => setActiveTab(t.tab)}
+                        className={`bg-gradient-to-br border rounded-xl p-4 text-left hover:scale-[1.02] transition ${colorMap[t.color]}`}
+                      >
+                        <div className="text-3xl font-bold">{t.count}</div>
+                        <div className="text-slate-300 text-xs mt-1">{t.label}</div>
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()
+            )}
+
+            {/* PPC Search + filters */}
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="relative flex-1 min-w-[220px]">
+                <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <input
+                  type="text"
+                  value={ppcSearch}
+                  onChange={(e) => setPpcSearch(e.target.value)}
+                  placeholder="Search by name, phone, county, status (new, in contact) or lean (hot, warm)..."
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-10 pr-10 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                />
+                {ppcSearch && (
+                  <button onClick={() => setPpcSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={() => setPipelineMapped((v) => !v)}
+                className={`px-4 py-3 rounded-xl text-sm font-medium border ${pipelineMapped ? 'bg-green-600/30 border-green-600/50 text-green-300' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}
+              >
+                {pipelineMapped ? '✓ ' : ''}Mapped only
+              </button>
+              <select
+                value={pipelineSort}
+                onChange={(e) => setPipelineSort(e.target.value)}
+                className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-3 text-sm text-white focus:outline-none focus:border-blue-500"
+              >
+                {cleanViewActive && <option value="cleanview_desc">Newest to Clean View</option>}
+                <option value="activity_desc">Last activity: newest first</option>
+                <option value="activity_asc">Last activity: oldest first</option>
+                <option value="created_desc">Newest Inbound</option>
+                <option value="created_asc">Oldest Inbound</option>
+              </select>
+              {renderEngagementFilters()}
+            </div>
+
+            {/* Working window: inflow defaults to the last 7 days so it stays a tight
+                working queue. Older leads are still here, one click away. */}
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
+              <span className="text-xs text-slate-500 uppercase tracking-wide">Show:</span>
+              {[{ d: 7, label: 'Last 7 days' }, { d: 14, label: 'Last 14 days' }, { d: 30, label: 'Last 30 days' }, { d: 0, label: 'All' }].map(opt => (
+                <button key={opt.d} onClick={() => setInflowDays(opt.d)} className={`px-3 py-1.5 rounded-lg text-sm font-medium border ${inflowDays === opt.d ? 'bg-blue-600/30 border-blue-600/50 text-blue-200' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}>
+                  {opt.label}
+                </button>
+              ))}
+              {inflowDays > 0 && <span className="text-xs text-slate-500">Older leads are hidden from this working view, not deleted. Click "All" to see everything.</span>}
+            </div>
+
+            {/* PPC Leads Grid */}
+            {(() => {
+              const ordered = stableOrder(
+                boardLeads
+                  /* PPC Inflow is the unified working tab: it now includes subdivision /
+                     OM-Search inflow-stage leads too (they also remain in the Subdivision
+                     Inflow tab as a filtered view). */
+                  .filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(s) && l.status !== 'archived'; })())
+                  // Silently-dripping leads are worked from the campaign; repliers return here.
+                  .filter(l => !inCampaign(l))
+                  // Default to the fresh working window (last N days). "All" = 0.
+                  .filter(l => inflowDays <= 0 || (l.created_at && new Date(l.created_at).getTime() >= Date.now() - inflowDays * 86400000))
+                  .filter(l => leadMatchesSearch(l, ppcSearch))
+                  .filter(l => !pipelineMapped || l.map_uploaded)
+                  .filter(passesEngagement),
+                (a, b) => {
+                  if (pipelineSort === 'cleanview_desc') return new Date(b.clean_view_at || 0) - new Date(a.clean_view_at || 0);
+                  const useCreated = pipelineSort.startsWith('created');
+                  const av = new Date(useCreated ? a.created_at : (a.last_activity_at || a.created_at));
+                  const bv = new Date(useCreated ? b.created_at : (b.last_activity_at || b.created_at));
+                  return pipelineSort.endsWith('asc') ? av - bv : bv - av;
+                },
+                `ppc:${pipelineSort}:${pipelineMapped}:${ppcSearch.trim()}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`
+              );
+              return (
+                <>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {ordered.slice(0, cardLimit).map((lead) => renderLeadCard(lead))}
+                  </div>
+                  {ordered.length > cardLimit && (
+                    <div className="text-center mt-5">
+                      <button onClick={() => setCardLimit(c => c + 60)} className="px-5 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 text-sm font-semibold">
+                        Show more ({ordered.length - cardLimit} more)
+                      </button>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+
+            {allLeads.filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(s) && l.status !== 'archived'; })()).length === 0 && (
+              <div className="text-center py-12 text-slate-400">
+                No PPC leads yet. Leads from Haven Ground form will appear here.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* PIPELINE BUCKETS, Appointment Set / Offer Made / Agreement Sent / Signed Contract / Closed Deal */}
+        {/* FOLLOW-UP CAMPAIGNS (engine built in Phase 2) */}
+        {activeTab === 'campaigns' && (
+          <CampaignsPanel leads={allLeads} currentUserId={currentUserId} renderLeadCard={renderLeadCard} scheduledTasks={scheduledTasks} onOpenLead={navigateToLeadCard} onManageReminders={() => setReminderOpen(true)} stages={PIPELINE_STATUSES} stageGroups={[
+            { key: 'ppc-inflow', label: 'PPC Inflow', statuses: ['NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'] },
+            { key: 'appointment-set', label: 'Mapped & Appointment Set', statuses: ['APPT_SET_FOR_JORDAN'] },
+            { key: 'offer-curated', label: 'Offer Curated', statuses: ['OFFER_CURATED'] },
+            { key: 'offer-made', label: 'Offer Made', statuses: ['OFFER_SENT', 'NEGOTIATING'] },
+            { key: 'nurture', label: 'Nurture', statuses: ['NURTURE'] },
+          ]} />
+        )}
+
+        {/* MAPPED & APPOINTMENT SET, physician's-office month calendar */}
+        {activeTab === 'appointment-set' && (() => {
+          const meetings = (scheduledTasks || []).filter(t => t.task_type === 'meeting');
+          const byDay = {};
+          meetings.forEach(t => { if (!t.due_at) return; const k = new Date(t.due_at).toDateString(); (byDay[k] = byDay[k] || []).push(t); });
+          const first = new Date(calMonth.getFullYear(), calMonth.getMonth(), 1);
+          const startDow = first.getDay();
+          const daysInMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 0).getDate();
+          const cells = [];
+          for (let i = 0; i < startDow; i++) cells.push(null);
+          for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(calMonth.getFullYear(), calMonth.getMonth(), d));
+          const todayStr = new Date().toDateString();
+          const monthLabel = calMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+          const totalThisMonth = cells.filter(Boolean).reduce((n, d) => n + (byDay[d.toDateString()]?.length || 0), 0);
+          const selDayBlocked = (byDay[calSelectedDay] || []).some(t => (t.description || '').includes('allday'));
+          const selMeetings = (byDay[calSelectedDay] || []).slice().filter(t => !(t.description || '').includes('allday')).sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+          const selLabel = new Date(calSelectedDay).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+          const shiftMonth = (delta) => setCalMonth(new Date(calMonth.getFullYear(), calMonth.getMonth() + delta, 1));
+          const fmtTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+          return (
+            <div className="space-y-6">
+              <div className="bg-gradient-to-br from-green-500/10 to-emerald-600/5 border border-green-500/40 rounded-xl p-6">
+                <div className="flex items-start justify-between gap-4 flex-wrap">
+                  <div>
+                    <h2 className="text-2xl font-bold text-green-300">Mapped &amp; Appointment Set</h2>
+                    <p className="text-slate-400 text-sm mt-1">Confirmed, mapped, and on the calendar. {totalThisMonth} appointment{totalThisMonth === 1 ? '' : 's'} in {monthLabel}. Appointments stay 30 min apart.</p>
+                    <p className="text-slate-500 text-xs mt-1">On each appointment: <span className="text-emerald-400">Complete</span> to add notes + advance, <span className="text-slate-300">Reschedule</span>, or <span className="text-red-400">No-show</span> &rarr; Follow-Up with a reschedule task.</p>
+                  </div>
+                  <button onClick={() => setReminderOpen(true)} className="flex-shrink-0 text-sm font-semibold px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 inline-flex items-center gap-1.5">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
+                    Reminder messages
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
+                {/* Calendar */}
+                <div className="xl:col-span-3 bg-slate-800/50 border border-slate-700/50 rounded-xl p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <button onClick={() => shiftMonth(-1)} className="p-2 rounded-lg hover:bg-slate-700 text-slate-300" aria-label="Previous month">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+                    </button>
+                    <div className="flex items-center gap-3">
+                      <h3 className="text-lg font-bold text-white">{monthLabel}</h3>
+                      <button onClick={() => { const t = new Date(); setCalMonth(new Date(t.getFullYear(), t.getMonth(), 1)); setCalSelectedDay(t.toDateString()); }} className="text-xs px-2 py-1 rounded bg-slate-700 text-slate-300 hover:bg-slate-600">Today</button>
+                    </div>
+                    <button onClick={() => shiftMonth(1)} className="p-2 rounded-lg hover:bg-slate-700 text-slate-300" aria-label="Next month">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-7 gap-1 mb-1">
+                    {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => (
+                      <div key={d} className="text-center text-[11px] font-semibold uppercase tracking-wide text-slate-500 py-1">{d}</div>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-7 gap-1">
+                    {cells.map((d, idx) => {
+                      if (!d) return <div key={`e${idx}`} />;
+                      const ds = d.toDateString();
+                      const allDayMeetings = (byDay[ds] || []).slice().sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+                      const dayBlocked = allDayMeetings.some(t => (t.description || '').includes('allday'));
+                      const dayMeetings = allDayMeetings.filter(t => !(t.description || '').includes('allday'));
+                      const isToday = ds === todayStr;
+                      const isSel = ds === calSelectedDay;
+                      return (
+                        <button
+                          key={ds}
+                          onClick={() => setCalSelectedDay(ds)}
+                          className={`relative min-h-[92px] rounded-lg p-1.5 text-left align-top transition border flex flex-col ${dayBlocked ? 'border-red-500/60 bg-red-500/15' : isSel ? 'border-blue-500 bg-blue-500/15' : isToday ? 'border-slate-500 bg-slate-700/40' : 'border-slate-700/40 hover:bg-slate-700/40'}`}
+                        >
+                          <span className={`text-xs mb-1 ${dayBlocked ? 'text-red-300 font-semibold' : isToday ? 'text-blue-300 font-bold' : 'text-slate-400'}`}>{d.getDate()}</span>
+                          {dayBlocked && <span className="text-[10px] font-bold uppercase text-red-300 mb-0.5">Blocked</span>}
+                          <div className="flex flex-col gap-0.5 overflow-hidden">
+                            {dayMeetings.slice(0, 3).map(t => {
+                              const lead = allLeads.find(l => l.id === t.lead_id);
+                              const nm = lead?.full_name || lead?.name || t.title || 'Appt';
+                              return (
+                                <span key={t.id} className="block rounded bg-green-500/20 border border-green-500/40 text-green-200 text-[10px] leading-tight px-1 py-0.5 truncate" title={`${fmtTime(t.due_at)} ${nm}`}>
+                                  <span className="font-semibold">{fmtTime(t.due_at)}</span> {nm}
+                                </span>
+                              );
+                            })}
+                            {dayMeetings.length > 3 && (
+                              <span className="text-[10px] text-slate-400 px-1">+{dayMeetings.length - 3} more</span>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Selected day's appointments */}
+                <div className="xl:col-span-2">
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <h3 className="text-lg font-bold text-white">{selLabel}</h3>
+                    <button onClick={() => toggleDayBlock(calSelectedDay)} className={`text-xs font-semibold px-2.5 py-1 rounded-lg ${selDayBlocked ? 'bg-red-500/20 text-red-300 border border-red-500/40 hover:bg-red-500/30' : 'bg-slate-700/60 text-slate-300 hover:bg-slate-600/60'}`}>
+                      {selDayBlocked ? 'Unblock day' : 'Block this day'}
+                    </button>
+                  </div>
+                  <p className="text-sm text-slate-400 mb-3">{selDayBlocked ? 'Whole day blocked, no appointments can be booked. ' : ''}{selMeetings.filter(t => !/^BLOCKED/i.test(t.title || '')).length} appointment{selMeetings.filter(t => !/^BLOCKED/i.test(t.title || '')).length === 1 ? '' : 's'}</p>
+
+                  {/* Hour-by-hour availability. Tap an hour to block it (red); tap again to free it. */}
+                  {!selDayBlocked && (() => {
+                    const dayItems = byDay[calSelectedDay] || [];
+                    const HOURS = []; for (let h = 7; h <= 19; h++) HOURS.push(h);
+                    const hourLabel = (h) => new Date(2000, 0, 1, h).toLocaleTimeString([], { hour: 'numeric' });
+                    const exactTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+                    return (
+                      <div className="mb-4 bg-slate-800/40 border border-slate-700/50 rounded-xl p-3">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Tap an hour to block it off</div>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          {HOURS.map(h => {
+                            const items = dayItems.filter(t => !(t.description || '').includes('allday') && new Date(t.due_at).getHours() === h);
+                            const appts = items.filter(t => !/^BLOCKED/i.test(t.title || '')).sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+                            const block = items.find(t => /^BLOCKED/i.test(t.title || '') && (t.description || '').includes('hourblock'));
+                            if (appts.length) {
+                              // One hour can hold more than one appointment (e.g. 11:00 and 11:38),
+                              // so list every appointment in the hour, each opening its own card.
+                              return (
+                                <div key={h} className="rounded-lg px-2 py-1.5 bg-green-500/20 border border-green-500/50 space-y-1">
+                                  {appts.map(a => {
+                                    const lead = allLeads.find(l => l.id === a.lead_id);
+                                    const nm = lead?.full_name || lead?.name || 'Appt';
+                                    return (
+                                      <button key={a.id} onClick={() => lead && navigateToLeadCard(lead)} title={`${exactTime(a.due_at)} · ${nm} (open card)`} className="w-full text-left hover:bg-green-500/15 rounded px-0.5">
+                                        <div className="text-[11px] font-bold text-green-200">{exactTime(a.due_at)}</div>
+                                        <div className="text-[10px] text-green-300/80 truncate">{nm}</div>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              );
+                            }
+                            return (
+                              <button
+                                key={h}
+                                onClick={() => toggleHourBlock(calSelectedDay, h)}
+                                className={`rounded-lg px-2 py-1.5 text-left border transition ${block ? 'bg-red-500/25 border-red-500/60 hover:bg-red-500/35' : 'bg-slate-700/40 border-slate-600/50 hover:bg-slate-600/50'}`}
+                              >
+                                <div className={`text-[11px] font-bold ${block ? 'text-red-300' : 'text-slate-300'}`}>{hourLabel(h)}</div>
+                                <div className={`text-[10px] ${block ? 'text-red-300/80' : 'text-slate-500'}`}>{block ? 'Blocked' : 'Open'}</div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {selMeetings.length === 0 ? (
+                    <div className="text-center py-10 text-slate-500 border border-dashed border-slate-700 rounded-xl">No appointments this day.</div>
+                  ) : (
+                    <div className="space-y-4">
+                      {selMeetings.map(t => {
+                        const isBlock = /^BLOCKED/i.test(t.title || '');
+                        const lead = allLeads.find(l => l.id === t.lead_id) || rawLeads.find(l => l.id === t.lead_id);
+                        const who = t.assigned_to && usersById[t.assigned_to] ? usersById[t.assigned_to].split(' ')[0] : null;
+                        if (isBlock) {
+                          return (
+                            <div key={t.id} className="flex items-center gap-3 rounded-lg border border-slate-600 bg-slate-700/40 px-3 py-2.5">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-600/60 text-slate-200 text-sm font-semibold">{fmtTime(t.due_at)}</span>
+                              <span className="text-sm text-slate-300">{(t.title || '').replace(/^BLOCKED\s*[—-]\s*/i, '') || 'Blocked'} <span className="text-slate-500">· blocked</span></span>
+                              <button onClick={async () => { await supabase.from('scheduled_tasks').update({ status: 'cancelled' }).eq('id', t.id); setScheduledTasks(prev => prev.filter(x => x.id !== t.id)); }} className="ml-auto text-xs text-slate-400 hover:text-red-300">Remove</button>
+                            </div>
+                          );
+                        }
+                        const missed = new Date(t.due_at) < new Date();
+                        return (
+                          <div key={t.id}>
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-green-500/15 text-green-300 text-sm font-semibold">
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                {fmtTime(t.due_at)}
+                              </span>
+                              {who && <span className="text-xs text-slate-400">with {who}</span>}
+                              {missed && <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 border border-red-500/40">Missed</span>}
+                            </div>
+                            {lead ? renderLeadCard(lead) : (
+                              <div className="text-sm text-slate-500 border border-slate-700 rounded-lg p-3">{t.title || 'Appointment'} (lead not found)</div>
+                            )}
+                            {/* Outcome actions */}
+                            <div className="flex flex-wrap gap-2 mt-2">
+                              <button onClick={() => { setOutcomeFor(outcomeFor === t.id ? null : t.id); setOutcomeNotes(''); }} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-600/40">✓ Complete</button>
+                              <button onClick={() => rescheduleAppt(t)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700/60 text-slate-200 hover:bg-slate-600/60">Reschedule</button>
+                              <button onClick={() => noShowAppt(t)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-600/15 text-red-300 border border-red-500/40 hover:bg-red-600/30">No-show</button>
+                            </div>
+                            {outcomeFor === t.id && (
+                              <div className="mt-2 bg-slate-900/60 border border-slate-700 rounded-lg p-3">
+                                <textarea value={outcomeNotes} onChange={(e) => setOutcomeNotes(e.target.value)} rows={6} placeholder="How did it go? Notes from the appointment..." className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm mb-2 resize-y min-h-[120px] max-h-[60vh] overflow-y-auto" />
+                                <div className="text-xs text-slate-400 mb-1.5">Move to:</div>
+                                <div className="flex flex-wrap gap-2">
+                                  <button onClick={() => completeAppt(t, 'OFFER_SENT')} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white">Offer Made</button>
+                                  <button onClick={() => completeAppt(t, 'OFFER_CURATED')} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white">Offer Curated</button>
+                                  <button onClick={() => completeAppt(t, 'FOLLOW_UP')} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-600 hover:bg-slate-500 text-white">Follow-Up</button>
+                                  <button onClick={() => completeAppt(t, 'LOST')} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">Lost</button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {['offer-curated', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal', 'follow-up', 'lost'].includes(activeTab) && (() => {
+          const bucketConfig = {
+            'offer-curated': {
+              title: 'Offer Curated',
+              subtitle: 'Every lead with an offer entered.',
+              statuses: ['OFFER_CURATED'],
+              accent: 'amber',
+            },
+            'follow-up': {
+              title: 'Follow-Up',
+              subtitle: 'Parked deals on a drip. Most overdue first, work the top of the list.',
+              statuses: ['FOLLOW_UP'],
+              accent: 'rose',
+            },
+            'lost': {
+              title: 'Lost',
+              subtitle: 'Dead deals, kept for the record. Reopen any time.',
+              statuses: ['LOST'],
+              accent: 'zinc',
+            },
+            'appointment-set': {
+              title: 'Appointment Set',
+              subtitle: "Sellers we've connected with, appointments on the calendar",
+              statuses: ['APPT_SET_FOR_JORDAN'],
+              accent: 'green',
+            },
+            'offer-made': {
+              title: 'Offer Made',
+              subtitle: 'Mutual interest, offer or proposal on the table',
+              statuses: ['OFFER_SENT', 'NEGOTIATING'],
+              accent: 'purple',
+            },
+            'agreement-sent': {
+              title: 'Signed Contracts',
+              subtitle: 'Agreement out, signed, and closed, the finish line of the pipeline.',
+              statuses: ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'],
+              accent: 'emerald',
+            },
+            'signed-contract': {
+              title: 'Signed Contract',
+              subtitle: 'Under contract, title work, contingencies, closing prep',
+              statuses: ['UNDER_CONTRACT'],
+              accent: 'blue',
+            },
+            'closed-deal': {
+              title: 'Closed Deal',
+              subtitle: 'Done deals, for the record',
+              statuses: ['CLOSED'],
+              accent: 'emerald',
+            },
+          };
+          const cfg = bucketConfig[activeTab];
+          const accentMap = {
+            green:  { ring: 'border-green-500/40',  text: 'text-green-300',  bg: 'from-green-500/10 to-green-600/5' },
+            purple: { ring: 'border-purple-500/40', text: 'text-purple-300', bg: 'from-purple-500/10 to-purple-600/5' },
+            amber:  { ring: 'border-amber-500/40',  text: 'text-amber-300',  bg: 'from-amber-500/10 to-amber-600/5' },
+            blue:   { ring: 'border-blue-500/40',   text: 'text-blue-300',   bg: 'from-blue-500/10 to-blue-600/5' },
+            emerald:{ ring: 'border-emerald-500/40',text: 'text-emerald-300',bg: 'from-emerald-500/10 to-emerald-600/5' },
+            rose:   { ring: 'border-rose-500/40',   text: 'text-rose-300',   bg: 'from-rose-500/10 to-rose-600/5' },
+            zinc:   { ring: 'border-zinc-500/40',   text: 'text-zinc-300',   bg: 'from-zinc-500/10 to-zinc-600/5' },
+            teal:   { ring: 'border-teal-500/40',   text: 'text-teal-300',   bg: 'from-teal-500/10 to-teal-600/5' },
+          };
+          const c = accentMap[cfg.accent];
+          const sorters = {
+            activity_desc: (a, b) => new Date(b.last_activity_at || b.created_at) - new Date(a.last_activity_at || a.created_at),
+            activity_asc: (a, b) => new Date(a.last_activity_at || a.created_at) - new Date(b.last_activity_at || b.created_at),
+            created_desc: (a, b) => new Date(b.created_at) - new Date(a.created_at),
+            created_asc: (a, b) => new Date(a.created_at) - new Date(b.created_at),
+            cleanview_desc: (a, b) => new Date(b.clean_view_at || 0) - new Date(a.clean_view_at || 0),
+          };
+          const q = pipelineSearch.trim().toLowerCase();
+          // Subdivision leads only appear in the shared buckets once they cross
+          // over (Agreement Sent and beyond). Earlier-stage subdivision leads
+          // stay in the Subdivision Inflow tab, so exclude them from non-crossover
+          // buckets (appointment set, offer made, follow-up, lost).
+          const bucketIsCrossover = cfg.statuses.every(s => SUBDIV_CROSSOVER.includes(s));
+          const bucketAll = boardLeads.filter(l => {
+            const s = (l.pipeline_status || l.status || '').toUpperCase();
+            // Offer Curated is driven by the offer being filled in, not by status.
+            if (activeTab === 'offer-curated') {
+              return l.offer_amount != null && Number(l.offer_amount) !== 0
+                && ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED', 'APPT_SET_FOR_JORDAN'].includes(s)
+                && l.status !== 'archived';
+            }
+            if (!cfg.statuses.includes(s)) return false;
+            if (l.source === 'subdivision' && !bucketIsCrossover) return false;
+            return true;
+          });
+          const bucketComparator = activeTab === 'follow-up'
+            ? (a, b) => new Date(a.next_follow_up_at || a.created_at) - new Date(b.next_follow_up_at || b.created_at)
+            : (sorters[pipelineSort] || sorters.activity_desc);
+          const bucketFiltered = bucketAll
+            .filter(l => !pipelineMapped || l.map_uploaded)
+            .filter(l => leadMatchesSearch(l, q))
+            .filter(passesEngagement);
+          // Offer / contract tabs: sort by most-recent activity so a freshly worked
+          // lead (just completed, notes added, moved here) jumps to the TOP, instead
+          // of the stable order that parked newcomers at the bottom.
+          const recencySort = (a, b) => new Date(b.last_activity_at || b.updated_at || b.created_at) - new Date(a.last_activity_at || a.updated_at || a.created_at);
+          const leadsInBucket = ['offer-curated', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'].includes(activeTab) && pipelineSort === 'activity_desc'
+            ? [...bucketFiltered].sort(recencySort)
+            : stableOrder(bucketFiltered, bucketComparator, `bucket:${activeTab}:${pipelineSort}:${pipelineMapped}:${q}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`);
+
+          return (
+            <div className="space-y-6">
+              <div className={`bg-gradient-to-br ${c.bg} border ${c.ring} rounded-xl p-6`}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className={`text-2xl font-bold ${c.text}`}>{cfg.title}</h2>
+                    <p className="text-slate-400 text-sm mt-1">{cfg.subtitle}</p>
+                  </div>
+                  <div className="text-right">
+                    <div className={`text-4xl font-bold ${c.text}`}>{bucketAll.length}</div>
+                    <div className="text-xs text-slate-500 uppercase tracking-wide">leads</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Search + filter + sort */}
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="relative flex-1 min-w-[220px]">
+                  <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                  <input
+                    value={pipelineSearch}
+                    onChange={(e) => setPipelineSearch(e.target.value)}
+                    placeholder="Search name, phone, county, status or lean (hot, warm)…"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-8 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500/50"
+                  />
+                  {pipelineSearch && (
+                    <button onClick={() => setPipelineSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">&times;</button>
+                  )}
+                </div>
+                <button
+                  onClick={() => setPipelineMapped((v) => !v)}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium border ${pipelineMapped ? 'bg-green-600/30 border-green-600/50 text-green-300' : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800'}`}
+                >
+                  {pipelineMapped ? '✓ ' : ''}Mapped only
+                </button>
+                <select
+                  value={pipelineSort}
+                  onChange={(e) => setPipelineSort(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500/50"
+                >
+                  {cleanViewActive && <option value="cleanview_desc">Newest to Clean View</option>}
+                  <option value="activity_desc">Last activity: newest first</option>
+                  <option value="activity_asc">Last activity: oldest first</option>
+                  <option value="created_desc">Newest Inbound</option>
+                  <option value="created_asc">Oldest Inbound</option>
+                </select>
+                {renderEngagementFilters()}
+              </div>
+
+              {leadsInBucket.length === 0 ? (
+                <div className="text-center py-20 text-slate-500">
+                  <p className="text-lg">{bucketAll.length === 0 ? 'No leads in this bucket yet.' : 'No leads match your filters.'}</p>
+                  <p className="text-sm mt-1">{bucketAll.length === 0 ? `Leads land here when their status moves into ${cfg.statuses.join(' / ')}.` : 'Try clearing the search or the Mapped filter.'}</p>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {leadsInBucket.slice(0, cardLimit).map((lead) => renderLeadCard(lead))}
+                  </div>
+                  {leadsInBucket.length > cardLimit && (
+                    <div className="text-center mt-5">
+                      <button onClick={() => setCardLimit(c => c + 60)} className="px-5 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 text-sm font-semibold">
+                        Show more ({leadsInBucket.length - cardLimit} more)
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* SUBDIVISION INFLOW TAB */}
+        {activeTab === 'subdivision-inflow' && (
+          <div className="space-y-6">
+            {/* Subdivision Stats */}
+            <div className="grid grid-cols-4 gap-4">
+              <div className="bg-gradient-to-br from-teal-500/20 to-teal-600/20 border border-teal-500/30 rounded-xl p-6">
+                <div className="text-3xl font-bold text-teal-400">{allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived').length}</div>
+                <div className="text-slate-300 text-sm mt-1">Total Subdivision Leads</div>
+              </div>
+              <div className="bg-gradient-to-br from-green-500/20 to-green-600/20 border border-green-500/30 rounded-xl p-6">
+                <div className="text-3xl font-bold text-green-400">{allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived' && (getSmartStatus(l) === 'NEW')).length}</div>
+                <div className="text-slate-300 text-sm mt-1">New</div>
+              </div>
+              <div className="bg-gradient-to-br from-yellow-500/20 to-yellow-600/20 border border-yellow-500/30 rounded-xl p-6">
+                <div className="text-3xl font-bold text-yellow-400">{allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived' && ['CONTACTING', 'CONTACTED'].includes(getSmartStatus(l))).length}</div>
+                <div className="text-slate-300 text-sm mt-1">In Progress</div>
+              </div>
+              <div className="bg-gradient-to-br from-purple-500/20 to-purple-600/20 border border-purple-500/30 rounded-xl p-6">
+                <div className="text-3xl font-bold text-purple-400">{allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived' && new Date(l.created_at) > new Date(Date.now() - 7*24*60*60*1000)).length}</div>
+                <div className="text-slate-300 text-sm mt-1">Last 7 Days</div>
+              </div>
+            </div>
+
+            {/* Search + Add Button Row */}
+            <div className="flex gap-3">
+              <div className="relative flex-1">
+                <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <input
+                  type="text"
+                  value={subdivSearch}
+                  onChange={(e) => setSubdivSearch(e.target.value)}
+                  placeholder="Search by seller name, county, agent, status or lean (hot, warm)..."
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-10 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                />
+                {subdivSearch && (
+                  <button onClick={() => setSubdivSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={() => setSubdivFormOpen(!subdivFormOpen)}
+                className={`px-6 py-3 font-semibold rounded-xl transition-colors flex items-center gap-2 ${subdivFormOpen ? 'bg-red-600 hover:bg-red-500 text-white' : 'bg-teal-600 hover:bg-teal-500 text-white'}`}
+              >
+                {subdivFormOpen ? (
+                  <>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                    Close
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                    Add Property
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Filters + sort, same controls as PPC Inflow */}
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => setPipelineMapped((v) => !v)}
+                className={`px-4 py-3 rounded-xl text-sm font-medium border ${pipelineMapped ? 'bg-green-600/30 border-green-600/50 text-green-300' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}
+              >
+                {pipelineMapped ? '✓ ' : ''}Mapped only
+              </button>
+              <select
+                value={pipelineSort}
+                onChange={(e) => setPipelineSort(e.target.value)}
+                className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-3 text-sm text-white focus:outline-none focus:border-blue-500"
+              >
+                {cleanViewActive && <option value="cleanview_desc">Newest to Clean View</option>}
+                <option value="activity_desc">Last activity: newest first</option>
+                <option value="activity_asc">Last activity: oldest first</option>
+                <option value="created_desc">Newest Inbound</option>
+                <option value="created_asc">Oldest Inbound</option>
+              </select>
+              {renderEngagementFilters()}
+            </div>
+
+            {/* Inline Create Form */}
+            {subdivFormOpen && (
+              <div className="bg-slate-800/80 border border-teal-500/30 rounded-xl p-6">
+                <h3 className="text-lg font-bold text-teal-400 mb-4">New Subdivision Property</h3>
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">County *</label>
+                    <input
+                      type="text"
+                      value={subdivForm.county}
+                      onChange={(e) => setSubdivForm({...subdivForm, county: e.target.value})}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-teal-500"
+                      placeholder="e.g. Travis"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">State *</label>
+                    <input
+                      type="text"
+                      value={subdivForm.state}
+                      onChange={(e) => setSubdivForm({...subdivForm, state: e.target.value})}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-teal-500"
+                      placeholder="TX"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Acreage</label>
+                    <input
+                      type="number"
+                      value={subdivForm.acreage}
+                      onChange={(e) => setSubdivForm({...subdivForm, acreage: e.target.value})}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-teal-500"
+                      placeholder="50"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Seller Name</label>
+                    <input
+                      type="text"
+                      value={subdivForm.seller_name}
+                      onChange={(e) => setSubdivForm({...subdivForm, seller_name: e.target.value})}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-teal-500"
+                      placeholder="John Smith"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Parcel ID</label>
+                    <input
+                      type="text"
+                      value={subdivForm.parcel_id}
+                      onChange={(e) => setSubdivForm({...subdivForm, parcel_id: e.target.value})}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-teal-500"
+                      placeholder="APN / Parcel #"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-4 mb-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Agent Name</label>
+                    <input
+                      type="text"
+                      value={subdivForm.agent_name}
+                      onChange={(e) => setSubdivForm({...subdivForm, agent_name: e.target.value})}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-teal-500"
+                      placeholder="Jane Doe"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Agent Phone</label>
+                    <input
+                      type="tel"
+                      value={subdivForm.agent_phone}
+                      onChange={(e) => setSubdivForm({...subdivForm, agent_phone: e.target.value})}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-teal-500"
+                      placeholder="(512) 555-1234"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Agent Email</label>
+                    <input
+                      type="email"
+                      value={subdivForm.agent_email}
+                      onChange={(e) => setSubdivForm({...subdivForm, agent_email: e.target.value})}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-teal-500"
+                      placeholder="agent@realty.com"
+                    />
+                  </div>
+                </div>
+                <button
+                  onClick={handleCreateSubdivision}
+                  disabled={subdivCreating}
+                  className="px-6 py-2.5 bg-teal-600 hover:bg-teal-500 disabled:bg-slate-700 text-white font-semibold rounded-lg transition-colors"
+                >
+                  {subdivCreating ? 'Creating...' : 'Create Property'}
+                </button>
+              </div>
+            )}
+
+            {/* Subdivision Leads Grid: same card + abilities as PPC Inflow */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+              {stableOrder(
+                boardLeads
+                  .filter(l => isSubdivisionInflow(l))
+                  .filter(l => leadMatchesSearch(l, subdivSearch))
+                  .filter(l => !pipelineMapped || l.map_uploaded)
+                  .filter(passesEngagement),
+                (a, b) => {
+                  if (pipelineSort === 'cleanview_desc') return new Date(b.clean_view_at || 0) - new Date(a.clean_view_at || 0);
+                  const useCreated = pipelineSort.startsWith('created');
+                  const av = new Date(useCreated ? a.created_at : (a.last_activity_at || a.created_at));
+                  const bv = new Date(useCreated ? b.created_at : (b.last_activity_at || b.created_at));
+                  return pipelineSort.endsWith('asc') ? av - bv : bv - av;
+                },
+                `subdiv:${pipelineSort}:${pipelineMapped}:${subdivSearch.trim()}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`
+              ).slice(0, cardLimit).map((lead) => renderLeadCard(lead))}
+            </div>
+
+            {boardLeads.filter(isSubdivisionInflow).length === 0 && (
+              <div className="text-center py-12 text-slate-400">
+                No subdivision leads yet. Click "+ Add Property" to create one.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ALL LEADS TAB */}
+        {activeTab === 'all-leads' && (
+          <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
+            <div className="p-4 border-b border-slate-700/50 flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <h3 className="text-xl font-bold">All Leads</h3>
+                <p className="text-sm text-slate-400 mt-1">{allLeads.filter(l => l.status !== 'archived' && (allLeadsFilter === 'all' || getSmartStatus(l) === allLeadsFilter)).length} shown ({allLeads.length} total)</p>
+              </div>
+              <select
+                value={allLeadsFilter}
+                onChange={(e) => setAllLeadsFilter(e.target.value)}
+                className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+              >
+                <option value="all">All statuses</option>
+                <option value="NEW">New</option>
+                <option value="CONTACTING">In Contact</option>
+                <option value="OFFER_SENT">Offer Sent</option>
+                <option value="NEGOTIATING">Negotiating</option>
+                <option value="FOLLOW_UP">Follow-Up</option>
+                <option value="WE_PASSED">We Passed</option>
+                <option value="NURTURE">Nurture</option>
+                <option value="LOST">Lost</option>
+                <option value="DEAD">Dead</option>
+                <option value="CLOSED">Closed</option>
+              </select>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-slate-700/50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Date</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Name</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Source</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Location</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Acres</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Status</th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-slate-400 uppercase">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-700/50">
+                  {allLeads.filter(l => l.status !== 'archived').filter(l => allLeadsFilter === 'all' || getSmartStatus(l) === allLeadsFilter).map((lead) => {
+                    return (
+                      <tr key={lead.id} id={`lead-card-${lead.id}`} className={`hover:bg-slate-700/30 ${highlightLeadId === lead.id ? 'ring-2 ring-inset ring-blue-400/70 bg-blue-500/10' : ''}`}>
+                        <td className="px-6 py-4 text-sm">
+                          {new Date(lead.created_at).toLocaleDateString()}
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="font-medium">{lead.full_name || lead.name}{lead.map_uploaded ? <MappedBadge /> : <NotMappedBadge />}</div>
+                          <div className="text-sm text-slate-400">{lead.email}</div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                            lead.source === 'subdivision' ? 'bg-teal-500/20 text-teal-400' :
+                            lead.source?.includes('Haven Ground') ? 'bg-orange-500/20 text-orange-400' :
+                            'bg-slate-500/20 text-slate-400'
+                          }`}>
+                            {lead.source === 'subdivision' ? 'Subdivision' : lead.source?.includes('Haven Ground') ? 'PPC' : lead.source || 'Direct'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-sm">
+                          {lead.property_county || lead.county}, {lead.property_state || lead.state}
+                        </td>
+                        <td className="px-6 py-4 text-sm">{lead.acres || lead.acreage || '-'}</td>
+                        <td className="px-6 py-4">
+                          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${STATUS_CONFIG[getSmartStatus(lead)]?.color || 'bg-slate-500/20 text-slate-400'}`}>
+                            {STATUS_CONFIG[getSmartStatus(lead)]?.label || getSmartStatus(lead)}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-right space-x-2">
+                          {!['NEW', 'CONTACTING'].includes(getSmartStatus(lead)) && (
+                            <button
+                              onClick={() => moveToInflow(lead.id)}
+                              title="Move this lead back to the PPC Inflow board"
+                              className="px-3 py-1.5 bg-blue-600/80 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm font-medium"
+                            >
+                              → Inflow
+                            </button>
+                          )}
+                          <button
+                            onClick={() => openLeadDetails(lead)}
+                            className="px-3 py-1.5 bg-slate-700 text-white rounded-lg hover:bg-slate-600 transition-colors text-sm font-medium"
+                          >
+                            Details
+                          </button>
+                          <button
+                            onClick={() => archiveLead(lead.id)}
+                            className="px-3 py-1.5 bg-zinc-700/50 text-zinc-400 rounded-lg hover:bg-zinc-600/50 hover:text-zinc-300 transition-colors text-sm font-medium"
+                          >
+                            Archive
+                          </button>
+                          <button
+                            onClick={() => { if (confirm(`Permanently delete ${lead.full_name || lead.name}?`)) deleteLead(lead.id); }}
+                            className="px-3 py-1.5 bg-red-900/30 text-red-400 rounded-lg hover:bg-red-800/40 hover:text-red-300 transition-colors text-sm font-medium"
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* UNASSIGNED LEADS TAB */}
+        {activeTab === 'unassigned' && (
+          <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
+            <div className="p-4 border-b border-slate-700/50 flex items-center justify-between">
+              <div>
+                <h3 className="text-xl font-bold">Unassigned Leads</h3>
+                <p className="text-sm text-slate-400 mt-1">
+                  {unassignedLeads.length} leads awaiting assignment
+                </p>
+              </div>
+              {selectedOrg && (
+                <div className="text-sm">
+                  <span className="text-slate-400">Assigning to:</span>
+                  <span className="ml-2 font-semibold text-blue-400">{selectedOrg.name}</span>
+                  <button
+                    onClick={() => setSelectedOrg(null)}
+                    className="ml-3 text-red-400 hover:text-red-300"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="divide-y divide-slate-700/50">
+              {unassignedLeads.length === 0 ? (
+                <div className="text-center py-12 text-slate-400">
+                  All leads have been assigned!
+                </div>
+              ) : (
+                unassignedLeads.map((lead) => (
+                  <div key={lead.id} className="p-6 hover:bg-slate-700/30 transition-colors">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <h4 className="text-lg font-semibold text-white inline-flex items-center gap-2">
+                          {lead.full_name || lead.name}
+                          {lead.map_uploaded ? <MappedBadge /> : <NotMappedBadge />}
+                          <TeammateBadge lead={lead} />
+                        </h4>
+                        <div className="mt-2 grid grid-cols-4 gap-4 text-sm">
+                          <div>
+                            <span className="text-slate-400">Location:</span>
+                            <span className="ml-2 text-white">
+                              {lead.property_county || lead.county}, {lead.property_state || lead.state}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Acres:</span>
+                            <span className="ml-2 text-white">{lead.acres || lead.acreage || '-'}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Email:</span>
+                            <span className="ml-2 text-white">{lead.email}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Phone:</span>
+                            <span className="ml-2 text-white">{lead.phone}</span>
+                          </div>
+                        </div>
+                        {lead.parcel_id && (
+                          <div className="mt-2 text-sm">
+                            <span className="text-slate-400">Parcel ID:</span>
+                            <span className="ml-2 text-white font-mono">{lead.parcel_id}</span>
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <button
+                          onClick={() => {
+                            setSelectedLead(lead);
+                            setAssignModalOpen(true);
+                          }}
+                          className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-500 transition-colors font-semibold text-sm"
+                        >
+                          Assign to Organization
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ARCHIVE TAB */}
+        {activeTab === 'archive' && (
+          <div className="space-y-6">
+            {/* Archive Header */}
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-6">
+              <div className="flex items-center gap-3 mb-2">
+                <svg className="w-6 h-6 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>
+                <h2 className="text-2xl font-bold text-white">Archive</h2>
+                <span className="ml-2 px-3 py-1 bg-zinc-700/50 rounded-full text-sm text-zinc-400 font-semibold">{allLeads.filter(l => l.status === 'archived').length} leads</span>
+              </div>
+              <p className="text-slate-400 text-sm">Archived leads are hidden from all dashboards. Restore to bring them back, or delete permanently.</p>
+            </div>
+
+            {allLeads.filter(l => l.status === 'archived').length === 0 ? (
+              <div className="text-center py-16 text-slate-400">
+                <svg className="w-12 h-12 mx-auto mb-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>
+                <p className="text-lg font-semibold">Archive is empty</p>
+                <p className="text-sm mt-1">Archived leads will appear here</p>
+              </div>
+            ) : (
+              <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-slate-700/50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Date</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Name</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Source</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Location</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase">Acres</th>
+                        <th className="px-6 py-3 text-right text-xs font-medium text-slate-400 uppercase">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-700/50">
+                      {allLeads.filter(l => l.status === 'archived').map((lead) => (
+                        <tr key={lead.id} id={`lead-card-${lead.id}`} className={`hover:bg-slate-700/30 ${highlightLeadId === lead.id ? 'ring-2 ring-inset ring-blue-400/70 bg-blue-500/10' : ''}`}>
+                          <td className="px-6 py-4 text-sm text-slate-400">
+                            {new Date(lead.created_at).toLocaleDateString()}
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="font-medium text-white inline-flex items-center gap-2">{lead.full_name || lead.name}{lead.map_uploaded ? <MappedBadge /> : <NotMappedBadge />}<TeammateBadge lead={lead} /></div>
+                            <div className="text-sm text-slate-500">{lead.email}</div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                              lead.source === 'subdivision' ? 'bg-teal-500/20 text-teal-400' :
+                              lead.source?.includes('Haven Ground') ? 'bg-orange-500/20 text-orange-400' :
+                              'bg-slate-500/20 text-slate-400'
+                            }`}>
+                              {lead.source === 'subdivision' ? 'Subdivision' : lead.source?.includes('Haven Ground') ? 'PPC' : lead.source || 'Direct'}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-sm text-slate-400">
+                            {lead.property_county || lead.county}, {lead.property_state || lead.state}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-slate-400">{lead.acres || lead.acreage || '-'}</td>
+                          <td className="px-6 py-4 text-right space-x-2">
+                            <button
+                              onClick={() => restoreLead(lead.id)}
+                              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-500 transition-colors text-sm font-semibold"
+                            >
+                              Restore
+                            </button>
+                            <button
+                              onClick={() => { if (confirm(`Permanently delete ${lead.full_name || lead.name}? This cannot be undone.`)) deleteLead(lead.id); }}
+                              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-500 transition-colors text-sm font-semibold"
+                            >
+                              Delete Forever
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* CREATE LEAD TAB */}
+        {activeTab === 'create-lead' && (
+          <div className="space-y-6">
+            {/* Screenshot -> Lead (drop lead screenshots, auto-create PPC leads) */}
+            <div
+              onPaste={onShotPaste}
+              onDragOver={(e) => { e.preventDefault(); setShotDragOver(true); }}
+              onDragLeave={() => setShotDragOver(false)}
+              onDrop={(e) => { e.preventDefault(); setShotDragOver(false); processLeadScreenshots(e.dataTransfer.files); }}
+              className={`rounded-xl border p-5 transition-colors ${shotDragOver ? 'border-blue-500 bg-blue-500/10' : 'border-slate-700/50 bg-slate-800/50'}`}
+            >
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div>
+                  <h3 className="text-xl font-bold flex items-center gap-2">
+                    <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5V19a2 2 0 002 2h14a2 2 0 002-2v-2.5M7 9l5-5 5 5M12 4v12"/></svg>
+                    Paste or upload lead screenshots
+                  </h3>
+                  <p className="text-sm text-slate-400 mt-1">Drop or paste one or more lead screenshots. Each is read automatically and added to PPC Inflow.</p>
+                </div>
+                <label className={`px-4 py-2 rounded-lg font-semibold cursor-pointer transition-colors ${shotBusy ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-500'}`}>
+                  {shotBusy ? `Reading ${shotProgress.done}/${shotProgress.total}...` : 'Choose screenshots'}
+                  <input type="file" accept="image/*" multiple disabled={shotBusy} className="hidden"
+                    onChange={(e) => { processLeadScreenshots(e.target.files); e.target.value = ''; }} />
+                </label>
+              </div>
+
+              <div className={`mt-4 rounded-lg border-2 border-dashed ${shotDragOver ? 'border-blue-500' : 'border-slate-700'} px-4 py-6 text-center text-sm text-slate-400`}>
+                Drag screenshots here, click to paste (Cmd/Ctrl+V), or use the button above.
+              </div>
+
+              {shotResults.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  {shotResults.map((r, i) => (
+                    <div key={i} className={`flex items-start gap-3 rounded-lg border px-3 py-3 ${r.ok ? 'border-emerald-600/40 bg-emerald-600/10' : 'border-red-600/40 bg-red-600/10'}`}>
+                      {r.thumb && <img src={r.thumb} alt="" className="w-12 h-12 object-cover rounded border border-slate-700 flex-shrink-0" />}
+                      {r.ok ? (
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <svg className="w-4 h-4 text-emerald-400 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>
+                            <span className="text-sm text-white font-semibold">{r.name}</span>
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-emerald-300 bg-emerald-500/15 px-2 py-0.5 rounded">Added to PPC Inflow</span>
+                          </div>
+                          <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                            {r.phone && r.phone !== 'N/A' && <div><span className="text-slate-500">Phone:</span> <span className="text-slate-200">{r.phone}</span></div>}
+                            {r.email && r.email !== 'N/A' && <div className="truncate"><span className="text-slate-500">Email:</span> <span className="text-slate-200">{r.email}</span></div>}
+                            {r.address && <div className="col-span-2 truncate"><span className="text-slate-500">Address:</span> <span className="text-slate-200">{[r.address, r.city, r.state].filter(Boolean).join(', ')}</span></div>}
+                            {r.county && <div><span className="text-slate-500">County:</span> <span className="text-slate-200">{r.county}</span></div>}
+                            {r.acres && <div><span className="text-slate-500">Acres:</span> <span className="text-slate-200">{r.acres}</span></div>}
+                            {r.name_on_title && <div className="col-span-2"><span className="text-slate-500">Name on title:</span> <span className="text-slate-200">{r.name_on_title}</span></div>}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-sm text-red-300 min-w-0 flex-1">Could not add: {r.error}</div>
+                      )}
+                    </div>
+                  ))}
+                  <button onClick={() => setShotResults([])} className="text-xs text-slate-500 hover:text-slate-300 mt-1">Clear list</button>
+                </div>
+              )}
+            </div>
+
+            <div className="text-center text-xs uppercase tracking-widest text-slate-600">or enter a lead manually</div>
+
+            <div className="grid grid-cols-2 gap-6">
+            {/* Left: Map */}
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
+              <div className="p-4 border-b border-slate-700/50">
+                <h3 className="text-xl font-bold">Property Location</h3>
+                <p className="text-sm text-slate-400 mt-1">Fill in the form and locate the property on the map</p>
+              </div>
+
+              <div className="p-4">
+                <div ref={mapContainer} className="h-96 rounded-lg overflow-hidden" />
+
+                {foundParcels.length > 0 && (
+                  <div className="mt-4 space-y-2">
+                    <h4 className="font-semibold text-white mb-2">
+                      {foundParcels.length > 1 ? `Select Parcel (${foundParcels.length} found)` : 'Parcel Found'}
+                    </h4>
+                    {foundParcels.map((parcel, index) => (
+                      <div
+                        key={index}
+                        onClick={() => selectParcel(index)}
+                        className={`p-4 rounded-lg cursor-pointer transition-all ${
+                          selectedParcelIndex === index
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-slate-700/50 text-slate-300 hover:bg-slate-700'
+                        }`}
+                      >
+                        <div className="grid grid-cols-2 gap-2 text-sm">
+                          <div>
+                            <span className="opacity-75">Address:</span>
+                            <span className="ml-2 font-medium">{parcel.properties.address}</span>
+                          </div>
+                          <div>
+                            <span className="opacity-75">Acres:</span>
+                            <span className="ml-2 font-medium">{parcel.properties.acres}</span>
+                          </div>
+                          <div>
+                            <span className="opacity-75">County:</span>
+                            <span className="ml-2 font-medium">{parcel.properties.county}</span>
+                          </div>
+                          <div>
+                            <span className="opacity-75">APN:</span>
+                            <span className="ml-2 font-medium">{parcel.properties.apn}</span>
+                          </div>
+                          {parcel.properties.owner && (
+                            <div className="col-span-2">
+                              <span className="opacity-75">Owner:</span>
+                              <span className="ml-2 font-medium">{parcel.properties.owner}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Right: Form */}
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
+              <div className="p-4 border-b border-slate-700/50">
+                <h3 className="text-xl font-bold">Lead Information</h3>
+                <p className="text-sm text-slate-400 mt-1">Fill in the landowner details</p>
+              </div>
+
+              <div className="p-6 space-y-4">
+                {/* Input Mode Toggle */}
+                <div className="grid grid-cols-3 gap-2 p-1 bg-slate-900/50 rounded-lg border border-slate-700">
+                  <button
+                    onClick={() => setInputMode('search')}
+                    className={`px-3 py-2 rounded-md font-medium transition-all text-sm ${
+                      inputMode === 'search'
+                        ? 'bg-blue-600 text-white'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Search
+                  </button>
+                  <button
+                    onClick={() => {
+                      setInputMode('click');
+                      setClickToFindActive(false);
+                    }}
+                    className={`px-3 py-2 rounded-md font-medium transition-all text-sm ${
+                      inputMode === 'click'
+                        ? 'bg-orange-600 text-white'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Click Map
+                  </button>
+                  <button
+                    onClick={() => setInputMode('upload')}
+                    className={`px-3 py-2 rounded-md font-medium transition-all text-sm ${
+                      inputMode === 'upload'
+                        ? 'bg-green-600 text-white'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Upload
+                  </button>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">Full Name</label>
+                  <input
+                    type="text"
+                    value={newLead.full_name}
+                    onChange={(e) => setNewLead({ ...newLead, full_name: e.target.value })}
+                    className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="John Doe"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">Email</label>
+                    <input
+                      type="email"
+                      value={newLead.email}
+                      onChange={(e) => setNewLead({ ...newLead, email: e.target.value })}
+                      className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="john@example.com"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">Phone</label>
+                    <input
+                      type="tel"
+                      value={newLead.phone}
+                      onChange={(e) => setNewLead({ ...newLead, phone: e.target.value })}
+                      className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="(555) 123-4567"
+                    />
+                  </div>
+                </div>
+
+                {/* Search Mode - Regrid API */}
+                {inputMode === 'search' && (
+                  <div className="bg-blue-900/20 border border-blue-500/30 rounded-lg p-4">
+                    <p className="text-sm text-blue-300 mb-3">Search by ONE of the following:</p>
+
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-300 mb-2">
+                          Parcel ID / APN <span className="text-green-400">(Recommended - 1 API call)</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={newLead.parcel_id}
+                          onChange={(e) => setNewLead({ ...newLead, parcel_id: e.target.value })}
+                          className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-green-500"
+                          placeholder="R67873"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-300 mb-2">
+                          Owner Name on Title
+                        </label>
+                        <input
+                          type="text"
+                          value={newLead.owner_name}
+                          onChange={(e) => setNewLead({ ...newLead, owner_name: e.target.value })}
+                          className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="John Smith"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-300 mb-2">
+                        Property Address <span className="text-yellow-400">(Multiple results - more API calls)</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={newLead.street_address}
+                        onChange={(e) => setNewLead({ ...newLead, street_address: e.target.value })}
+                        className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-yellow-500"
+                        placeholder="123 Main St (optional if using Parcel ID)"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Click to Find Mode */}
+                {inputMode === 'click' && (
+                  <div className="bg-orange-900/20 border border-orange-500/30 rounded-lg p-4 space-y-4">
+                    <p className="text-sm text-orange-300 mb-3">Click on the map to find a parcel (1 API call per click)</p>
+
+                    <div className="bg-slate-900/50 border border-slate-700 rounded p-3 space-y-2">
+                      <p className="text-xs text-slate-400">
+                        <strong className="text-slate-300">How it works:</strong><br/>
+                        1. Enable click mode below<br/>
+                        2. Navigate to the property location on the map<br/>
+                        3. Click directly on the parcel<br/>
+                        4. Parcel data will auto-populate
+                      </p>
+                      <p className="text-xs text-yellow-400">
+                        ⚠️ Warning: Each click = 1 API call. Only use when you know exactly where the parcel is!
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() => setClickToFindActive(!clickToFindActive)}
+                      className={`w-full px-4 py-3 rounded-lg font-medium transition-all ${
+                        clickToFindActive
+                          ? 'bg-orange-600 text-white'
+                          : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                      }`}
+                    >
+                      {clickToFindActive ? 'Click Mode Active - Click on Map' : 'Enable Click to Find'}
+                    </button>
+
+                    {clickToFindActive && (
+                      <div className="bg-orange-500/10 border border-orange-500/50 rounded p-3 animate-pulse">
+                        <p className="text-sm text-orange-300 font-medium text-center">
+                          👆 Click anywhere on the map to find a parcel
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Upload Mode - File Upload */}
+                {inputMode === 'upload' && (
+                  <div className="bg-green-900/20 border border-green-500/30 rounded-lg p-4 space-y-4">
+                    <p className="text-sm text-green-300 mb-3">Upload parcel files from County GIS (0 API calls)</p>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-300 mb-2">
+                        KML File <span className="text-green-400">(Parcel Boundary - Required)</span>
+                      </label>
+                      <input
+                        type="file"
+                        accept=".kml"
+                        onChange={handleKmlUpload}
+                        className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-green-600 file:text-white hover:file:bg-green-700"
+                      />
+                      {kmlFile && (
+                        <p className="text-xs text-green-400 mt-1">✅ {kmlFile.name}</p>
+                      )}
+                    </div>
+
+                    <div className="border-t border-slate-700 pt-4">
+                      <label className="block text-sm font-medium text-slate-300 mb-2">
+                        📋 Paste Property Data from GIS <span className="text-yellow-400">(Easiest!)</span>
+                      </label>
+                      <textarea
+                        placeholder="Paste property details from County GIS here...&#10;&#10;Example:&#10;Location&#10;Grimes County, TX&#10;&#10;Acres&#10;139.71&#10;&#10;Parcel #&#10;R11600&#10;&#10;Owner 1&#10;JOHN DOE&#10;&#10;Property Address&#10;123 COUNTY ROAD 407, CITY, TX 77777"
+                        onChange={(e) => handlePastedData(e.target.value)}
+                        className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-green-500 font-mono text-sm"
+                        rows="8"
+                      />
+                      <p className="text-xs text-slate-400 mt-1">
+                        Just copy the property details from the GIS website and paste here - it will auto-fill!
+                      </p>
+                    </div>
+
+                    <div className="bg-slate-900/50 border border-slate-700 rounded p-3">
+                      <p className="text-xs text-slate-400">
+                        <strong className="text-slate-300">Quick Start:</strong><br/>
+                        1. Upload KML file (for parcel boundary)<br/>
+                        2. Paste property data above (auto-fills form)<br/>
+                        3. Fill in Name, Email, Phone<br/>
+                        4. Click "Publish Lead"
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">County</label>
+                    <input
+                      type="text"
+                      value={newLead.property_county}
+                      onChange={(e) => setNewLead({ ...newLead, property_county: e.target.value })}
+                      className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Travis"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">State</label>
+                    <input
+                      type="text"
+                      value={newLead.property_state}
+                      onChange={(e) => setNewLead({ ...newLead, property_state: e.target.value })}
+                      className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="TX"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">Zip Code</label>
+                    <input
+                      type="text"
+                      value={newLead.zip_code}
+                      onChange={(e) => setNewLead({ ...newLead, zip_code: e.target.value })}
+                      className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="78701"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">Acres (optional)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={newLead.acres}
+                    onChange={(e) => setNewLead({ ...newLead, acres: e.target.value })}
+                    className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="10.5"
+                  />
+                </div>
+
+                {/* Only show Locate Property button for Search and Click modes */}
+                {inputMode !== 'upload' && (
+                  <button
+                    onClick={locateParcel}
+                    disabled={locatingParcel}
+                    className="w-full px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-500 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {locatingParcel ? 'Locating Property...' : 'Locate Property'}
+                  </button>
+                )}
+
+                {parcelLocated && (
+                  <button
+                    onClick={handleCreateLead}
+                    disabled={creatingLead || !newLead.full_name}
+                    className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {creatingLead ? 'Publishing Lead...' : 'Publish Lead'}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+          </div>
+        )}
+
+        {/* PARTNERS TAB (admin only), push leads to partner Monday boards + tracking */}
+        {activeTab === 'partners' && isAdmin && (() => {
+          const q = partnerSearch.trim().toLowerCase();
+          const STAGE_SETS = {
+            new: ['', 'NEW'],
+            in_contact: ['CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'],
+            appt: ['APPT_SET_FOR_JORDAN'],
+            offer: ['OFFER_SENT', 'OFFER_MADE', 'NEGOTIATING'],
+            agreement: ['AGREEMENT_SENT'],
+            contract: ['UNDER_CONTRACT'],
+            closed: ['CLOSED'],
+            follow_up: ['FOLLOW_UP'],
+            lost: ['LOST'],
+            dead: ['DEAD'],
+          };
+          const stageOk = (l) => {
+            const s = (l.pipeline_status || l.status || '').toUpperCase();
+            if (partnerStage === 'all') return true;
+            if (partnerStage === 'active') return !['DEAD', 'LOST'].includes(s);
+            return (STAGE_SETS[partnerStage] || []).includes(s);
+          };
+          const dirOk = (l) => !partnerDirection || l.deal_direction === partnerDirection;
+          const allDirections = OFFER_DIRECTIONS;
+          // Distinct partners we've ever sent to (drives the "sent to" filter).
+          const partnerOptions = Array.from(new Set(
+            allLeads.flatMap((l) => (Array.isArray(l.partner_pushes) ? l.partner_pushes.map((p) => p.board_name).filter(Boolean) : []))
+          )).sort();
+          const sentOk = (l) => {
+            if (!partnerSentFilter) return true;
+            const pushes = Array.isArray(l.partner_pushes) ? l.partner_pushes : [];
+            if (partnerSentFilter === '__none__') return pushes.length === 0;
+            if (partnerSentFilter === '__any__') return pushes.length > 0;
+            return pushes.some((p) => p.board_name === partnerSentFilter);
+          };
+          const sentLeads = allLeads
+            .filter((l) => Array.isArray(l.partner_pushes) && l.partner_pushes.length)
+            .sort((a, b) => {
+              const at = a.partner_pushes[a.partner_pushes.length - 1]?.pushed_at || '';
+              const bt = b.partner_pushes[b.partner_pushes.length - 1]?.pushed_at || '';
+              return new Date(bt) - new Date(at);
+            });
+          const cards = stableOrder(
+            allLeads
+              .filter((l) => l.status !== 'archived')
+              .filter(stageOk)
+              .filter(dirOk)
+              .filter((l) => !pipelineMapped || l.map_uploaded)
+              .filter(sentOk)
+              .filter((l) => leadMatchesSearch(l, q))
+              .filter(passesEngagement),
+            (a, b) => {
+              const useCreated = pipelineSort.startsWith('created');
+              const av = new Date(useCreated ? a.created_at : (a.last_activity_at || a.created_at));
+              const bv = new Date(useCreated ? b.created_at : (b.last_activity_at || b.created_at));
+              return pipelineSort.endsWith('asc') ? av - bv : bv - av;
+            },
+            `partners:${pipelineSort}:${partnerStage}:${partnerDirection}:${partnerSentFilter}:${pipelineMapped}:${q}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`
+          );
+          return (
+            <div className="space-y-6">
+              <div className="bg-gradient-to-br from-indigo-500/10 to-indigo-600/5 border border-indigo-500/40 rounded-xl p-6">
+                <h2 className="text-2xl font-bold text-indigo-300">Partners</h2>
+                <p className="text-slate-400 text-sm mt-1">Find a lead, hit Send to Partner on its card to push it to LS or SSL in Monday with the property details and parcel map. Everything sent is tracked below.</p>
+              </div>
+
+              {/* Filters */}
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="relative flex-1 min-w-[220px]">
+                  <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                  <input
+                    value={partnerSearch}
+                    onChange={(e) => setPartnerSearch(e.target.value)}
+                    placeholder="Search by name, phone, county, address…"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50"
+                  />
+                </div>
+                <select value={partnerStage} onChange={(e) => setPartnerStage(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50">
+                  <option value="active">All active</option>
+                  <option value="all">Everything (incl. dead/lost)</option>
+                  <option value="new">New</option>
+                  <option value="in_contact">In Contact</option>
+                  <option value="appt">Appointment Set</option>
+                  <option value="offer">Offer Made</option>
+                  <option value="agreement">Agreement Sent</option>
+                  <option value="contract">Signed Contract</option>
+                  <option value="closed">Closed</option>
+                  <option value="follow_up">Follow-Up</option>
+                  <option value="lost">Lost</option>
+                  <option value="dead">Dead</option>
+                </select>
+                <select value={partnerDirection} onChange={(e) => setPartnerDirection(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50">
+                  <option value="">Any lean</option>
+                  {allDirections.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+                </select>
+                <select value={partnerSentFilter} onChange={(e) => setPartnerSentFilter(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50" title="Filter by who this lead has been sent to">
+                  <option value="">Any sent status</option>
+                  <option value="__any__">Sent to anyone</option>
+                  <option value="__none__">Not sent yet</option>
+                  {partnerOptions.map((name) => <option key={name} value={name}>Sent to {name}</option>)}
+                </select>
+                <select value={pipelineSort} onChange={(e) => setPipelineSort(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50">
+                  {cleanViewActive && <option value="cleanview_desc">Newest to Clean View</option>}
+                  <option value="activity_desc">Last activity: newest first</option>
+                  <option value="activity_asc">Last activity: oldest first</option>
+                  <option value="created_desc">Newest Inbound</option>
+                  <option value="created_asc">Oldest Inbound</option>
+                </select>
+                <button onClick={() => setPipelineMapped((v) => !v)} className={`px-3 py-2 rounded-lg text-sm font-medium border ${pipelineMapped ? 'bg-green-600/30 border-green-600/50 text-green-300' : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800'}`}>{pipelineMapped ? '✓ ' : ''}Mapped only</button>
+                {renderEngagementFilters()}
+              </div>
+
+              {/* Card grid with Send to Partner on each */}
+              {cards.length === 0 ? (
+                <div className="text-center py-16 text-slate-500"><p className="text-lg">No leads match.</p></div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {cards.slice(0, cardLimit).map((lead) => renderLeadCard(lead))}
+                  </div>
+                  {cards.length > cardLimit && (
+                    <div className="text-center mt-5">
+                      <button onClick={() => setCardLimit(c => c + 60)} className="px-5 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 text-sm font-semibold">Show more ({cards.length - cardLimit} more)</button>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Send tracking */}
+              <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
+                <div className="p-4 border-b border-slate-700/50 flex items-center justify-between">
+                  <div className="text-sm font-semibold text-white">Send tracking</div>
+                  <div className="text-xs text-slate-500">{sentLeads.length} lead{sentLeads.length === 1 ? '' : 's'} sent</div>
+                </div>
+                {sentLeads.length === 0 ? (
+                  <div className="px-4 py-10 text-center text-slate-500 text-sm">Nothing sent yet. Find a lead above and send it to a partner.</div>
+                ) : (
+                  <table className="w-full">
+                    <thead className="bg-slate-700/40">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-400 uppercase">Lead</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-400 uppercase">Sent to</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-400 uppercase">Last sent</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-700/40">
+                      {sentLeads.map((l) => {
+                        const last = l.partner_pushes[l.partner_pushes.length - 1];
+                        return (
+                          <tr key={l.id} className="hover:bg-slate-700/20">
+                            <td className="px-4 py-2.5">
+                              <button onClick={() => navigateToLeadCard(l)} className="text-sm text-white hover:text-indigo-300 hover:underline text-left">{l.full_name || l.name || 'Lead'}</button>
+                              <div className="text-xs text-slate-500">{(l.property_county || l.county || '')}{(l.property_county || l.county) && (l.property_state || l.state) ? ', ' : ''}{(l.property_state || l.state || '')}</div>
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <div className="flex flex-wrap gap-1">
+                                {l.partner_pushes.map((p) => (
+                                  <span key={p.board_id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-200 text-[11px] font-medium border border-indigo-500/40">
+                                    {p.board_name}
+                                  </span>
+                                ))}
+                              </div>
+                            </td>
+                            <td className="px-4 py-2.5 text-xs text-slate-400">{last?.pushed_at ? new Date(last.pushed_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* EXPORT CSV TAB */}
+        {activeTab === 'om-search' && <OmSearch />}
+
+        {activeTab === 'export' && (
+          <div className="max-w-2xl mx-auto space-y-6">
+            <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700/50">
+              <h2 className="text-xl font-bold text-white mb-6">Export Leads to CSV</h2>
+
+              {/* Include statuses, empty = all */}
+              <div className="mb-6">
+                <label className="block text-sm text-slate-400 mb-2">Include Statuses {exportFilters.includeStatuses.length === 0 && <span className="text-slate-500">(none selected = all)</span>}</label>
+                <div className="flex flex-wrap gap-2">
+                  {PIPELINE_STATUSES.map(s => (
+                    <button
+                      key={s.value}
+                      onClick={() => {
+                        setExportFilters(f => ({
+                          ...f,
+                          includeStatuses: f.includeStatuses.includes(s.value)
+                            ? f.includeStatuses.filter(v => v !== s.value)
+                            : [...f.includeStatuses, s.value]
+                        }));
+                      }}
+                      className={`px-3 py-1 rounded-full text-xs font-medium transition ${
+                        exportFilters.includeStatuses.includes(s.value)
+                          ? 'bg-green-500/20 text-green-400 border border-green-500/50'
+                          : 'bg-slate-700/50 text-slate-300 border border-slate-600 hover:bg-slate-700'
+                      }`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Date range */}
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div>
+                  <label className="block text-sm text-slate-400 mb-2">Time Range</label>
+                  <div className="flex gap-2">
+                    {[
+                      { value: 'all', label: 'All time' },
+                      { value: '5d', label: 'Last 5 days' },
+                      { value: '30d', label: 'Last 30 days' },
+                      { value: '90d', label: 'Last 90 days' },
+                    ].map(opt => (
+                      <button
+                        key={opt.value}
+                        onClick={() => setExportFilters(f => ({ ...f, dateRange: opt.value }))}
+                        className={`px-3 py-1.5 rounded text-xs font-medium transition ${
+                          exportFilters.dateRange === opt.value
+                            ? 'bg-blue-500/20 text-blue-300 border border-blue-500/50'
+                            : 'bg-slate-700/50 text-slate-300 border border-slate-600 hover:bg-slate-700'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-400 mb-2">Date Basis</label>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setExportFilters(f => ({ ...f, dateBasis: 'activity' }))}
+                      className={`flex-1 px-3 py-1.5 rounded text-xs font-medium transition ${
+                        exportFilters.dateBasis === 'activity'
+                          ? 'bg-blue-500/20 text-blue-300 border border-blue-500/50'
+                          : 'bg-slate-700/50 text-slate-300 border border-slate-600 hover:bg-slate-700'
+                      }`}
+                      title="When the lead was last touched (status change, note, etc.)"
+                    >
+                      Last activity
+                    </button>
+                    <button
+                      onClick={() => setExportFilters(f => ({ ...f, dateBasis: 'created' }))}
+                      className={`flex-1 px-3 py-1.5 rounded text-xs font-medium transition ${
+                        exportFilters.dateBasis === 'created'
+                          ? 'bg-blue-500/20 text-blue-300 border border-blue-500/50'
+                          : 'bg-slate-700/50 text-slate-300 border border-slate-600 hover:bg-slate-700'
+                      }`}
+                      title="When the lead came in"
+                    >
+                      Created
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Lead age (older than N days, by created date) */}
+              <div className="mb-6">
+                <label className="block text-sm text-slate-400 mb-2">Lead Age (came in at least this long ago)</label>
+                <div className="flex flex-wrap items-center gap-2">
+                  {[
+                    { value: '', label: 'Any age' },
+                    { value: '30', label: '30+ days' },
+                    { value: '40', label: '40+ days' },
+                    { value: '50', label: '50+ days' },
+                    { value: '60', label: '60+ days' },
+                    { value: '90', label: '90+ days' },
+                  ].map(opt => (
+                    <button
+                      key={opt.value || 'any'}
+                      onClick={() => setExportFilters(f => ({ ...f, minAgeDays: opt.value }))}
+                      className={`px-3 py-1.5 rounded text-xs font-medium transition ${
+                        String(exportFilters.minAgeDays) === opt.value
+                          ? 'bg-blue-500/20 text-blue-300 border border-blue-500/50'
+                          : 'bg-slate-700/50 text-slate-300 border border-slate-600 hover:bg-slate-700'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                  <div className="flex items-center gap-1 ml-1">
+                    <input
+                      type="number"
+                      min="0"
+                      value={exportFilters.minAgeDays}
+                      onChange={(e) => setExportFilters(f => ({ ...f, minAgeDays: e.target.value }))}
+                      placeholder="custom"
+                      className="w-20 bg-slate-900/50 text-white border border-slate-600 rounded-lg px-2 py-1.5 text-xs"
+                    />
+                    <span className="text-xs text-slate-500">days+</span>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500 mt-1.5">Uses the date the lead came in. Combine with statuses above to pull, say, every NEW lead older than 50 days.</p>
+              </div>
+
+              {/* Acres */}
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div>
+                  <label className="block text-sm text-slate-400 mb-1">Min Acres</label>
+                  <input
+                    type="number"
+                    value={exportFilters.minAcres}
+                    onChange={(e) => setExportFilters(f => ({ ...f, minAcres: e.target.value }))}
+                    placeholder="e.g. 10"
+                    className="w-full bg-slate-900/50 text-white border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-400 mb-1">Max Acres</label>
+                  <input
+                    type="number"
+                    value={exportFilters.maxAcres}
+                    onChange={(e) => setExportFilters(f => ({ ...f, maxAcres: e.target.value }))}
+                    placeholder="No max"
+                    className="w-full bg-slate-900/50 text-white border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="bg-slate-900/50 rounded-lg p-4 mb-6">
+                <p className="text-sm text-slate-400">
+                  Matching leads: <span className="text-white font-bold">{applyExportFilters().length}</span>
+                </p>
+              </div>
+
+              <button
+                onClick={handleExportCSV}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition flex items-center justify-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Download CSV
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* SESSION ANALYTICS TAB */}
+        {activeTab === 'session-analytics' && (
+          <div className="space-y-4">
+            {/* Date range + sub-tab navigation */}
+            <div className="flex items-center justify-between">
+              <div className="flex gap-2">
+                {['live-feed', 'funnel', 'replay', 'heatmaps'].map((sub) => (
+                  <button
+                    key={sub}
+                    onClick={() => setAnalyticsSubTab(sub)}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      analyticsSubTab === sub
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700'
+                    }`}
+                  >
+                    {sub === 'live-feed' ? 'Live Feed' : sub === 'funnel' ? 'Funnel' : sub === 'replay' ? 'Session Replay' : 'Heatmaps'}
+                  </button>
+                ))}
+              </div>
+              {analyticsSubTab !== 'live-feed' && (
+                <select
+                  value={analyticsDateRange}
+                  onChange={(e) => setAnalyticsDateRange(e.target.value)}
+                  className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
+                >
+                  <option value="1d">Today</option>
+                  <option value="7d">Last 7 days</option>
+                  <option value="30d">Last 30 days</option>
+                </select>
+              )}
+            </div>
+
+            {/* ===== LIVE FEED ===== */}
+            {analyticsSubTab === 'live-feed' && (
+              <div className="space-y-4">
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse"></div>
+                  <h3 className="text-lg font-semibold">{liveSessions.length} Active Visitor{liveSessions.length !== 1 ? 's' : ''}</h3>
+                </div>
+                {liveSessions.length === 0 ? (
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-12 text-center">
+                    <p className="text-slate-400 text-lg">No active visitors right now</p>
+                    <p className="text-slate-500 text-sm mt-2">Sessions appear here in real-time as visitors fill out the form</p>
+                  </div>
+                ) : (
+                  <div className="grid gap-3">
+                    {liveSessions.map((s) => (
+                      <div key={s.session_id} className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-4 flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                          <div className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse"></div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">Step {s.max_step_reached}</span>
+                              <span className="text-slate-400 text-sm">- {STEP_LABELS[s.max_step_reached] || 'Unknown'}</span>
+                            </div>
+                            <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
+                              <span>{s.device_type || 'unknown'}</span>
+                              <span>{s.utm_source ? `via ${s.utm_source}` : 'direct'}</span>
+                              <span>started {analyticsTimeAgo(s.started_at)}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {s.visitor_id?.slice(0, 12)}...
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ===== FUNNEL ===== */}
+            {analyticsSubTab === 'funnel' && (
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Step-by-Step Conversion Funnel</h3>
+                {funnelData.length === 0 ? (
+                  <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-12 text-center">
+                    <p className="text-slate-400">No session data for this period</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {funnelData.map((step, idx) => {
+                      const maxReached = funnelData[0]?.reached || 1;
+                      const pct = maxReached > 0 ? ((step.reached / maxReached) * 100).toFixed(1) : 0;
+                      const dropOff = idx > 0 && funnelData[idx - 1].reached > 0
+                        ? (((funnelData[idx - 1].reached - step.reached) / funnelData[idx - 1].reached) * 100).toFixed(1)
+                        : 0;
+                      return (
+                        <div key={step.step} className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-3">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-slate-500 w-6">#{step.step}</span>
+                              <span className="font-medium text-sm">{step.label}</span>
+                            </div>
+                            <div className="flex items-center gap-4 text-xs">
+                              <span className="text-slate-300">{step.reached} reached</span>
+                              {idx > 0 && dropOff > 0 && (
+                                <span className="text-red-400">-{dropOff}% drop</span>
+                              )}
+                              {step.dqHere > 0 && (
+                                <span className="text-orange-400">{step.dqHere} DQ'd</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-blue-500 rounded-full transition-all duration-500"
+                              style={{ width: `${pct}%` }}
+                            ></div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ===== SESSION REPLAY ===== */}
+            {analyticsSubTab === 'replay' && (
+              <div className="space-y-4">
+                {!selectedReplaySession ? (
+                  <>
+                    <h3 className="text-lg font-semibold">Session Recordings</h3>
+                    {allTrackingSessions.length === 0 ? (
+                      <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-12 text-center">
+                        <p className="text-slate-400">No recorded sessions for this period</p>
+                      </div>
+                    ) : (
+                      <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-slate-700 text-slate-400 text-xs uppercase">
+                              <th className="text-left p-3">Session</th>
+                              <th className="text-left p-3">Device</th>
+                              <th className="text-left p-3">Max Step</th>
+                              <th className="text-left p-3">Outcome</th>
+                              <th className="text-left p-3">Source</th>
+                              <th className="text-left p-3">Date</th>
+                              <th className="text-left p-3">Recording</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {allTrackingSessions.map((s) => (
+                              <tr key={s.session_id} className="border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors">
+                                <td className="p-3 font-mono text-xs">{s.session_id?.slice(0, 16)}...</td>
+                                <td className="p-3 capitalize">{s.device_type || '-'}</td>
+                                <td className="p-3">
+                                  <span className="font-medium">{s.max_step_reached}</span>
+                                  <span className="text-slate-500 ml-1 text-xs">{STEP_LABELS[s.max_step_reached]}</span>
+                                </td>
+                                <td className="p-3">
+                                  {s.completed ? (
+                                    <span className="text-green-400 text-xs font-bold">Completed</span>
+                                  ) : s.disqualified ? (
+                                    <span className="text-orange-400 text-xs font-bold">DQ @ Step {s.disqualified_at_step}</span>
+                                  ) : (
+                                    <span className="text-slate-500 text-xs">Abandoned</span>
+                                  )}
+                                </td>
+                                <td className="p-3 text-xs">{s.utm_source || 'direct'}</td>
+                                <td className="p-3 text-xs text-slate-400">{analyticsTimeAgo(s.started_at)}</td>
+                                <td className="p-3">
+                                  {s.recording_event_count > 0 ? (
+                                    <button
+                                      onClick={() => loadReplaySession(s)}
+                                      className="px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded text-xs font-medium transition-colors"
+                                    >
+                                      Watch
+                                    </button>
+                                  ) : (
+                                    <span className="text-slate-600 text-xs">No recording</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-4">
+                      <button
+                        onClick={() => { setSelectedReplaySession(null); setReplayEvents(null); }}
+                        className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm transition-colors"
+                      >
+                        Back to list
+                      </button>
+                      <div>
+                        <span className="font-medium">Session:</span>
+                        <span className="text-slate-400 ml-2 font-mono text-sm">{selectedReplaySession.session_id?.slice(0, 20)}...</span>
+                        <span className="text-slate-500 ml-3 text-sm">
+                          {selectedReplaySession.device_type} | Max step: {selectedReplaySession.max_step_reached} | {selectedReplaySession.recording_event_count} events
+                        </span>
+                      </div>
+                    </div>
+                    <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-4 flex items-center justify-center min-h-[600px]">
+                      {replayLoading ? (
+                        <div className="flex items-center gap-3 text-slate-400">
+                          <svg className="animate-spin h-6 w-6" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Loading recording...
+                        </div>
+                      ) : replayEvents && replayEvents.length > 0 ? (
+                        <div ref={replayContainerRef} className="w-full flex justify-center"></div>
+                      ) : replayEvents && replayEvents.length === 0 ? (
+                        <p className="text-slate-500">No recording events found for this session</p>
+                      ) : (
+                        <p className="text-slate-500">Select a session to replay</p>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* ===== HEATMAPS ===== */}
+            {analyticsSubTab === 'heatmaps' && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold">Click Heatmap</h3>
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm text-slate-400">Step:</label>
+                    <select
+                      value={heatmapStep}
+                      onChange={(e) => setHeatmapStep(parseInt(e.target.value))}
+                      className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white"
+                    >
+                      {Array.from({ length: 16 }, (_, i) => i + 1).map((s) => (
+                        <option key={s} value={s}>Step {s}, {STEP_LABELS[s]}</option>
+                      ))}
+                    </select>
+                    <span className="text-xs text-slate-500 ml-2">{heatmapClicks.length} clicks</span>
+                  </div>
+                </div>
+                <div
+                  className="relative bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden"
+                  style={{ width: '100%', paddingBottom: '60%' }}
+                >
+                  {heatmapClicks.length === 0 ? (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <p className="text-slate-500">No click data for Step {heatmapStep} in this period</p>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Grid overlay for reference */}
+                      <div className="absolute inset-0 opacity-10">
+                        {[25, 50, 75].map((pct) => (
+                          <div key={`v${pct}`} className="absolute top-0 bottom-0 border-l border-slate-400" style={{ left: `${pct}%` }}></div>
+                        ))}
+                        {[25, 50, 75].map((pct) => (
+                          <div key={`h${pct}`} className="absolute left-0 right-0 border-t border-slate-400" style={{ top: `${pct}%` }}></div>
+                        ))}
+                      </div>
+                      {/* Click dots */}
+                      {heatmapClicks.map((c, i) => (
+                        <div
+                          key={i}
+                          className="absolute w-3 h-3 rounded-full bg-red-500/40 border border-red-500/60"
+                          style={{
+                            left: `${c.x_percent}%`,
+                            top: `${c.y_percent}%`,
+                            transform: 'translate(-50%, -50%)',
+                          }}
+                          title={`${c.element_tag}: ${c.element_text || '(no text)'}`}
+                        ></div>
+                      ))}
+                      {/* Step label overlay */}
+                      <div className="absolute top-3 left-3 bg-black/60 backdrop-blur-sm rounded px-3 py-1.5">
+                        <span className="text-sm font-medium">Step {heatmapStep}: {STEP_LABELS[heatmapStep]}</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* INVESTORS TAB (Go West Lands investor applications) */}
+        {activeTab === 'investors' && (() => {
+          const investorLeads = allLeads
+            .filter(l => l.source === 'go-west-lands')
+            .sort((a, b) => {
+              const at = a.form_data?.appointment_at ? new Date(a.form_data.appointment_at).getTime() : Infinity;
+              const bt = b.form_data?.appointment_at ? new Date(b.form_data.appointment_at).getTime() : Infinity;
+              return at - bt;
+            });
+          const fmtAppt = (l) => {
+            if (l.form_data?.appointment_label) return l.form_data.appointment_label;
+            if (l.form_data?.appointment_at) {
+              try {
+                return new Date(l.form_data.appointment_at).toLocaleString('en-US', {
+                  weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago'
+                }) + ' CT';
+              } catch { return l.form_data.appointment_at; }
+            }
+            return null;
+          };
+          const now = Date.now();
+          return (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold">Investors</h2>
+                  <p className="text-slate-400 text-sm">Go West Lands investor applications with scheduled appointments.</p>
+                </div>
+                <span className="text-slate-400 text-sm">{investorLeads.length} total</span>
+              </div>
+
+              {investorLeads.length === 0 ? (
+                <div className="bg-slate-800/40 border border-slate-700/50 rounded-xl p-10 text-center">
+                  <p className="text-slate-300 font-medium">No investor applications yet.</p>
+                  <p className="text-slate-500 text-sm mt-1">Submissions from the Go West Lands landing page will appear here.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {investorLeads.map((l) => {
+                    const appt = fmtAppt(l);
+                    const apptTs = l.form_data?.appointment_at ? new Date(l.form_data.appointment_at).getTime() : null;
+                    const isPast = apptTs != null && apptTs < now;
+                    const has50k = (l.form_data?.has_50k || '').toLowerCase() === 'yes';
+                    return (
+                      <button
+                        key={l.id}
+                        onClick={() => openLeadDetails(l)}
+                        className="text-left bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 hover:border-blue-500/50 rounded-xl p-5 transition"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="font-semibold text-white truncate">{l.name || l.full_name || 'Unnamed investor'}</div>
+                            <div className="text-sm text-slate-400 truncate">{l.email || 'no email'}</div>
+                            <div className="text-sm text-slate-400">{l.phone || 'no phone'}</div>
+                          </div>
+                          <span className={`flex-shrink-0 text-xs font-semibold px-2 py-1 rounded-full ${has50k ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-300'}`}>
+                            {has50k ? '$50k+ ready' : 'Under $50k'}
+                          </span>
+                        </div>
+
+                        {appt && (
+                          <div className={`mt-3 flex items-center gap-2 text-sm font-medium rounded-lg px-3 py-2 ${isPast ? 'bg-slate-700/40 text-slate-400' : 'bg-blue-500/15 text-blue-300'}`}>
+                            <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                            {appt}{isPast && <span className="text-xs">(past)</span>}
+                          </div>
+                        )}
+
+                        {l.form_data?.why && (
+                          <div className="mt-3">
+                            <div className="text-xs uppercase tracking-wide text-slate-500 mb-1">Why they want to meet</div>
+                            <p className="text-sm text-slate-300 line-clamp-3">{l.form_data.why}</p>
+                          </div>
+                        )}
+
+                        <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
+                          <span>{l.form_data?.source_label || 'Go West Lands'}</span>
+                          <span>{l.created_at ? new Date(l.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+      </div>
+
+      {/* Details Modal - Edit & Save */}
+      {detailsModalOpen && selectedLead && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => {
+            setDetailsModalOpen(false);
+            setSelectedLead(null);
+          }}
+        >
+          <div
+            className="bg-slate-800 rounded-xl border border-slate-700 max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-xl font-bold mb-4">Edit Lead Details</h3>
+
+            {/* Editable Lead Info */}
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-400 mb-1">Full Name</label>
+                  <input
+                    type="text"
+                    value={selectedLead.full_name || selectedLead.name || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, full_name: e.target.value, name: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-slate-400 mb-1">Email</label>
+                  <input
+                    type="email"
+                    value={selectedLead.email || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, email: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-400 mb-1">Phone</label>
+                  <input
+                    type="tel"
+                    value={selectedLead.phone || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, phone: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-slate-400 mb-1">Exact Acres</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={selectedLead.acres || selectedLead.acreage || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, acres: e.target.value, acreage: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                    placeholder="Enter exact acreage"
+                  />
+                  {selectedLead.form_data?.acres && (
+                    <p className="text-xs text-slate-500 mt-1">Form submitted: {selectedLead.form_data.acres}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Listing agent contact. For subdivision / on-market leads the person
+                  we reach out to is the property's real estate agent, not the owner.
+                  Agent phone/email drive messaging (they set the lead's phone/email). */}
+              {selectedLead.source === 'subdivision' && (
+                <div className="rounded-lg border border-teal-700/40 bg-teal-900/10 p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs font-bold uppercase tracking-wide text-teal-300">Listing Agent</span>
+                    <span className="text-[11px] text-slate-500">who we contact{selectedLead.form_data?.origin === 'om_search' ? ' (on-market)' : ''}</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Agent Name</label>
+                      <input type="text" value={selectedLead.form_data?.agentName || ''}
+                        onChange={(e) => setSelectedLead({ ...selectedLead, form_data: { ...(selectedLead.form_data || {}), agentName: e.target.value } })}
+                        placeholder="Agent name"
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-teal-500" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Agent Phone</label>
+                      <input type="tel" value={selectedLead.form_data?.agentPhone || selectedLead.phone || ''}
+                        onChange={(e) => setSelectedLead({ ...selectedLead, phone: e.target.value, form_data: { ...(selectedLead.form_data || {}), agentPhone: e.target.value } })}
+                        placeholder="Agent phone"
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-teal-500" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Agent Email</label>
+                      <input type="email" value={selectedLead.form_data?.agentEmail || selectedLead.email || ''}
+                        onChange={(e) => setSelectedLead({ ...selectedLead, email: e.target.value, form_data: { ...(selectedLead.form_data || {}), agentEmail: e.target.value } })}
+                        placeholder="Agent email"
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-teal-500" />
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-2">Owner: {selectedLead.form_data?.listing_owner || selectedLead.full_name || selectedLead.name}. Texts and emails go to the agent phone/email above.</p>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-400 mb-1">Address</label>
+                <input
+                  type="text"
+                  value={selectedLead.street_address || selectedLead.address || ''}
+                  onChange={(e) => setSelectedLead({...selectedLead, street_address: e.target.value, address: e.target.value})}
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-400 mb-1">County</label>
+                  <input
+                    type="text"
+                    value={selectedLead.property_county || selectedLead.county || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, property_county: e.target.value, county: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-slate-400 mb-1">State</label>
+                  <input
+                    type="text"
+                    value={selectedLead.property_state || selectedLead.state || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, property_state: e.target.value, state: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-slate-400 mb-1">Zip</label>
+                  <input
+                    type="text"
+                    value={selectedLead.zip || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, zip: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-400 mb-1">Parcel ID</label>
+                <input
+                  type="text"
+                  value={selectedLead.parcel_id || selectedLead.parcelid || ''}
+                  onChange={(e) => setSelectedLead({...selectedLead, parcel_id: e.target.value, parcelid: e.target.value})}
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  placeholder="Enter parcel ID"
+                />
+              </div>
+
+              {/* Property Map Upload */}
+              <div className="bg-slate-900/50 border border-slate-700 rounded-lg p-4 mt-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-semibold text-slate-400 uppercase tracking-wide">Property Map</h4>
+                  {selectedLead.map_uploaded && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-900/40 border border-green-700/50 text-green-400 text-xs font-semibold">
+                      <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.6l7.3-7.3a1 1 0 011.4 0z" clipRule="evenodd" /></svg>
+                      Mapped
+                    </span>
+                  )}
+                </div>
+                {(() => {
+                  const maps = Array.isArray(selectedLead.lead_maps) && selectedLead.lead_maps.length
+                    ? selectedLead.lead_maps
+                    : (selectedLead.map_image_url ? [{ id: 'current', url: selectedLead.map_image_url, label: 'Current map' }] : []);
+                  if (!maps.length) return null;
+                  return (
+                    <div className="grid grid-cols-2 gap-2 mb-3">
+                      {maps.map((m) => {
+                        const primary = selectedLead.map_image_url === m.url;
+                        return (
+                          <div key={m.id || m.url} className={`relative rounded-lg overflow-hidden border-2 ${primary ? 'border-emerald-500' : 'border-slate-700'}`}>
+                            <a href={m.url} target="_blank" rel="noreferrer"><img src={m.url} alt={m.label || 'map'} className="w-full h-28 object-cover" /></a>
+                            <div className="flex items-center justify-between px-2 py-1 bg-slate-900/80">
+                              <button type="button" onClick={() => setPrimaryMap(selectedLead.id, m.url)} className={`text-[10px] font-semibold ${primary ? 'text-emerald-400' : 'text-slate-400 hover:text-white'}`}>
+                                {primary ? '✓ Primary' : 'Set primary'}
+                              </button>
+                              <button type="button" onClick={() => deleteLeadMap(selectedLead.id, m.url)} className="text-[10px] text-slate-500 hover:text-red-400">Delete</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+                {/* Auto-generate the parcel map from the APN (no manual screenshot). */}
+                <button
+                  type="button"
+                  onClick={() => handleGenerateMap(selectedLead)}
+                  disabled={mapGenerating || !selectedLead.parcel_id}
+                  title={!selectedLead.parcel_id ? 'Needs a parcel ID' : 'Generate a satellite + boundary map from the parcel and save it'}
+                  className="w-full mb-3 px-3 py-2 rounded-lg bg-emerald-600/90 hover:bg-emerald-600 disabled:opacity-40 text-white text-sm font-semibold inline-flex items-center justify-center gap-2"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" /></svg>
+                  {mapGenerating ? 'Generating map...' : selectedLead.map_uploaded ? 'Regenerate map from parcel' : 'Save map from parcel'}
+                </button>
+                <label className="block">
+                  <span className="sr-only">Upload map screenshot</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    disabled={mapUploading}
+                    onChange={(e) => {
+                      if (e.target.files?.length) handleMapUpload(selectedLead.id, e.target.files);
+                      e.target.value = '';
+                    }}
+                    className="block w-full text-sm text-slate-400 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:font-semibold hover:file:bg-blue-700 file:cursor-pointer disabled:opacity-50"
+                  />
+                </label>
+                {mapUploading && <p className="text-xs text-slate-500 mt-2">Uploading...</p>}
+              </div>
+
+              {/* Questionnaire Answers */}
+              {selectedLead.form_data && (
+                <div className="bg-slate-900/50 border border-slate-700 rounded-lg p-4 mt-4">
+                  <h4 className="text-sm font-semibold text-slate-400 mb-3 uppercase tracking-wide">Questionnaire Answers</h4>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    {selectedLead.form_data.position && (
+                      <div>
+                        <span className="text-slate-500">Position:</span>{' '}
+                        <span className="text-white">{selectedLead.form_data.position}</span>
+                      </div>
+                    )}
+                    {selectedLead.form_data.homeOnProperty && (
+                      <div>
+                        <span className="text-slate-500">Home on Property:</span>{' '}
+                        <span className={selectedLead.form_data.homeOnProperty === 'no' ? 'text-green-400 font-semibold' : 'text-yellow-400'}>
+                          {selectedLead.form_data.homeOnProperty.toUpperCase()}
+                        </span>
+                      </div>
+                    )}
+                    {selectedLead.form_data.propertyListed && (
+                      <div>
+                        <span className="text-slate-500">Property Listed:</span>{' '}
+                        <span className={selectedLead.form_data.propertyListed === 'no' ? 'text-green-400 font-semibold' : 'text-yellow-400'}>
+                          {selectedLead.form_data.propertyListed.toUpperCase()}
+                        </span>
+                      </div>
+                    )}
+                    {selectedLead.form_data.isInherited && (
+                      <div>
+                        <span className="text-slate-500">Inherited:</span>{' '}
+                        <span className={selectedLead.form_data.isInherited === 'yes' ? 'text-purple-400 font-semibold' : 'text-slate-300'}>
+                          {selectedLead.form_data.isInherited.toUpperCase()}
+                        </span>
+                      </div>
+                    )}
+                    {selectedLead.form_data.ownedFourYears && (
+                      <div>
+                        <span className="text-slate-500">Owned 4+ Years:</span>{' '}
+                        <span className={selectedLead.form_data.ownedFourYears === 'yes' ? 'text-green-400 font-semibold' : 'text-yellow-400'}>
+                          {selectedLead.form_data.ownedFourYears.toUpperCase()}
+                        </span>
+                      </div>
+                    )}
+                    {selectedLead.form_data.namesOnDeed && (
+                      <div className="col-span-2">
+                        <span className="text-slate-500">Names on Deed:</span>{' '}
+                        <span className="text-white">{selectedLead.form_data.namesOnDeed}</span>
+                      </div>
+                    )}
+                    {selectedLead.form_data.whySelling && (
+                      <div className="col-span-2 mt-2 pt-2 border-t border-slate-700/50">
+                        <span className="text-slate-500">Why Selling:</span>{' '}
+                        <span className="text-cyan-400 italic">{selectedLead.form_data.whySelling}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Activity Log & Calendar */}
+            <div className="mt-6 border-t border-slate-700 pt-6">
+              <h4 className="text-lg font-bold mb-4">Activity Log</h4>
+
+              {/* Quick Log Buttons */}
+              <div className="flex gap-2 mb-4">
+                <button
+                  onClick={async () => {
+                    const { data: { user } } = await supabase.auth.getUser();
+                    await supabase.from('lead_notes').insert({
+                      lead_id: selectedLead.id,
+                      user_id: user?.id,
+                      content: '[CALL] No Answer',
+                      mentioned_users: []
+                    });
+                    await supabase.from('leads').update({ last_activity_at: new Date().toISOString() }).eq('id', selectedLead.id);
+                    showToast('No Answer logged', 'success', selectedLead.full_name || selectedLead.name);
+                    // Refresh notes
+                    const { data: notes } = await supabase.from('lead_notes').select('*').eq('lead_id', selectedLead.id).order('created_at', { ascending: false });
+                    setSelectedLead({ ...selectedLead, notes });
+                  }}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 active:scale-95 rounded-lg text-sm font-medium transition-all"
+                >
+                  Log: No Answer
+                </button>
+                <button
+                  onClick={async () => {
+                    const { data: { user } } = await supabase.auth.getUser();
+                    await supabase.from('lead_notes').insert({
+                      lead_id: selectedLead.id,
+                      user_id: user?.id,
+                      content: '[CALL] Left Voicemail',
+                      mentioned_users: []
+                    });
+                    await supabase.from('leads').update({ last_activity_at: new Date().toISOString() }).eq('id', selectedLead.id);
+                    showToast('Voicemail logged', 'success', selectedLead.full_name || selectedLead.name);
+                    const { data: notes } = await supabase.from('lead_notes').select('*').eq('lead_id', selectedLead.id).order('created_at', { ascending: false });
+                    setSelectedLead({ ...selectedLead, notes });
+                  }}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 active:scale-95 rounded-lg text-sm font-medium transition-all"
+                >
+                  Log: Left VM
+                </button>
+                <button
+                  onClick={async () => {
+                    const { data: { user } } = await supabase.auth.getUser();
+                    await supabase.from('lead_notes').insert({
+                      lead_id: selectedLead.id,
+                      user_id: user?.id,
+                      content: '[CALL] Spoke with owner',
+                      mentioned_users: []
+                    });
+                    await supabase.from('leads').update({
+                      last_activity_at: new Date().toISOString(),
+                      status: 'contacted',
+                      pipeline_status: 'CONTACTED'
+                    }).eq('id', selectedLead.id);
+                    showToast('Call logged - Status updated to Contacted', 'success', selectedLead.full_name || selectedLead.name);
+                    const { data: notes } = await supabase.from('lead_notes').select('*').eq('lead_id', selectedLead.id).order('created_at', { ascending: false });
+                    setSelectedLead({ ...selectedLead, notes, status: 'contacted', pipeline_status: 'CONTACTED' });
+                  }}
+                  className="px-4 py-2 bg-green-600 hover:bg-green-500 active:scale-95 rounded-lg text-sm font-medium transition-all"
+                >
+                  Log: Spoke
+                </button>
+                <button
+                  onClick={async () => {
+                    const { data: { user } } = await supabase.auth.getUser();
+                    await supabase.from('lead_notes').insert({
+                      lead_id: selectedLead.id,
+                      user_id: user?.id,
+                      content: '[TEXT] Sent text message',
+                      mentioned_users: []
+                    });
+                    await supabase.from('leads').update({ last_activity_at: new Date().toISOString() }).eq('id', selectedLead.id);
+                    showToast('Text logged', 'success', selectedLead.full_name || selectedLead.name);
+                    const { data: notes } = await supabase.from('lead_notes').select('*').eq('lead_id', selectedLead.id).order('created_at', { ascending: false });
+                    setSelectedLead({ ...selectedLead, notes });
+                  }}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 active:scale-95 rounded-lg text-sm font-medium transition-all"
+                >
+                  Log: Text
+                </button>
+              </div>
+
+              {/* Add Note */}
+              <div className="flex gap-2 mb-4">
+                <input
+                  type="text"
+                  placeholder="Add a note..."
+                  id="newNoteInput"
+                  className="flex-1 px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  onKeyDown={async (e) => {
+                    if (e.key === 'Enter' && e.target.value.trim()) {
+                      const { data: { user } } = await supabase.auth.getUser();
+                      await supabase.from('lead_notes').insert({
+                        lead_id: selectedLead.id,
+                        user_id: user?.id,
+                        content: e.target.value,
+                        mentioned_users: []
+                      });
+                      e.target.value = '';
+                      showToast('Note added', 'success', selectedLead.full_name || selectedLead.name);
+                      const { data: notes } = await supabase.from('lead_notes').select('*').eq('lead_id', selectedLead.id).order('created_at', { ascending: false });
+                      setSelectedLead({ ...selectedLead, notes });
+                    }
+                  }}
+                />
+                <button
+                  onClick={async () => {
+                    const input = document.getElementById('newNoteInput');
+                    if (input && input.value.trim()) {
+                      const { data: { user } } = await supabase.auth.getUser();
+                      await supabase.from('lead_notes').insert({
+                        lead_id: selectedLead.id,
+                        user_id: user?.id,
+                        content: input.value,
+                        mentioned_users: []
+                      });
+                      input.value = '';
+                      showToast('Note added', 'success', selectedLead.full_name || selectedLead.name);
+                      const { data: notes } = await supabase.from('lead_notes').select('*').eq('lead_id', selectedLead.id).order('created_at', { ascending: false });
+                      setSelectedLead({ ...selectedLead, notes });
+                    }
+                  }}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium"
+                >
+                  Add
+                </button>
+              </div>
+
+              {/* Activity Timeline */}
+              <div className="bg-slate-900/50 rounded-lg border border-slate-700 max-h-64 overflow-y-auto">
+                {selectedLead.notes && selectedLead.notes.length > 0 ? (
+                  <div className="divide-y divide-slate-800">
+                    {selectedLead.notes.map((note, idx) => (
+                      <div key={idx} className="p-3 hover:bg-slate-800/50">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <p className="text-white text-sm">{note.content}</p>
+                          </div>
+                          <span className="text-xs text-slate-500 ml-2 whitespace-nowrap">
+                            {new Date(note.created_at).toLocaleDateString()} {new Date(note.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-8 text-center text-slate-500">
+                    No activity logged yet. Use the buttons above to log calls, texts, or notes.
+                  </div>
+                )}
+              </div>
+
+              {/* Calendar View */}
+              <div className="mt-6">
+                <h4 className="text-lg font-bold mb-3">Activity Calendar</h4>
+                <div className="bg-slate-900/50 rounded-lg border border-slate-700 p-4">
+                  {(() => {
+                    const today = new Date();
+                    const year = today.getFullYear();
+                    const month = today.getMonth();
+                    const firstDay = new Date(year, month, 1).getDay();
+                    const daysInMonth = new Date(year, month + 1, 0).getDate();
+                    const monthName = today.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+                    // Get activity by date from notes
+                    const activityByDate = {};
+                    if (selectedLead.notes) {
+                      selectedLead.notes.forEach(note => {
+                        const d = new Date(note.created_at);
+                        if (d.getMonth() === month && d.getFullYear() === year) {
+                          const dayNum = d.getDate();
+                          if (!activityByDate[dayNum]) activityByDate[dayNum] = [];
+                          activityByDate[dayNum].push(note);
+                        }
+                      });
+                    }
+                    // Add created date as event
+                    const createdDate = new Date(selectedLead.created_at);
+                    if (createdDate.getMonth() === month && createdDate.getFullYear() === year) {
+                      const dayNum = createdDate.getDate();
+                      if (!activityByDate[dayNum]) activityByDate[dayNum] = [];
+                      activityByDate[dayNum].unshift({ content: 'Lead Created', created_at: selectedLead.created_at, isCreated: true });
+                    }
+
+                    const days = [];
+                    // Empty cells before first day
+                    for (let i = 0; i < firstDay; i++) {
+                      days.push(<div key={`empty-${i}`} className="h-10"></div>);
+                    }
+                    // Days of month
+                    for (let day = 1; day <= daysInMonth; day++) {
+                      const isToday = day === today.getDate();
+                      const hasActivity = activityByDate[day] && activityByDate[day].length > 0;
+                      const isSelected = selectedCalendarDay === day;
+                      days.push(
+                        <button
+                          key={day}
+                          onClick={() => setSelectedCalendarDay(isSelected ? null : day)}
+                          className={`h-10 flex items-center justify-center text-sm rounded cursor-pointer transition-all ${
+                            isSelected ? 'ring-2 ring-white scale-110 z-10' :
+                            isToday ? 'bg-blue-600 text-white font-bold hover:bg-blue-500' :
+                            hasActivity ? 'bg-green-600/30 text-green-400 font-semibold hover:bg-green-600/50' :
+                            'text-slate-400 hover:bg-slate-700'
+                          }`}
+                        >
+                          {day}
+                        </button>
+                      );
+                    }
+
+                    return (
+                      <>
+                        <div className="text-center font-semibold mb-3">{monthName}</div>
+                        <div className="grid grid-cols-7 gap-1 text-center text-xs text-slate-500 mb-2">
+                          <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+                        </div>
+                        <div className="grid grid-cols-7 gap-1">
+                          {days}
+                        </div>
+
+                        {/* Selected Day Detail */}
+                        {selectedCalendarDay && (
+                          <div className="mt-4 p-4 bg-slate-800 rounded-lg border border-slate-600">
+                            <div className="flex items-center justify-between mb-3">
+                              <h5 className="font-bold text-lg">
+                                {new Date(year, month, selectedCalendarDay).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                              </h5>
+                              <button onClick={() => setSelectedCalendarDay(null)} className="text-slate-400 hover:text-white">X</button>
+                            </div>
+                            {activityByDate[selectedCalendarDay] && activityByDate[selectedCalendarDay].length > 0 ? (
+                              <div className="space-y-2">
+                                {activityByDate[selectedCalendarDay].map((item, idx) => (
+                                  <div key={idx} className={`p-3 rounded ${item.isCreated ? 'bg-blue-600/20 border border-blue-500/50' : 'bg-slate-700/50'}`}>
+                                    <div className="flex justify-between items-start">
+                                      <p className="text-white">{item.content}</p>
+                                      <span className="text-xs text-slate-400 ml-2">
+                                        {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                      </span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-slate-500">No activity on this day</p>
+                            )}
+                          </div>
+                        )}
+
+                        <div className="flex gap-4 mt-3 text-xs">
+                          <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 rounded bg-blue-600"></div>
+                            <span className="text-slate-400">Today</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 rounded bg-green-600/30"></div>
+                            <span className="text-slate-400">Activity</span>
+                          </div>
+                          <span className="text-slate-500 ml-auto">Click a day to see details</span>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              {/* Lead Created Info */}
+              <div className="mt-4 text-sm text-slate-500">
+                Lead created: {new Date(selectedLead.created_at).toLocaleDateString()} at {new Date(selectedLead.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                {selectedLead.last_activity_at && (
+                  <span className="ml-4">Last activity: {timeAgo(selectedLead.last_activity_at)}</span>
+                )}
+              </div>
+            </div>
+
+            {/* Buttons */}
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => {
+                  setDetailsModalOpen(false);
+                  setSelectedLead(null);
+                }}
+                className="flex-1 px-4 py-3 bg-slate-700 text-white rounded-lg hover:bg-slate-600 transition-colors font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  setIsAssigning(true);
+                  try {
+                    const acresValue = selectedLead.acres ? parseFloat(selectedLead.acres) : null;
+
+                    // Update leads table
+                    const { error } = await supabase
+                      .from('leads')
+                      .update({
+                        full_name: selectedLead.full_name || selectedLead.name,
+                        name: selectedLead.full_name || selectedLead.name,
+                        email: selectedLead.email,
+                        phone: selectedLead.phone,
+                        street_address: selectedLead.street_address || selectedLead.address,
+                        address: selectedLead.street_address || selectedLead.address,
+                        property_county: selectedLead.property_county || selectedLead.county,
+                        county: selectedLead.property_county || selectedLead.county,
+                        property_state: selectedLead.property_state || selectedLead.state,
+                        state: selectedLead.property_state || selectedLead.state,
+                        zip: selectedLead.zip,
+                        acres: acresValue,
+                        acreage: acresValue,
+                        parcel_id: selectedLead.parcel_id || selectedLead.parcelid || null,
+                        parcelid: selectedLead.parcel_id || selectedLead.parcelid || null
+                      })
+                      .eq('id', selectedLead.id);
+
+                    if (error) throw error;
+
+                    // Also update team_lead_data for all teams that have this lead
+                    await supabase
+                      .from('team_lead_data')
+                      .update({
+                        acres: acresValue,
+                        parcel_id: selectedLead.parcel_id || selectedLead.parcelid || null,
+                        property_county: selectedLead.property_county || selectedLead.county,
+                        property_state: selectedLead.property_state || selectedLead.state
+                      })
+                      .eq('lead_id', selectedLead.id);
+
+                    alert('Lead saved successfully!');
+
+                    // Refresh leads
+                    const { data } = await supabase.from('leads').select('*').order('created_at', { ascending: false });
+                    if (data) setRawLeads(data);
+
+                    setDetailsModalOpen(false);
+                    setSelectedLead(null);
+                  } catch (err) {
+                    console.error('Error saving lead:', err);
+                    alert('Failed to save lead');
+                  } finally {
+                    setIsAssigning(false);
+                  }
+                }}
+                disabled={isAssigning}
+                className="flex-1 px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-500 transition-colors font-semibold disabled:opacity-50"
+              >
+                {isAssigning ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Assign Modal */}
+      {assignModalOpen && selectedLead && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => {
+            setAssignModalOpen(false);
+            setSelectedLead(null);
+          }}
+        >
+          <div
+            className="bg-slate-800 rounded-xl border border-slate-700 max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-xl font-bold mb-4">Assign Lead to Organizations</h3>
+
+            {/* Editable Lead Info */}
+            <div className="mb-6 p-4 bg-slate-900/50 rounded-lg space-y-3 max-h-96 overflow-y-auto">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Full Name</label>
+                  <input
+                    type="text"
+                    value={selectedLead.full_name || selectedLead.name || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, full_name: e.target.value, name: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Email</label>
+                  <input
+                    type="email"
+                    value={selectedLead.email || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, email: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Phone</label>
+                  <input
+                    type="tel"
+                    value={selectedLead.phone || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, phone: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Acres</label>
+                  <input
+                    type="number"
+                    value={selectedLead.acres || selectedLead.acreage || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, acres: e.target.value, acreage: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1">Address</label>
+                <input
+                  type="text"
+                  value={selectedLead.street_address || selectedLead.address || ''}
+                  onChange={(e) => setSelectedLead({...selectedLead, street_address: e.target.value, address: e.target.value})}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">County</label>
+                  <input
+                    type="text"
+                    value={selectedLead.property_county || selectedLead.county || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, property_county: e.target.value, county: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">State</label>
+                  <input
+                    type="text"
+                    value={selectedLead.property_state || selectedLead.state || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, property_state: e.target.value, state: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Zip</label>
+                  <input
+                    type="text"
+                    value={selectedLead.zip || ''}
+                    onChange={(e) => setSelectedLead({...selectedLead, zip: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              {/* Quick Questionnaire Summary */}
+              {selectedLead.form_data && (
+                <div className="bg-slate-900/50 border border-slate-700/50 rounded p-3 mt-3">
+                  <div className="flex flex-wrap gap-3 text-xs">
+                    {selectedLead.form_data.homeOnProperty && (
+                      <span className={`px-2 py-1 rounded ${selectedLead.form_data.homeOnProperty === 'no' ? 'bg-green-900/50 text-green-400' : 'bg-yellow-900/50 text-yellow-400'}`}>
+                        Home: {selectedLead.form_data.homeOnProperty.toUpperCase()}
+                      </span>
+                    )}
+                    {selectedLead.form_data.propertyListed && (
+                      <span className={`px-2 py-1 rounded ${selectedLead.form_data.propertyListed === 'no' ? 'bg-green-900/50 text-green-400' : 'bg-yellow-900/50 text-yellow-400'}`}>
+                        Listed: {selectedLead.form_data.propertyListed.toUpperCase()}
+                      </span>
+                    )}
+                    {selectedLead.form_data.isInherited && (
+                      <span className={`px-2 py-1 rounded ${selectedLead.form_data.isInherited === 'yes' ? 'bg-purple-900/50 text-purple-400' : 'bg-slate-700 text-slate-400'}`}>
+                        Inherited: {selectedLead.form_data.isInherited.toUpperCase()}
+                      </span>
+                    )}
+                    {selectedLead.form_data.ownedFourYears && (
+                      <span className={`px-2 py-1 rounded ${selectedLead.form_data.ownedFourYears === 'yes' ? 'bg-green-900/50 text-green-400' : 'bg-yellow-900/50 text-yellow-400'}`}>
+                        4+ Yrs: {selectedLead.form_data.ownedFourYears.toUpperCase()}
+                      </span>
+                    )}
+                  </div>
+                  {selectedLead.form_data.whySelling && (
+                    <div className="mt-2 pt-2 border-t border-slate-700/50 text-xs">
+                      <span className="text-slate-500">Why Selling:</span>{' '}
+                      <span className="text-cyan-400 italic">{selectedLead.form_data.whySelling}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Price Input for Marketplace Leads */}
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-slate-300 mb-2">
+                Lead Price (Optional)
+              </label>
+              <div className="flex items-center gap-3">
+                <div className="flex-1 relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-lg">$</span>
+                  <input
+                    type="number"
+                    value={leadPrice}
+                    onChange={(e) => setLeadPrice(e.target.value)}
+                    placeholder="197"
+                    min="0"
+                    step="1"
+                    className="w-full pl-8 pr-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                  />
+                </div>
+                <div className="text-sm text-slate-400">
+                  Leave empty for free/allocated leads
+                </div>
+              </div>
+              <p className="text-xs text-slate-500 mt-2">
+                💡 If price is set, lead will be masked until purchased
+              </p>
+            </div>
+
+            <p className="text-sm text-slate-300 mb-3">Select one or more organizations:</p>
+            <div className="space-y-2 max-h-96 overflow-y-auto mb-6">
+              {organizations.map((org) => (
+                <label
+                  key={org.id}
+                  className="flex items-center p-4 bg-slate-700/50 hover:bg-slate-700 rounded-lg transition-colors border border-slate-600 cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedOrgsForAssignment.includes(org.id)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedOrgsForAssignment([...selectedOrgsForAssignment, org.id]);
+                      } else {
+                        setSelectedOrgsForAssignment(selectedOrgsForAssignment.filter(id => id !== org.id));
+                      }
+                    }}
+                    className="w-5 h-5 mr-3 rounded border-slate-500 text-blue-500 focus:ring-2 focus:ring-blue-500"
+                  />
+                  <div className="flex-1">
+                    <div className="font-semibold">{org.name}</div>
+                    <div className="text-sm text-slate-400 mt-1">
+                      {org.subscription_type || 'pay-per-lead'} • {
+                        allLeads.filter(l => l.purchased_by === org.id).length
+                      } leads
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setAssignModalOpen(false);
+                  setSelectedLead(null);
+                  setSelectedOrgsForAssignment([]);
+                  setLeadPrice(''); // Reset price
+                }}
+                className="flex-1 px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-600 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (selectedOrgsForAssignment.length > 0) {
+                    handleAssignLead(selectedLead.id, selectedOrgsForAssignment);
+                  }
+                }}
+                disabled={selectedOrgsForAssignment.length === 0 || isAssigning}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-semibold flex items-center justify-center gap-2"
+              >
+                {isAssigning ? (
+                  <>
+                    <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Assigning...
+                  </>
+                ) : (
+                  `Assign to ${selectedOrgsForAssignment.length} Org${selectedOrgsForAssignment.length !== 1 ? 's' : ''}`
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Attach Map Modal */}
+      {findMapModalOpen && leadForMapSearch && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => {
+            setFindMapModalOpen(false);
+            setLeadForMapSearch(null);
+            setKmlFile(null);
+            setUploadedGeometry(null);
+            setNewLead({...newLead, parcel_id: '', notes: '', acres: ''});
+          }}
+        >
+          <div
+            className="bg-slate-800 rounded-xl border border-slate-700 max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-xl font-bold mb-4">Attach Map to Lead</h3>
+
+            {/* Lead Details */}
+            <div className="mb-6 p-4 bg-slate-900/50 rounded-lg border border-slate-700">
+              <h4 className="font-semibold text-white mb-3">{leadForMapSearch.name}</h4>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <span className="text-slate-500">Email:</span>
+                  <span className="ml-2 text-slate-300">{leadForMapSearch.email}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500">Phone:</span>
+                  <span className="ml-2 text-slate-300">{leadForMapSearch.phone}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500">Address:</span>
+                  <span className="ml-2 text-slate-300">{leadForMapSearch.form_data?.streetAddress}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500">County:</span>
+                  <span className="ml-2 text-slate-300">{leadForMapSearch.form_data?.propertyCounty}, {leadForMapSearch.form_data?.propertyState}</span>
+                </div>
+                <div className="col-span-2">
+                  <span className="text-slate-500">Acres:</span>
+                  <span className="ml-2 text-orange-400 font-semibold">{leadForMapSearch.form_data?.acres}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Exact Acreage */}
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-slate-300 mb-2">
+                Exact Acreage <span className="text-orange-400">(Replaces range from form)</span>
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                placeholder="Enter exact acreage (e.g. 10.25)"
+                value={newLead.acres || ''}
+                onChange={(e) => setNewLead({...newLead, acres: e.target.value})}
+                className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+              />
+              <p className="text-xs text-slate-500 mt-1">Form shows: {leadForMapSearch.form_data?.acres || 'N/A'}</p>
+            </div>
+
+            {/* Parcel ID */}
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-slate-300 mb-2">Parcel ID (Optional)</label>
+              <input
+                type="text"
+                placeholder="Enter parcel ID"
+                value={newLead.parcel_id || ''}
+                onChange={(e) => setNewLead({...newLead, parcel_id: e.target.value})}
+                className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+
+            {/* Notes */}
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-slate-300 mb-2">Notes (Optional)</label>
+              <textarea
+                placeholder="Add notes about this property..."
+                value={newLead.notes || ''}
+                onChange={(e) => setNewLead({...newLead, notes: e.target.value})}
+                rows={3}
+                className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 resize-none"
+              />
+            </div>
+
+            {/* KML Upload */}
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-slate-300 mb-2">Upload KML File</label>
+              <input
+                type="file"
+                accept=".kml"
+                onChange={async (e) => {
+                  const file = e.target.files[0];
+                  if (file) {
+                    setKmlFile(file);
+                    const text = await file.text();
+                    const parser = new DOMParser();
+                    const xml = parser.parseFromString(text, 'text/xml');
+                    const coordinates = xml.querySelector('coordinates')?.textContent.trim();
+                    if (coordinates) {
+                      const coords = coordinates.split(/\s+/).map(coord => {
+                        const [lng, lat] = coord.split(',').map(Number);
+                        return [lng, lat];
+                      }).filter(c => !isNaN(c[0]) && !isNaN(c[1]));
+
+                      const geometry = {
+                        type: 'Polygon',
+                        coordinates: [coords]
+                      };
+                      setUploadedGeometry(geometry);
+
+                      // Auto-calculate acreage from polygon
+                      const polygon = {
+                        type: 'Feature',
+                        geometry: geometry
+                      };
+                      const areaInSquareMeters = area(polygon);
+                      const areaInAcres = (areaInSquareMeters * 0.000247105).toFixed(2);
+                      setNewLead(prev => ({...prev, acres: areaInAcres}));
+                    }
+                  }
+                }}
+                className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:cursor-pointer hover:file:bg-blue-700"
+              />
+            </div>
+
+            {uploadedGeometry && (
+              <div className="mb-6 p-4 bg-green-500/10 border border-green-500/30 rounded-lg">
+                <div className="flex items-center gap-2 text-green-400">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  <span className="font-semibold">KML file loaded successfully!</span>
+                </div>
+                <p className="text-sm text-slate-400 mt-1">Geometry contains {uploadedGeometry.coordinates[0].length} points</p>
+                {newLead.acres && (
+                  <p className="text-sm text-orange-400 font-semibold mt-1">Calculated acreage: {newLead.acres} acres</p>
+                )}
+              </div>
+            )}
+
+            {/* Buttons */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setFindMapModalOpen(false);
+                  setLeadForMapSearch(null);
+                  setKmlFile(null);
+                  setUploadedGeometry(null);
+                  setNewLead({...newLead, parcel_id: '', notes: '', acres: ''});
+                }}
+                className="flex-1 px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-600 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  if (!uploadedGeometry) return;
+
+                  setIsAssigning(true);
+                  try {
+                    // Calculate center coordinates for latitude/longitude
+                    const coords = uploadedGeometry.coordinates[0];
+                    const lngs = coords.map(c => c[0]);
+                    const lats = coords.map(c => c[1]);
+                    const centerLng = (Math.min(...lngs) + Math.max(...lngs)) / 2;
+                    const centerLat = (Math.min(...lats) + Math.max(...lats)) / 2;
+
+                    const acresValue = newLead.acres ? parseFloat(newLead.acres) : null;
+
+                    const { error } = await supabase
+                      .from('leads')
+                      .update({
+                        parcel_geometry: uploadedGeometry,
+                        latitude: centerLat,
+                        longitude: centerLng,
+                        parcel_id: newLead.parcel_id || null,
+                        parcelid: newLead.parcel_id || null,
+                        notes: newLead.notes || null,
+                        acres: acresValue,
+                        acreage: acresValue
+                      })
+                      .eq('id', leadForMapSearch.id);
+
+                    if (error) throw error;
+
+                    // Also update team_lead_data for all teams that have this lead
+                    if (acresValue || newLead.parcel_id) {
+                      await supabase
+                        .from('team_lead_data')
+                        .update({
+                          acres: acresValue,
+                          parcel_id: newLead.parcel_id || null
+                        })
+                        .eq('lead_id', leadForMapSearch.id);
+                    }
+
+                    // If notes were provided, also add to lead_notes table
+                    if (newLead.notes && newLead.notes.trim()) {
+                      const { data: { user } } = await supabase.auth.getUser();
+                      if (user) {
+                        await supabase
+                          .from('lead_notes')
+                          .insert([{
+                            lead_id: leadForMapSearch.id,
+                            user_id: user.id,
+                            content: newLead.notes,
+                            mentioned_users: []
+                          }]);
+                      }
+                    }
+
+                    alert('Map attached successfully!');
+
+                    // Refresh leads
+                    const { data } = await supabase.from('leads').select('*').order('created_at', { ascending: false });
+                    if (data) setRawLeads(data);
+
+                    // Close modal
+                    setFindMapModalOpen(false);
+                    setLeadForMapSearch(null);
+                    setKmlFile(null);
+                    setUploadedGeometry(null);
+                  } catch (err) {
+                    console.error('Error attaching map:', err);
+                    alert('Failed to attach map');
+                  } finally {
+                    setIsAssigning(false);
+                  }
+                }}
+                disabled={!uploadedGeometry || isAssigning}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-semibold flex items-center justify-center gap-2"
+              >
+                {isAssigning ? (
+                  <>
+                    <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Attaching...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Attach Map
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Big Calendar Modal */}
+      {calendarModalOpen && calendarLead && (
+        <div
+          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setCalendarModalOpen(false)}
+        >
+          <div
+            className="bg-slate-900 rounded-2xl border border-slate-700 w-full max-w-4xl max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="bg-slate-800 px-6 py-4 border-b border-slate-700 flex items-center justify-between rounded-t-2xl">
+              <div>
+                <h3 className="text-xl font-bold text-white">{calendarLead.full_name || calendarLead.name || 'Lead'}</h3>
+                <p className="text-sm text-slate-400">{calendarLead.phone || 'No phone'} &middot; {calendarLead.property_county || calendarLead.county}, {calendarLead.property_state || calendarLead.state}</p>
+              </div>
+              <button onClick={() => setCalendarModalOpen(false)} className="text-slate-400 hover:text-white text-2xl font-bold">&times;</button>
+            </div>
+
+            <div className="p-6">
+              {/* Month Navigation */}
+              <div className="flex items-center justify-between mb-6">
+                <button
+                  onClick={() => {
+                    if (calendarMonth === 0) { setCalendarMonth(11); setCalendarYear(prev => prev - 1); }
+                    else setCalendarMonth(prev => prev - 1);
+                    setCalendarSelectedDay(null);
+                  }}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-white font-medium transition-colors"
+                >
+                  &larr; Prev
+                </button>
+                <h4 className="text-2xl font-bold text-white">
+                  {new Date(calendarYear, calendarMonth).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                </h4>
+                <button
+                  onClick={() => {
+                    if (calendarMonth === 11) { setCalendarMonth(0); setCalendarYear(prev => prev + 1); }
+                    else setCalendarMonth(prev => prev + 1);
+                    setCalendarSelectedDay(null);
+                  }}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-white font-medium transition-colors"
+                >
+                  Next &rarr;
+                </button>
+              </div>
+
+              {/* Calendar Grid */}
+              {(() => {
+                const firstDay = new Date(calendarYear, calendarMonth, 1).getDay();
+                const daysInMonth = new Date(calendarYear, calendarMonth + 1, 0).getDate();
+                const today = new Date();
+                const isCurrentMonth = today.getMonth() === calendarMonth && today.getFullYear() === calendarYear;
+
+                // Build activity map for this month
+                const dayData = {};
+                // Notes
+                if (calendarLead.notes) {
+                  calendarLead.notes.forEach(note => {
+                    const d = new Date(note.created_at);
+                    if (d.getMonth() === calendarMonth && d.getFullYear() === calendarYear) {
+                      const dayNum = d.getDate();
+                      if (!dayData[dayNum]) dayData[dayNum] = { notes: [], tasks: [] };
+                      dayData[dayNum].notes.push(note);
+                    }
+                  });
+                }
+                // Scheduled tasks
+                scheduledTasks.filter(t => t.lead_id === calendarLead.id).forEach(task => {
+                  const d = new Date(task.due_at);
+                  if (d.getMonth() === calendarMonth && d.getFullYear() === calendarYear) {
+                    const dayNum = d.getDate();
+                    if (!dayData[dayNum]) dayData[dayNum] = { notes: [], tasks: [] };
+                    dayData[dayNum].tasks.push(task);
+                  }
+                });
+                // Lead created
+                const created = new Date(calendarLead.created_at);
+                if (created.getMonth() === calendarMonth && created.getFullYear() === calendarYear) {
+                  const dayNum = created.getDate();
+                  if (!dayData[dayNum]) dayData[dayNum] = { notes: [], tasks: [] };
+                  dayData[dayNum].created = true;
+                }
+
+                const cells = [];
+                for (let i = 0; i < firstDay; i++) {
+                  cells.push(<div key={`e-${i}`} className="h-24 bg-slate-800/30 rounded-lg"></div>);
+                }
+                for (let day = 1; day <= daysInMonth; day++) {
+                  const isToday = isCurrentMonth && day === today.getDate();
+                  const data = dayData[day];
+                  const hasNotes = data?.notes?.length > 0;
+                  const hasTasks = data?.tasks?.length > 0;
+                  const isCreated = data?.created;
+                  const isSelected = calendarSelectedDay === day;
+
+                  cells.push(
+                    <button
+                      key={day}
+                      onClick={() => setCalendarSelectedDay(isSelected ? null : day)}
+                      className={`h-24 rounded-lg p-2 text-left transition-all flex flex-col ${
+                        isSelected ? 'ring-2 ring-blue-500 bg-slate-700' :
+                        isToday ? 'bg-blue-600/20 border border-blue-500/50' :
+                        (hasNotes || hasTasks) ? 'bg-slate-800 hover:bg-slate-700' :
+                        'bg-slate-800/30 hover:bg-slate-800/60'
+                      }`}
+                    >
+                      <span className={`text-sm font-bold ${isToday ? 'text-blue-400' : 'text-slate-300'}`}>{day}</span>
+                      <div className="flex-1 flex flex-col gap-0.5 mt-1 overflow-hidden">
+                        {isCreated && (
+                          <div className="text-[10px] bg-cyan-500/20 text-cyan-400 px-1 rounded truncate">Lead Created</div>
+                        )}
+                        {hasTasks && data.tasks.map((t, i) => {
+                          const shortLabels = { callback: 'Callback', follow_up_call: 'Follow Up', send_offer: 'Offer', discovery_call: 'Discovery', offer_follow_up: 'Offer F/U', title_work: 'Title Work' };
+                          const cellColors = { discovery_call: 'bg-cyan-500/20 text-cyan-400', follow_up_call: 'bg-blue-500/20 text-blue-400', send_offer: 'bg-purple-500/20 text-purple-400', offer_follow_up: 'bg-orange-500/20 text-orange-400', title_work: 'bg-emerald-500/20 text-emerald-400', callback: 'bg-slate-500/20 text-slate-400' };
+                          const nt = normalizeTaskType(t.task_type);
+                          return (
+                            <div key={i} className={`text-[10px] ${cellColors[nt] || 'bg-orange-500/20 text-orange-400'} px-1 rounded truncate`}>
+                              {new Date(t.due_at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})} {shortLabels[nt] || nt}
+                            </div>
+                          );
+                        })}
+                        {hasNotes && (
+                          <div className="text-[10px] bg-green-500/20 text-green-400 px-1 rounded truncate">
+                            {data.notes.length} note{data.notes.length > 1 ? 's' : ''}
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                  );
+                }
+
+                return (
+                  <>
+                    <div className="grid grid-cols-7 gap-1 text-center text-xs text-slate-500 mb-2 font-semibold">
+                      <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+                    </div>
+                    <div className="grid grid-cols-7 gap-1">
+                      {cells}
+                    </div>
+
+                    {/* Selected Day Detail */}
+                    {calendarSelectedDay && (
+                      <div className="mt-6 bg-slate-800 rounded-xl border border-slate-600 p-5">
+                        <div className="flex items-center justify-between mb-4">
+                          <h5 className="text-lg font-bold text-white">
+                            {new Date(calendarYear, calendarMonth, calendarSelectedDay).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                          </h5>
+                          <button onClick={() => setCalendarSelectedDay(null)} className="text-slate-400 hover:text-white text-lg">&times;</button>
+                        </div>
+
+                        {/* Scheduled Tasks for this day */}
+                        {dayData[calendarSelectedDay]?.tasks?.length > 0 && (
+                          <div className="mb-4">
+                            <h6 className="text-sm font-semibold text-orange-400 mb-2 uppercase tracking-wide">Scheduled Tasks</h6>
+                            <div className="space-y-2">
+                              {dayData[calendarSelectedDay].tasks.map((task, idx) => {
+                                const typeColors = { callback: 'bg-slate-500/20 border-slate-500/30 text-slate-400', follow_up_call: 'bg-blue-500/20 border-blue-500/30 text-blue-400', send_offer: 'bg-purple-500/20 border-purple-500/30 text-purple-400', discovery_call: 'bg-cyan-500/20 border-cyan-500/30 text-cyan-400', offer_follow_up: 'bg-orange-500/20 border-orange-500/30 text-orange-400', title_work: 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400' };
+                                const ntType = normalizeTaskType(task.task_type);
+                                const colors = typeColors[ntType] || 'bg-orange-500/20 border-orange-500/30 text-orange-400';
+                                return (
+                                  <div key={idx} className={`p-3 ${colors.split(' ').slice(0, 2).join(' ')} border rounded-lg`}>
+                                    <div className="flex items-center justify-between mb-1">
+                                      <div className="flex items-center gap-2">
+                                        <span className={`text-sm font-bold ${colors.split(' ')[2]}`}>{TASK_TYPE_LABELS[ntType] || ntType}</span>
+                                        <span className="text-slate-300 text-sm">at {new Date(task.due_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</span>
+                                      </div>
+                                      <div className="flex gap-2">
+                                        <button
+                                          onClick={() => {
+                                            setCalendarModalOpen(false);
+                                            setScheduleLeadId(task.lead_id);
+                                            setScheduleType(task.task_type || 'callback');
+                                            const d = new Date(task.due_at);
+                                            setScheduleDate(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`);
+                                            setScheduleTime(d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', hour12: false}));
+                                            setScheduleNote(task.description || '');
+                                            setEditingScheduleTaskId(task.id);
+                                            setScheduleModalOpen(true);
+                                          }}
+                                          className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 rounded text-sm font-medium transition-colors text-white"
+                                        >
+                                          Edit
+                                        </button>
+                                        <button
+                                          onClick={async () => {
+                                            const { error } = await supabase.from('scheduled_tasks').delete().eq('id', task.id);
+                                            if (!error) {
+                                              setScheduledTasks(prev => prev.filter(t => t.id !== task.id));
+                                              showToast('Task deleted', 'success');
+                                            }
+                                          }}
+                                          className="px-3 py-1.5 bg-red-600/80 hover:bg-red-500 rounded text-sm font-medium transition-colors text-white"
+                                        >
+                                          Delete
+                                        </button>
+                                        <button
+                                          onClick={() => completeScheduledTask(task.id)}
+                                          className="px-3 py-1.5 bg-green-600 hover:bg-green-500 rounded text-sm font-medium transition-colors text-white"
+                                        >
+                                          Done
+                                        </button>
+                                      </div>
+                                    </div>
+                                    {task.description && <p className="text-slate-400 text-sm">{task.description}</p>}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Notes for this day */}
+                        {dayData[calendarSelectedDay]?.notes?.length > 0 && (
+                          <div className="mb-4">
+                            <h6 className="text-sm font-semibold text-green-400 mb-2 uppercase tracking-wide">Notes & Activity</h6>
+                            <div className="space-y-2">
+                              {dayData[calendarSelectedDay].notes.map((note, idx) => (
+                                <div key={idx} className="p-3 bg-slate-700/50 rounded-lg">
+                                  <div className="flex justify-between items-start">
+                                    <p className="text-white text-sm">{note.content}</p>
+                                    <span className="text-xs text-slate-500 ml-3 whitespace-nowrap">
+                                      {new Date(note.created_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Created on this day */}
+                        {dayData[calendarSelectedDay]?.created && (
+                          <div className="p-3 bg-cyan-500/10 border border-cyan-500/30 rounded-lg">
+                            <span className="text-cyan-400 font-medium">Lead was created on this day</span>
+                            <span className="text-slate-400 text-sm ml-2">at {new Date(calendarLead.created_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</span>
+                          </div>
+                        )}
+
+                        {/* Nothing */}
+                        {!dayData[calendarSelectedDay] && (
+                          <p className="text-slate-500 text-center py-4">No activity on this day</p>
+                        )}
+
+                        {/* Quick Schedule from calendar */}
+                        <div className="mt-4 pt-4 border-t border-slate-700">
+                          <button
+                            onClick={() => {
+                              setCalendarModalOpen(false);
+                              setScheduleLeadId(calendarLead.id);
+                              setScheduleType('callback');
+                              const dateStr = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}-${String(calendarSelectedDay).padStart(2, '0')}`;
+                              setScheduleDate(dateStr);
+                              setScheduleTime('10:00');
+                              setScheduleNote('');
+                              setScheduleModalOpen(true);
+                            }}
+                            className="w-full px-4 py-2.5 bg-orange-600 hover:bg-orange-500 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                            </svg>
+                            Schedule Task on This Day
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Legend */}
+                    <div className="flex gap-6 mt-4 text-xs">
+                      <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-blue-600/40 border border-blue-500/50"></div><span className="text-slate-400">Today</span></div>
+                      <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-orange-500/30"></div><span className="text-slate-400">Scheduled Task</span></div>
+                      <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-green-500/30"></div><span className="text-slate-400">Notes</span></div>
+                      <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-cyan-500/30"></div><span className="text-slate-400">Lead Created</span></div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Conversation Complete Modal */}
+      {convoModalOpen && convoCompleteTask && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setConvoModalOpen(false)}
+        >
+          <div
+            className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-lg p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-bold text-white mb-1">Conversation Complete</h3>
+            <p className="text-sm text-slate-400 mb-4">
+              {convoCompleteTask.lead?.full_name || convoCompleteTask.lead?.name || 'Lead'} &middot; {convoCompleteTask.lead?.phone || 'No phone'}
+            </p>
+
+            {/* Notes */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-slate-300 mb-2">Notes from conversation</label>
+              <textarea
+                value={convoNotes}
+                onChange={(e) => setConvoNotes(e.target.value)}
+                placeholder="What did you discuss? Any key details, pricing mentioned, next steps..."
+                rows={4}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500 resize-none"
+                autoFocus
+              />
+            </div>
+
+            {/* Schedule Next Follow-up */}
+            <div className="mb-5 bg-slate-900/50 border border-slate-700 rounded-lg p-4">
+              <label className="block text-sm font-semibold text-slate-300 mb-3">Schedule Next Follow-up</label>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Date</label>
+                  <input
+                    type="date"
+                    value={convoScheduleDate}
+                    onChange={(e) => setConvoScheduleDate(e.target.value)}
+                    min={new Date().toISOString().split('T')[0]}
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Time (e.g. 2pm, 10:30am)</label>
+                  <input
+                    type="text"
+                    value={convoScheduleTime}
+                    onChange={(e) => setConvoScheduleTime(e.target.value)}
+                    onBlur={(e) => { const p = parseTimeInput(e.target.value); if (p) setConvoScheduleTime(p); }}
+                    placeholder="2:00pm"
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-slate-500 mt-2">Leave blank to skip scheduling a follow-up</p>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConvoModalOpen(false)}
+                className="flex-1 px-4 py-2.5 bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveConvoComplete}
+                disabled={convoSaving}
+                className="flex-1 px-4 py-2.5 bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
+              >
+                {convoSaving ? 'Saving...' : 'Save & Complete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Schedule Task Modal */}
+      {scheduleModalOpen && scheduleLeadId && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setScheduleModalOpen(false)}
+        >
+          <div
+            className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-md p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-bold text-white mb-1">{editingScheduleTaskId ? 'Edit Task' : 'Schedule Task'}</h3>
+            <p className="text-sm text-slate-400 mb-4">
+              {(() => {
+                const lead = allLeads.find(l => l.id === scheduleLeadId);
+                return lead?.full_name || lead?.name || 'Lead';
+              })()}
+            </p>
+
+            {/* Task Type, Acquisition Manager gets a narrower set: book appt for Jordan or schedule own follow-up */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-slate-300 mb-2">Type</label>
+              <div className="flex flex-wrap gap-2">
+                {(isAcquisitionManager ? [
+                  { value: 'meeting', label: 'Appt for Jordan', color: 'bg-green-600', desc: 'Books an appointment on Jordan\'s calendar' },
+                  { value: 'follow_up_call', label: 'My Follow-up Call', color: 'bg-blue-600', desc: 'Schedule a callback for yourself' }
+                ] : [
+                  { value: 'discovery_call', label: 'Discovery Call', color: 'bg-cyan-600', desc: 'First contact, never spoken' },
+                  { value: 'follow_up_call', label: 'Follow Up Call', color: 'bg-blue-600', desc: 'Spoke before, no offer yet' },
+                  { value: 'send_offer', label: 'Send Offer', color: 'bg-purple-600', desc: 'Ready to make/send offer' },
+                  { value: 'offer_follow_up', label: 'Offer Follow Up', color: 'bg-orange-600', desc: 'Offer sent, following up' },
+                  { value: 'title_work', label: 'Title Work Call', color: 'bg-emerald-600', desc: 'Under contract, title/access' },
+                  { value: 'callback', label: 'Callback', color: 'bg-slate-600', desc: 'General callback' }
+                ]).map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setScheduleType(opt.value)}
+                    title={opt.desc}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      scheduleType === opt.value
+                        ? `${opt.color} text-white ring-2 ring-white/30`
+                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-slate-500 mt-2">
+                {scheduleType === 'discovery_call' && 'First contact, never spoken to this person'}
+                {scheduleType === 'follow_up_call' && 'Already spoke, no offer made yet'}
+                {scheduleType === 'send_offer' && 'Ready to make or send an offer'}
+                {scheduleType === 'offer_follow_up' && 'Offer is out, need to follow up'}
+                {scheduleType === 'title_work' && 'Under contract, discuss title, access, etc.'}
+                {scheduleType === 'callback' && 'General callback'}
+              </p>
+            </div>
+
+            {/* Date & Time */}
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1">Date</label>
+                <input
+                  type="date"
+                  value={scheduleDate}
+                  onChange={(e) => setScheduleDate(e.target.value)}
+                  min={new Date().toISOString().split('T')[0]}
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1">Time (e.g. 2pm)</label>
+                <input
+                  type="text"
+                  value={scheduleTime}
+                  onChange={(e) => setScheduleTime(e.target.value)}
+                  onBlur={(e) => { const p = parseTimeInput(e.target.value); if (p) setScheduleTime(p); }}
+                  placeholder="2:00pm"
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                />
+              </div>
+            </div>
+
+            {/* Note */}
+            <div className="mb-5">
+              <label className="block text-sm font-medium text-slate-300 mb-1">Note (optional)</label>
+              <textarea
+                value={scheduleNote}
+                onChange={(e) => setScheduleNote(e.target.value)}
+                placeholder="Any details..."
+                rows={2}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500 resize-none"
+              />
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setScheduleModalOpen(false)}
+                className="flex-1 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveScheduledTask}
+                disabled={!scheduleDate || !scheduleTime || scheduleSaving}
+                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors"
+              >
+                {scheduleSaving ? 'Saving...' : editingScheduleTaskId ? 'Update' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Appointment for Jordan Modal */}
+      {apptModalOpen && apptModalLeadId && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => !apptSaving && setApptModalOpen(false)}
+        >
+          <div
+            className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-md p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-bold text-white mb-1">Book Appointment for Jordan</h3>
+            <p className="text-sm text-slate-400 mb-4">
+              {(() => {
+                const lead = allLeads.find(l => l.id === apptModalLeadId);
+                return lead?.full_name || lead?.name || 'Lead';
+              })()}
+            </p>
+
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Date</label>
+                <input
+                  type="date"
+                  value={apptDate}
+                  onChange={(e) => setApptDate(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Seller's timezone <span className="text-rose-400">(required)</span></label>
+                <select
+                  value={apptTz}
+                  onChange={(e) => setApptTz(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white"
+                >
+                  {APPT_TZS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+                </select>
+              </div>
+            </div>
+
+            {/* Visual day grid: see the day, what's taken, click an open slot. */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-slate-300 mb-2">Pick a time <span className="text-slate-500 font-normal">({tzAbbr(apptTz)})</span></label>
+              {!apptDate ? (
+                <div className="text-sm text-slate-500 border border-dashed border-slate-700 rounded-lg px-3 py-4 text-center">Pick a date first to see open times.</div>
+              ) : (() => {
+                // Existing meetings (appointments + blocks) on this date, in the seller's tz.
+                const fmtTz = (iso) => { try { const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: apptTz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date(iso)).map(x => [x.type, x.value])); return { ymd: `${p.year}-${p.month}-${p.day}`, min: (p.hour === '24' ? 0 : Number(p.hour)) * 60 + Number(p.minute) }; } catch { return null; } };
+                const dayMeetings = (scheduledTasks || [])
+                  .filter(t => t.task_type === 'meeting' && t.status === 'pending' && t.due_at)
+                  .map(t => { const f = fmtTz(t.due_at); return f && f.ymd === apptDate ? { min: f.min, isBlock: /^BLOCKED/i.test(t.title || ''), label: /^BLOCKED/i.test(t.title || '') ? 'Blocked' : (allLeads.find(l => l.id === t.lead_id)?.full_name || allLeads.find(l => l.id === t.lead_id)?.name || 'Appt') } : null; })
+                  .filter(Boolean);
+                const wholeDayBlocked = (scheduledTasks || []).some(t => t.task_type === 'meeting' && t.status === 'pending' && /^BLOCKED/i.test(t.title || '') && (t.description || '').includes('allday') && (() => { const f = fmtTz(t.due_at); return f && f.ymd === apptDate; })());
+                const toHHMM = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+                const to12 = (m) => { const h = Math.floor(m / 60), mm = m % 60; const ap = h >= 12 ? 'PM' : 'AM'; const h12 = h % 12 === 0 ? 12 : h % 12; return `${h12}:${String(mm).padStart(2, '0')} ${ap}`; };
+                const slots = [];
+                for (let m = 8 * 60; m <= 19 * 60 + 30; m += 30) slots.push(m);
+                if (wholeDayBlocked) return <div className="text-sm text-red-300 border border-red-500/40 bg-red-500/10 rounded-lg px-3 py-4 text-center">This whole day is blocked off. Pick another date.</div>;
+                return (
+                  <div className="grid grid-cols-3 gap-1.5 max-h-56 overflow-y-auto p-0.5">
+                    {slots.map(m => {
+                      const conflict = dayMeetings.find(d => Math.abs(d.min - m) < 30); // 30-min spacing
+                      const taken = !!conflict;
+                      const selected = apptTime === toHHMM(m);
+                      return (
+                        <button
+                          key={m}
+                          type="button"
+                          disabled={taken}
+                          onClick={() => setApptTime(toHHMM(m))}
+                          title={taken ? `${conflict.label} at ${to12(conflict.min)}` : ''}
+                          className={`rounded-lg px-2 py-2 text-left border text-xs ${taken ? 'bg-red-500/15 border-red-500/40 text-red-300/80 cursor-not-allowed' : selected ? 'bg-purple-600 border-purple-500 text-white font-semibold' : 'bg-slate-900 border-slate-600 text-slate-200 hover:bg-slate-700'}`}
+                        >
+                          <div className="font-medium">{to12(m)}</div>
+                          <div className={`text-[10px] truncate ${taken ? 'text-red-300/70' : selected ? 'text-purple-100' : 'text-slate-500'}`}>{taken ? conflict.label : 'Open'}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+              <p className="text-xs text-slate-500 mt-2">Red = already booked or blocked (kept 30 min apart). {apptTime ? <span className="text-purple-300">Selected {(() => { const [h, mm] = apptTime.split(':').map(Number); const ap = h >= 12 ? 'PM' : 'AM'; const h12 = h % 12 === 0 ? 12 : h % 12; return `${h12}:${String(mm).padStart(2, '0')} ${ap}`; })()}</span> : 'Click an open slot.'}</p>
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-slate-300 mb-2">Note for Jordan (optional)</label>
+              <textarea
+                value={apptNote}
+                onChange={(e) => setApptNote(e.target.value)}
+                rows={3}
+                placeholder="What did the seller say? Any context Jordan needs?"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
+              />
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={submitApptForJordan}
+                disabled={apptSaving}
+                className="flex-1 bg-purple-600 hover:bg-purple-700 disabled:bg-slate-700 text-white font-semibold py-2 px-4 rounded-lg"
+              >
+                {apptSaving ? 'Booking...' : 'Book Appt & Send to Jordan'}
+              </button>
+              <button
+                onClick={() => setApptModalOpen(false)}
+                disabled={apptSaving}
+                className="bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 px-4 rounded-lg"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Block off time modal */}
+      {blockModalOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setBlockModalOpen(false)}>
+          <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-white mb-1">Block off time</h3>
+            <p className="text-sm text-slate-400 mb-4">Mark yourself unavailable (engineering meeting, etc.). No appointment can be booked within 30 minutes of it.</p>
+            <input value={blockLabel} onChange={(e) => setBlockLabel(e.target.value)} placeholder="What is it? (e.g. Engineering meeting)" className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white mb-3" />
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Date</label>
+                <input type="date" value={blockDate} onChange={(e) => setBlockDate(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Time</label>
+                <input type="time" value={blockTime} onChange={(e) => setBlockTime(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white" />
+              </div>
+            </div>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-slate-300 mb-2">Timezone</label>
+              <select value={blockTz} onChange={(e) => setBlockTz(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white">
+                {APPT_TZS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+              </select>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={submitBlock} className="flex-1 bg-slate-600 hover:bg-slate-500 text-white font-semibold py-2 px-4 rounded-lg">Block it off</button>
+              <button onClick={() => setBlockModalOpen(false)} className="bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 px-4 rounded-lg">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Full lead CARD in a modal. Sits at z-40, BELOW the conversation/call/notes/
+          details modals (z-50+), so clicking Messages/Call/View Details on the card
+          always opens them on top instead of behind it. */}
+      {cardModalLead && (() => {
+        const live = allLeads.find(l => l.id === cardModalLead.id) || rawLeads.find(l => l.id === cardModalLead.id) || cardModalLead;
+        return (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 flex items-start justify-center p-4 overflow-y-auto" onClick={() => setCardModalLead(null)}>
+            <div className="w-full max-w-xl my-8" onClick={(e) => e.stopPropagation()}>
+              <div className="flex justify-end mb-2">
+                <button onClick={() => setCardModalLead(null)} className="text-slate-300 hover:text-white text-sm font-semibold px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700">✕ Close</button>
+              </div>
+              <CardErrorBoundary fallback={(
+                <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 space-y-3">
+                  <div className="text-lg font-bold text-white">{live.full_name || live.name || 'Lead'}</div>
+                  <div className="text-sm text-slate-400">{live.phone || live.owner_phone || ''}</div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Status</label>
+                    <select value={getSmartStatus(live)} onChange={(e) => updateLeadStatus(live.id, e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-600 text-white text-sm">
+                      {PIPELINE_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex gap-2">
+                    {(live.phone || live.owner_phone) && <button onClick={() => { setCardModalLead(null); openConversation(live); }} className="flex-1 px-3 py-2 rounded-lg bg-blue-600/20 text-blue-300 text-sm font-semibold">Messages</button>}
+                    {(live.phone || live.owner_phone) && <button onClick={() => { setCardModalLead(null); setCallLead(live); }} className="flex-1 px-3 py-2 rounded-lg bg-green-600/20 text-green-300 text-sm font-semibold">Call</button>}
+                  </div>
+                  <p className="text-xs text-slate-500">Showing a simple view (the full card hit an error for this lead).</p>
+                </div>
+              )}>
+                {renderLeadCard(live)}
+              </CardErrorBoundary>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Appointment Reminders editor (opened from the Follow-Up Campaigns list) */}
+      {reminderOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setReminderOpen(false)}>
+          <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-2xl max-h-[88vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="p-4 border-b border-slate-700 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-bold text-white">Appointment Reminders</h3>
+                <p className="text-xs text-slate-400">Automatic texts before each scheduled appointment.</p>
+              </div>
+              <button onClick={() => setReminderOpen(false)} className="text-slate-400 hover:text-white">✕</button>
+            </div>
+            <div className="p-4 space-y-4 overflow-y-auto">
+              <label className="flex items-center gap-2.5 bg-slate-900/60 border border-slate-700 rounded-lg px-3 py-2.5 cursor-pointer">
+                <input type="checkbox" checked={reminderActive} onChange={e => setReminderActive(e.target.checked)} className="w-4 h-4 accent-emerald-500" />
+                <span className="text-sm font-semibold text-white">Campaign is {reminderActive ? 'on' : 'off'}</span>
+                <span className="text-xs text-slate-400">{reminderActive ? 'Reminders will go out for upcoming appointments.' : 'No reminders will be sent while off.'}</span>
+              </label>
+              <div>
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <h4 className="text-sm font-bold text-white">Reminder messages</h4>
+                  <span className="text-xs text-slate-500">Send as many as you want (e.g. a day before and a few hours before).</span>
+                </div>
+                <div className="space-y-3">
+                  {reminders.map((r, i) => (
+                    <div key={i} className="bg-slate-900/60 border border-slate-700 rounded-lg p-3">
+                      <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+                        <label className="inline-flex items-center gap-2 text-sm text-slate-200">
+                          <input type="checkbox" checked={r.enabled !== false} onChange={e => updateReminder(i, { enabled: e.target.checked })} />
+                          Reminder {i + 1}
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <label className="inline-flex items-center gap-2 text-sm text-slate-300">
+                            Send
+                            <input type="number" min="1" max="168" value={r.hoursBefore} onChange={e => updateReminder(i, { hoursBefore: Number(e.target.value) })} className="w-16 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-sm" />
+                            hrs before
+                          </label>
+                          {reminders.length > 1 && <button onClick={() => removeReminder(i)} className="text-slate-500 hover:text-red-300 text-sm px-1" title="Remove reminder">✕</button>}
+                        </div>
+                      </div>
+                      <textarea value={r.message} onChange={e => updateReminder(i, { message: e.target.value })} rows={3} className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="Hi {{first}}, ..." />
+                      <div className="mt-1.5 text-xs text-slate-500">Preview: <span className="text-slate-300">{String(r.message || '').replace(/\{\{\s*first\s*\}\}/gi, 'Mike').replace(/\{\{\s*time\s*\}\}/gi, '2:30 PM')}</span></div>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={addReminder} className="mt-3 text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">+ Add another reminder</button>
+                <p className="mt-2 text-xs text-slate-500">Use <code>{'{{first}}'}</code> (first name), <code>{'{{county}}'}</code> (their county), and <code>{'{{time}}'}</code> (appointment time). They fill from the lead card, and a blank field never shows raw <code>{'{{ }}'}</code>.</p>
+              </div>
+
+              {(() => {
+                const upcoming = (scheduledTasks || [])
+                  .filter(t => t.task_type === 'meeting' && t.status === 'pending' && !/^BLOCKED/i.test(t.title || '') && t.lead_id && new Date(t.due_at) > new Date())
+                  .sort((a, b) => new Date(a.due_at) - new Date(b.due_at)).slice(0, 8);
+                if (!upcoming.length) return <div className="text-xs text-slate-500 border-t border-slate-700 pt-3">No upcoming appointments to remind.</div>;
+                const activeRem = reminders.map((r, i) => ({ ...r, i, H: Number(r.hoursBefore) > 0 ? Number(r.hoursBefore) : 3 })).filter(r => r.enabled !== false);
+                const fmtDT = (d) => d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+                return (
+                  <div className="border-t border-slate-700 pt-3">
+                    <h4 className="text-sm font-bold text-white mb-2">Reminder schedule (next {upcoming.length})</h4>
+                    <div className="space-y-2.5">
+                      {upcoming.map(t => {
+                        const lead = allLeads.find(l => l.id === t.lead_id) || rawLeads.find(l => l.id === t.lead_id);
+                        const nm = lead?.full_name || lead?.name || t.title || 'Appt';
+                        const appt = new Date(t.due_at);
+                        return (
+                          <div key={t.id} className="text-xs">
+                            <div className="flex items-center gap-2">
+                              <span className="text-slate-100 font-semibold truncate flex-1">{nm}</span>
+                              <span className="text-slate-400 flex-shrink-0">Appt {fmtDT(appt)}</span>
+                            </div>
+                            <div className="mt-1 pl-3 border-l border-slate-700 space-y-0.5">
+                              {activeRem.length === 0 && <div className="text-slate-500">No reminders enabled.</div>}
+                              {activeRem.map(r => {
+                                const sendAt = new Date(appt.getTime() - r.H * 3600000);
+                                const sent = (String(t.description || '').includes(`[reminded:${r.i}]`));
+                                const past = !sent && sendAt < new Date();
+                                return (
+                                  <div key={r.i} className="flex items-center gap-2">
+                                    <span className="text-slate-400 flex-1 truncate">Reminder {r.i + 1} ({r.H}h before) → sends {fmtDT(sendAt)}</span>
+                                    {sent
+                                      ? <span className="flex-shrink-0 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold">sent ✓</span>
+                                      : past
+                                        ? <span className="flex-shrink-0 px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-semibold">sending</span>
+                                        : <span className="flex-shrink-0 px-2 py-0.5 rounded-full bg-slate-700 text-slate-400">scheduled</span>}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">Each reminder goes out <span className="text-slate-300">before</span> the appointment (not at the appointment time). "Sent ✓" means it already went; every reminder also shows in the lead's message thread.</p>
+                  </div>
+                );
+              })()}
+            </div>
+            <div className="p-4 border-t border-slate-700 flex gap-2">
+              <button onClick={saveReminderCfg} disabled={reminderSaving} className="text-sm font-semibold px-4 py-2 rounded-lg bg-green-600 hover:bg-green-500 text-white disabled:opacity-50">{reminderSaving ? 'Saving...' : 'Save'}</button>
+              <button onClick={() => setReminderOpen(false)} className="text-sm font-semibold px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">Cancel</button>
+              <span className="ml-auto self-center text-xs text-slate-500">Sends for real once CAMPAIGNS_LIVE is on.</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Activity Modal */}
+      {activityModalOpen && activityLeadId && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => {
+            setActivityModalOpen(false);
+            setActivityLeadId(null);
+            setActivityNotes('');
+            setCallbackDate('');
+            setCallbackTime('');
+          }}
+        >
+          <div
+            className="bg-slate-800 rounded-xl border border-slate-700 max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
+              {activityType === 'CALL_OUTBOUND' && (
+                <>
+                  <svg className="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                  </svg>
+                  Log Call
+                </>
+              )}
+              {activityType === 'TEXT_SENT' && (
+                <>
+                  <svg className="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  </svg>
+                  Log Text
+                </>
+              )}
+              {activityType === 'EMAIL_SENT' && (
+                <>
+                  <svg className="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                  </svg>
+                  Log Email
+                </>
+              )}
+              {activityType === 'NOTE_ADDED' && (
+                <>
+                  <svg className="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                  Add Note
+                </>
+              )}
+            </h3>
+
+            {/* Lead Info */}
+            {(() => {
+              const lead = allLeads.find(l => l.id === activityLeadId);
+              return lead && (
+                <div className="mb-4 p-3 bg-slate-900/50 rounded-lg text-sm">
+                  <div className="font-semibold text-white">{lead.name || lead.full_name || 'Unknown'}</div>
+                  <div className="text-slate-400">{lead.phone || 'No phone'}</div>
+                  <div className="text-slate-500 text-xs">
+                    {lead.property_county || lead.county}, {lead.property_state || lead.state} - {lead.acres || lead.acreage || '?'} acres
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Call Outcome (for call types) */}
+            {activityType.includes('CALL') && (
+              <div className="mb-4">
+                <label className="block text-sm font-semibold text-slate-300 mb-2">Call Outcome</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { value: 'connected', label: 'Connected', color: 'green' },
+                    { value: 'no_answer', label: 'No Answer', color: 'yellow' },
+                    { value: 'voicemail', label: 'Voicemail', color: 'blue' },
+                    { value: 'wrong_number', label: 'Wrong Number', color: 'red' }
+                  ].map(outcome => (
+                    <button
+                      key={outcome.value}
+                      onClick={() => setCallOutcome(outcome.value)}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                        callOutcome === outcome.value
+                          ? `bg-${outcome.color}-600 text-white`
+                          : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                      }`}
+                    >
+                      {outcome.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Notes */}
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-slate-300 mb-2">
+                {activityType === 'NOTE_ADDED' ? 'Note' : 'Notes (optional)'}
+              </label>
+              <textarea
+                value={activityNotes}
+                onChange={(e) => setActivityNotes(e.target.value)}
+                placeholder={activityType === 'NOTE_ADDED' ? 'Enter your note...' : 'What was discussed?'}
+                className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 resize-none"
+                rows={3}
+              />
+            </div>
+
+            {/* Schedule Callback */}
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-slate-300 mb-2">Schedule Callback (optional)</label>
+              <div className="flex gap-2">
+                <input
+                  type="date"
+                  value={callbackDate}
+                  onChange={(e) => setCallbackDate(e.target.value)}
+                  min={new Date().toISOString().split('T')[0]}
+                  className="flex-1 px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                />
+                <input
+                  type="text"
+                  value={callbackTime}
+                  onChange={(e) => setCallbackTime(e.target.value)}
+                  onBlur={(e) => { const p = parseTimeInput(e.target.value); if (p) setCallbackTime(p); }}
+                  placeholder="2pm"
+                  className="w-28 px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
+            </div>
+
+            {/* Buttons */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setActivityModalOpen(false);
+                  setActivityLeadId(null);
+                  setActivityNotes('');
+                  setCallbackDate('');
+                  setCallbackTime('');
+                }}
+                className="flex-1 px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-600 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={logActivity}
+                disabled={loggingActivity || (activityType === 'NOTE_ADDED' && !activityNotes.trim())}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-semibold flex items-center justify-center gap-2"
+              >
+                {loggingActivity ? (
+                  <>
+                    <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Saving...
+                  </>
+                ) : (
+                  'Log Activity'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
