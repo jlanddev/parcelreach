@@ -4209,8 +4209,8 @@ export default function LandLeadsAdminPage() {
                         const whenDateTime = last ? new Date(last.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
                         return (
                           <div className="mb-4 pb-3 border-b border-slate-700/40">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="min-w-0">
+                            <div className="flex items-start justify-between gap-2 flex-wrap">
+                              <div className="min-w-[160px] flex-1">
                                 <div className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center gap-1.5 flex-wrap">
                                   Last Contacted
                                   {needsResponse && (
