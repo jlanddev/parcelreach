@@ -483,6 +483,10 @@ export default function LandLeadsAdminPage() {
   // drives a banner of appointments starting within 30 min, and fires a one-time
   // toast ("Appointment with X in N min") as each crosses into the window. ----
   const [nowTick, setNowTick] = useState(Date.now());
+  // scheduledTasks is declared here (not lower) because the appointment-reminder
+  // useMemos just below read it; a later declaration causes a render-time TDZ
+  // ("Cannot access scheduledTasks before initialization") that white-screens the CRM.
+  const [scheduledTasks, setScheduledTasks] = useState([]);
   useEffect(() => { const iv = setInterval(() => setNowTick(Date.now()), 30000); return () => clearInterval(iv); }, []);
   // Ask once for OS notification permission so appointment reminders pop even when
   // the CRM tab is in the background (not just an on-screen toast you might miss).
@@ -1115,7 +1119,7 @@ export default function LandLeadsAdminPage() {
   const [scheduleTime, setScheduleTime] = useState('');
   const [scheduleNote, setScheduleNote] = useState('');
   const [scheduleSaving, setScheduleSaving] = useState(false);
-  const [scheduledTasks, setScheduledTasks] = useState([]);
+  // (scheduledTasks is declared earlier, next to nowTick, to avoid a render-time TDZ.)
   const [editingScheduleTaskId, setEditingScheduleTaskId] = useState(null);
 
   // APPT_SET_FOR_JORDAN booking modal
@@ -2050,16 +2054,41 @@ export default function LandLeadsAdminPage() {
 
     // Fetch all leads. (We dropped the 7-lead cap on Acquisition Manager -
     // tasks now drive the rundown, and the lead pool needs to match.)
-    const { data: leadsData } = await supabase
-      .from('leads')
-      .select('*')
-      .order('created_at', { ascending: false });
+    // IMPORTANT: Supabase caps a single .select() at 1000 rows. With >1000 leads
+    // that silently dropped the OLDEST leads (worked deals, offers) from the whole
+    // CRM for everyone. Page through in 1000-row chunks so NO lead is ever missing.
+    let leadsData = [];
+    {
+      const PAGE = 1000;
+      for (let from = 0; ; from += PAGE) {
+        const { data: chunk, error: pageErr } = await supabase
+          .from('leads')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .range(from, from + PAGE - 1);
+        if (pageErr) { console.error('leads page error', pageErr.message); break; }
+        if (!chunk || chunk.length === 0) break;
+        leadsData = leadsData.concat(chunk);
+        if (chunk.length < PAGE) break;
+      }
+    }
 
-    // Fetch all assignments
-    const { data: assignmentsData } = await supabase
-      .from('lead_assignments')
-      .select('lead_id, team_id, assigned_at')
-      .order('assigned_at', { ascending: false });
+    // Fetch all assignments (paginated past the 1000-row cap, same as leads).
+    let assignmentsData = [];
+    {
+      const PAGE = 1000;
+      for (let from = 0; ; from += PAGE) {
+        const { data: chunk, error: aErr } = await supabase
+          .from('lead_assignments')
+          .select('lead_id, team_id, assigned_at')
+          .order('assigned_at', { ascending: false })
+          .range(from, from + PAGE - 1);
+        if (aErr) { console.error('assignments page error', aErr.message); break; }
+        if (!chunk || chunk.length === 0) break;
+        assignmentsData = assignmentsData.concat(chunk);
+        if (chunk.length < PAGE) break;
+      }
+    }
 
     // Fetch scheduled tasks (pending for today and future)
     const { data: tasksData } = await supabase
