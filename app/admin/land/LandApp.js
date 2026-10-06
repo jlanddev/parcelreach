@@ -901,7 +901,10 @@ export default function LandLeadsAdminPage() {
     if (s === 'FOLLOW_UP') return 'follow-up';
     if (['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(s)) return 'agreement-sent';
     if (['OFFER_SENT', 'NEGOTIATING'].includes(s)) return 'offer-made';
-    const early = ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'];
+    // A lead explicitly in OFFER_CURATED always counts as Offer Curated (even with
+    // no dollar amount yet); earlier stages only when an offer amount is filled in.
+    if (s === 'OFFER_CURATED') return 'offer-curated';
+    const early = ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'];
     if (_hasOffer(l) && [...early, 'APPT_SET_FOR_JORDAN'].includes(s)) return 'offer-curated';
     if (s === 'APPT_SET_FOR_JORDAN') return 'appointment-set';
     return 'ppc-inflow';
@@ -6475,11 +6478,15 @@ export default function LandLeadsAdminPage() {
           const bucketIsCrossover = cfg.statuses.every(s => SUBDIV_CROSSOVER.includes(s));
           const bucketAll = boardLeads.filter(l => {
             const s = (l.pipeline_status || l.status || '').toUpperCase();
-            // Offer Curated is driven by the offer being filled in, not by status.
+            // Offer Curated shows: (a) any lead explicitly moved to OFFER_CURATED
+            // status, even before a dollar amount is entered — so a deal you drag
+            // here never disappears — PLUS (b) any earlier-stage lead that already
+            // has an offer amount filled in (the offer itself promotes it here).
             if (activeTab === 'offer-curated') {
-              return l.offer_amount != null && Number(l.offer_amount) !== 0
-                && ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED', 'APPT_SET_FOR_JORDAN'].includes(s)
-                && l.status !== 'archived';
+              if (l.status === 'archived') return false;
+              const hasOffer = l.offer_amount != null && Number(l.offer_amount) !== 0;
+              return s === 'OFFER_CURATED'
+                || (hasOffer && ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'APPT_SET_FOR_JORDAN'].includes(s));
             }
             if (!cfg.statuses.includes(s)) return false;
             if (l.source === 'subdivision' && !bucketIsCrossover) return false;
