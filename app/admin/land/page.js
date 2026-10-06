@@ -5919,6 +5919,43 @@ export default function LandLeadsAdminPage() {
 
         {activeTab === 'ppc-inflow' && (
           <div className="space-y-6">
+            {/* Conveyor belt: campaign follow-up calls that are due. Who to call, which
+                campaign, open the card, and clear it when done. */}
+            {(() => {
+              const calls = (scheduledTasks || [])
+                .filter(t => t.status === 'pending' && t.lead_id && new Date(t.due_at) <= new Date() && (t.source === 'campaign' || /^campaign:/i.test(t.description || '') || /follow-?up call/i.test(t.title || '')))
+                .sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+              if (!calls.length) return null;
+              const campOf = (t) => (String(t.description || '').match(/campaign:\s*([^\n]+)/i) || [])[1]?.trim() || (String(t.title || '').match(/:\s*(.+)$/) || [])[1]?.trim() || 'a campaign';
+              return (
+                <div className="bg-amber-500/10 border border-amber-500/40 rounded-xl overflow-hidden">
+                  <div className="px-4 py-2.5 border-b border-amber-500/30 bg-amber-500/10 flex items-center gap-2 text-sm font-bold text-amber-200">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
+                    <span className="inline-flex items-center justify-center min-w-[20px] h-[20px] px-1 rounded-full bg-amber-500 text-slate-900 text-[11px] font-extrabold">{calls.length}</span>
+                    Follow-up calls to make
+                  </div>
+                  <div className="max-h-64 overflow-y-auto divide-y divide-amber-500/15">
+                    {calls.slice(0, 40).map(t => {
+                      const lead = allLeads.find(l => l.id === t.lead_id) || rawLeads.find(l => l.id === t.lead_id);
+                      const nm = lead?.full_name || lead?.name || 'Lead';
+                      return (
+                        <div key={t.id} className="px-4 py-2.5 flex items-center gap-3 hover:bg-amber-500/5">
+                          <button onClick={() => lead && navigateToLeadCard(lead)} className="flex-1 min-w-0 text-left flex items-center gap-2">
+                            <span className="text-sm font-semibold text-white truncate">{nm}</span>
+                            <span className="text-xs text-amber-200/80 flex-shrink-0">· {campOf(t)}</span>
+                          </button>
+                          {(lead?.phone || lead?.owner_phone) && (
+                            <button onClick={() => { setCallLead(lead); }} className="flex-shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg bg-green-600/20 text-green-300 hover:bg-green-600/40">Call</button>
+                          )}
+                          <button onClick={() => completeTaskQuick(t)} className="flex-shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700/60 text-slate-200 hover:bg-slate-600">Done</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Stats: action-oriented for Acquisition Manager, PPC funnel for admin */}
             {isAcquisitionManager ? (() => {
               const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
