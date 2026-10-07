@@ -1399,26 +1399,25 @@ export default function LandLeadsAdminPage() {
   // you can type a status or lean into any search bar to filter by it.
   const leadMatchesSearch = (lead, q) => {
     if (!q) return true;
-    q = q.toLowerCase().trim();
     const smart = getSmartStatus(lead);
     const statusLabel = (STATUS_CONFIG[smart]?.label || smart || '').toLowerCase();
     const rawStatus = (lead.pipeline_status || lead.status || '').toLowerCase();
     const dir = (lead.deal_direction || '').toLowerCase();
     const dirLabel = (DIRECTIONS.find(d => d.value === dir)?.label || '').toLowerCase();
     const fd = lead.form_data || {};
-    return (
-      (lead.full_name || lead.name || '').toLowerCase().includes(q) ||
-      (lead.phone || '').toLowerCase().includes(q) ||
-      (lead.email || '').toLowerCase().includes(q) ||
-      (lead.property_county || lead.county || '').toLowerCase().includes(q) ||
-      (lead.property_state || lead.state || '').toLowerCase().includes(q) ||
-      (fd.streetAddress || lead.street_address || lead.address || '').toLowerCase().includes(q) ||
-      (fd.agentName || '').toLowerCase().includes(q) ||
-      statusLabel.includes(q) ||
-      rawStatus.includes(q) ||
-      dir.includes(q) ||
-      dirLabel.includes(q)
-    );
+    const phoneDigits = (lead.phone || '').replace(/\D/g, '');
+    // One combined haystack of everything searchable, then require EVERY word of
+    // the query to appear somewhere in it. This way "Aaron D Heath" still matches
+    // "Aaron Daniel Heath", word order and middle names don't matter, and a partial
+    // name or phone still finds the lead.
+    const hay = [
+      lead.full_name, lead.name, lead.phone, phoneDigits, lead.email,
+      lead.property_county, lead.county, lead.property_state, lead.state,
+      fd.streetAddress, lead.street_address, lead.address, fd.agentName,
+      statusLabel, rawStatus, dir, dirLabel,
+    ].filter(Boolean).join(' ').toLowerCase();
+    const tokens = q.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    return tokens.every((t) => hay.includes(t));
   };
 
   // How long ago helper
@@ -6151,9 +6150,12 @@ export default function LandLeadsAdminPage() {
                      Inflow tab as a filtered view). */
                   .filter(l => (() => { const s = (l.pipeline_status || l.status || '').toUpperCase(); return ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'OFFER_CURATED'].includes(s) && l.status !== 'archived'; })())
                   // Silently-dripping leads are worked from the campaign; repliers return here.
-                  .filter(l => !inCampaign(l))
+                  // When searching, don't hide campaign/enrolled leads — a name search must find anyone.
+                  .filter(l => ppcSearch.trim() || !inCampaign(l))
                   // Default to the fresh working window (last N days). "All" = 0.
-                  .filter(l => inflowDays <= 0 || (l.created_at && new Date(l.created_at).getTime() >= Date.now() - inflowDays * 86400000))
+                  // A search bypasses the window entirely so an older lead (like a
+                  // reply from a 3-week-old lead) is always findable by name/phone.
+                  .filter(l => ppcSearch.trim() || inflowDays <= 0 || (l.created_at && new Date(l.created_at).getTime() >= Date.now() - inflowDays * 86400000))
                   .filter(l => leadMatchesSearch(l, ppcSearch))
                   .filter(l => !pipelineMapped || l.map_uploaded)
                   .filter(passesEngagement),
