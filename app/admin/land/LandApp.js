@@ -5952,11 +5952,13 @@ export default function LandLeadsAdminPage() {
           );
         })()}
 
-        {/* Upcoming appointments (next 4 hrs), visible on every tab. Imminent ones
-            (within 30 min) glow brighter and also fire a toast + OS notification. */}
-        {upcomingAppts.length > 0 && (
+        {/* Imminent appointments (within 30 min only), shown ONLY on the Mapped &
+            Appointment Set tab. These also fire a toast + OS notification, and the
+            count shows as the red bubble on the tab itself. Appointments further out
+            are not reminders yet — they live on the calendar/list below. */}
+        {activeTab === 'appointment-set' && imminentAppts.length > 0 && (
           <div className="mb-5 space-y-2">
-            {upcomingAppts.slice(0, 4).map(({ task, mins }) => {
+            {imminentAppts.slice(0, 6).map(({ task, mins }) => {
               const lead = (allLeads || []).find(l => l.id === task.lead_id) || (rawLeads || []).find(l => l.id === task.lead_id);
               const nm = lead?.full_name || lead?.name || 'Seller';
               const when = new Date(task.due_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
