@@ -487,6 +487,15 @@ export default function LandLeadsAdminPage() {
   // useMemos just below read it; a later declaration causes a render-time TDZ
   // ("Cannot access scheduledTasks before initialization") that white-screens the CRM.
   const [scheduledTasks, setScheduledTasks] = useState([]);
+  // Lead ids that have a REAL pending appointment (the same meeting tasks the
+  // calendar renders). A lead that is booked belongs in Appointment Set and must
+  // never also sit in PPC Inflow, even if its status field never got moved to
+  // APPT_SET_FOR_JORDAN. This is the single source of truth for "is booked".
+  const bookedLeadIds = useMemo(() => new Set(
+    (scheduledTasks || [])
+      .filter(t => t.task_type === 'meeting' && t.status === 'pending' && t.lead_id && !/^BLOCKED/i.test(t.title || ''))
+      .map(t => t.lead_id)
+  ), [scheduledTasks]);
   useEffect(() => { const iv = setInterval(() => setNowTick(Date.now()), 30000); return () => clearInterval(iv); }, []);
   // Ask once for OS notification permission so appointment reminders pop even when
   // the CRM tab is in the background (not just an on-screen toast you might miss).
@@ -907,6 +916,9 @@ export default function LandLeadsAdminPage() {
     const early = ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP'];
     if (_hasOffer(l) && [...early, 'APPT_SET_FOR_JORDAN'].includes(s)) return 'offer-curated';
     if (s === 'APPT_SET_FOR_JORDAN') return 'appointment-set';
+    // A lead with a real pending appointment belongs in Appointment Set even if its
+    // status was never moved off NEW/CONTACTING (the booking is the source of truth).
+    if (bookedLeadIds.has(l.id)) return 'appointment-set';
     return 'ppc-inflow';
   };
   // Furthest-stage rank for a lead (higher = deeper in the pipeline).
@@ -6488,8 +6500,18 @@ export default function LandLeadsAdminPage() {
               return s === 'OFFER_CURATED'
                 || (hasOffer && ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'APPT_SET_FOR_JORDAN'].includes(s));
             }
+            // Appointment Set shows anyone with the APPT_SET status OR a real pending
+            // appointment on the calendar (so a booked lead whose status still says
+            // NEW/CONTACTING appears here, never stranded back in inflow).
+            if (activeTab === 'appointment-set') {
+              if (l.status === 'archived') return false;
+              const bookableEarly = ['', 'NEW', 'CONTACTING', 'CONTACTED', 'ANTHONY_CONTACTED', 'ANTHONY_FOLLOW_UP', 'APPT_SET_FOR_JORDAN'].includes(s);
+              return s === 'APPT_SET_FOR_JORDAN' || (bookedLeadIds.has(l.id) && bookableEarly);
+            }
             if (!cfg.statuses.includes(s)) return false;
             if (l.source === 'subdivision' && !bucketIsCrossover) return false;
+            // A booked lead lives in Appointment Set, never in PPC Inflow.
+            if (activeTab === 'ppc-inflow' && bookedLeadIds.has(l.id)) return false;
             return true;
           });
           const bucketComparator = activeTab === 'follow-up'
