@@ -5089,7 +5089,17 @@ export default function LandLeadsAdminPage() {
       <div className="p-6">
         {/* WHAT'S NEW panel: what changed in this tab since you last looked. */}
         {(() => {
-          const events = tabEventsFor(activeTab);
+          const baseEvents = tabEventsFor(activeTab);
+          // An imminent appointment (<=30 min) shows up here as a normal alert row,
+          // exactly like a new message or new lead — no separate banner. Only on the
+          // Mapped & Appointment Set tab.
+          const apptEvents = activeTab === 'appointment-set'
+            ? imminentAppts.map(({ task, mins }) => {
+                const lead = (allLeads || []).find(l => l.id === task.lead_id) || (rawLeads || []).find(l => l.id === task.lead_id);
+                return lead ? { lead, kind: `Appt ${mins <= 1 ? 'now' : fmtCountdown(mins)}`, color: 'text-amber-300', dot: 'bg-amber-400', ts: new Date(task.due_at).getTime(), appt: true } : null;
+              }).filter(Boolean)
+            : [];
+          const events = [...apptEvents, ...baseEvents];
           if (events.length === 0) return null;
           const fmt = (ts) => { const m = Math.round((Date.now() - ts) / 60000); if (m < 60) return `${m}m ago`; const h = Math.round(m / 60); if (h < 24) return `${h}h ago`; return `${Math.round(h / 24)}d ago`; };
           return (
@@ -5103,13 +5113,13 @@ export default function LandLeadsAdminPage() {
               </div>
               <div className="max-h-56 overflow-y-auto divide-y divide-slate-700/50">
                 {events.slice(0, 25).map(ev => (
-                  <div key={ev.lead.id} className="w-full px-4 py-2.5 hover:bg-slate-700/40 flex items-center gap-3">
+                  <div key={`${ev.appt ? 'a:' : ''}${ev.lead.id}`} className="w-full px-4 py-2.5 hover:bg-slate-700/40 flex items-center gap-3">
                     <button onClick={() => navigateToLeadCard(ev.lead)} className="flex-1 min-w-0 text-left flex items-center gap-3">
                       <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${ev.dot}`} />
                       <span className={`text-xs font-semibold uppercase tracking-wide flex-shrink-0 ${ev.color}`}>{ev.kind}</span>
                       <span className="text-sm text-white truncate">{ev.lead.full_name || ev.lead.name || 'Lead'}</span>
                       {(ev.lead.last_contact_preview && ev.kind === 'New message') && <span className="text-xs text-slate-400 truncate hidden md:inline">“{ev.lead.last_contact_preview}”</span>}
-                      <span className="ml-auto text-xs text-slate-500 flex-shrink-0">{fmt(ev.ts)}</span>
+                      <span className="ml-auto text-xs text-slate-500 flex-shrink-0">{ev.appt ? new Date(ev.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : fmt(ev.ts)}</span>
                     </button>
                     <button onClick={() => dismissEvent(ev.lead, ev.ts)} title="Clear this notification" className="flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center text-slate-500 hover:text-white hover:bg-slate-600/60">✕</button>
                   </div>
@@ -5951,29 +5961,6 @@ export default function LandLeadsAdminPage() {
             </div>
           );
         })()}
-
-        {/* Imminent appointments (within 30 min only), shown ONLY on the Mapped &
-            Appointment Set tab. These also fire a toast + OS notification, and the
-            count shows as the red bubble on the tab itself. Appointments further out
-            are not reminders yet — they live on the calendar/list below. */}
-        {activeTab === 'appointment-set' && imminentAppts.length > 0 && (
-          <div className="mb-5 space-y-2">
-            {imminentAppts.slice(0, 6).map(({ task, mins }) => {
-              const lead = (allLeads || []).find(l => l.id === task.lead_id) || (rawLeads || []).find(l => l.id === task.lead_id);
-              const nm = lead?.full_name || lead?.name || 'Seller';
-              const when = new Date(task.due_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-              const soon = mins <= 30;
-              return (
-                <button key={task.id} onClick={() => lead && navigateToLeadCard(lead)} className={`w-full text-left rounded-xl px-4 py-3 flex items-center gap-3 transition border ${soon ? 'bg-amber-500/20 border-amber-500/60 hover:bg-amber-500/30' : 'bg-slate-800/60 border-slate-600/50 hover:bg-slate-700/60'}`}>
-                  <svg className={`w-5 h-5 flex-shrink-0 ${soon ? 'text-amber-300' : 'text-slate-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                  <span className={`font-semibold ${soon ? 'text-amber-200' : 'text-slate-200'}`}>Appointment with {nm} {mins <= 1 ? 'now' : fmtCountdown(mins)}</span>
-                  <span className={`text-sm ${soon ? 'text-amber-200/70' : 'text-slate-400'}`}>· {when}</span>
-                  <span className={`ml-auto text-xs font-semibold ${soon ? 'text-amber-200/80' : 'text-slate-400'}`}>Open card →</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
 
         {activeTab === 'ppc-inflow' && (
           <div className="space-y-6">
