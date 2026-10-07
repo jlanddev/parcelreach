@@ -6525,7 +6525,12 @@ export default function LandLeadsAdminPage() {
           // lead (just completed, notes added, moved here) jumps to the TOP, instead
           // of the stable order that parked newcomers at the bottom.
           const recencySort = (a, b) => new Date(b.last_activity_at || b.updated_at || b.created_at) - new Date(a.last_activity_at || a.updated_at || a.created_at);
-          const leadsInBucket = ['offer-curated', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'].includes(activeTab) && pipelineSort === 'activity_desc'
+          // On the deal tabs, BOTH "newest" sorts ("Last activity" and "Newest
+          // Inbound") float the most recently worked deal to the top — so a deal you
+          // just completed/moved here today sits up top even if the lead itself came
+          // in months ago. Only the explicit "oldest first" sorts keep stable order.
+          const dealTab = ['offer-curated', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'].includes(activeTab);
+          const leadsInBucket = dealTab && (pipelineSort === 'activity_desc' || pipelineSort === 'created_desc')
             ? [...bucketFiltered].sort(recencySort)
             : stableOrder(bucketFiltered, bucketComparator, `bucket:${activeTab}:${pipelineSort}:${pipelineMapped}:${q}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`);
 
