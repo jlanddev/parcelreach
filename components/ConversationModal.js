@@ -277,13 +277,22 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
   }, [messages, optimistic, loading]);
 
   const postSend = async (text) => {
-    const res = await fetch('/api/pb/send-sms', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ to: phone, message: text, leadId: lead?.id, userId: currentUserId }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data.ok) throw new Error(data.error || 'Send failed');
+    // Abort a hung request instead of leaving the bubble spinning forever. If it
+    // times out it surfaces as "failed, tap to retry" rather than a silent limbo.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 25000);
+    try {
+      const res = await fetch('/api/pb/send-sms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: phone, message: text, leadId: lead?.id, userId: currentUserId }),
+        signal: ctrl.signal,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Send failed');
+    } finally {
+      clearTimeout(timer);
+    }
   };
 
   const send = async () => {
@@ -317,6 +326,15 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
     }
   };
 
+  // Once the real outbound message arrives from Project Blue, drop any optimistic
+  // bubble with the same text. Otherwise a slow/hung send can leave a stale
+  // "sending" bubble sitting next to the delivered message, which LOOKS like the
+  // seller was texted twice even though Project Blue sent it exactly once.
+  const sentOutboundText = new Set(
+    messages
+      .filter((m) => m.direction === 'outbound')
+      .map((m) => (m.content || '').trim())
+  );
   const thread = [
     ...messages.map((m) => ({
       id: m.message_handle,
@@ -325,16 +343,18 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
       ts: m.sent_at || m.created_at,
       status: m.status,
     })),
-    ...optimistic.map((m) => ({
-      id: m.tempId,
-      content: m.content,
-      outbound: true,
-      ts: m.created_at,
-      status: m.status,
-      failed: m.status === 'failed',
-      error: m.error,
-      onRetry: () => retry(m),
-    })),
+    ...optimistic
+      .filter((m) => m.status === 'failed' || !sentOutboundText.has((m.content || '').trim()))
+      .map((m) => ({
+        id: m.tempId,
+        content: m.content,
+        outbound: true,
+        ts: m.created_at,
+        status: m.status,
+        failed: m.status === 'failed',
+        error: m.error,
+        onRetry: () => retry(m),
+      })),
   ];
 
   return (
