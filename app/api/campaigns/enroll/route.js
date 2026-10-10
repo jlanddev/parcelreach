@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import { fillTokens } from '@/lib/messageTokens';
-import { leadsForRule } from '@/lib/campaignEnroll';
+import { leadsForRule, doNotEnrollSet } from '@/lib/campaignEnroll';
 
 // POST /api/campaigns/enroll
 // Body: { campaignId, leadIds?: [uuid], rule?: 'silent-inflow', days?: number, moveOut?: bool }
@@ -48,6 +48,15 @@ export async function POST(request) {
       return NextResponse.json({ ok: false, error: 'Provide leadIds or rule' }, { status: 400 });
     }
 
+    // HARD GUARD on EVERY path (incl. an explicit leadIds list): never (re)enroll a
+    // lead who replied recently or is already in / reply-stopped from a campaign.
+    // This is what stops a responder from ever getting a second drip, no matter how
+    // they were selected.
+    const excl = await doNotEnrollSet(sb);
+    const beforeExcl = leads.length;
+    leads = leads.filter((l) => !excl.has(l.id));
+    const skippedResponders = beforeExcl - leads.length;
+
     // Count-only mode: how many leads would be added (minus those already in),
     // without changing anything. Used by the "Populate now" confirm dialog.
     if (body.countOnly) {
@@ -57,7 +66,7 @@ export async function POST(request) {
         const { data: existing } = await sb.from('campaign_enrollments').select('lead_id').eq('campaign_id', campaignId).in('lead_id', ids);
         alreadyIn = (existing || []).length;
       }
-      return NextResponse.json({ ok: true, considered: leads.length, wouldAdd: Math.max(0, leads.length - alreadyIn), alreadyIn });
+      return NextResponse.json({ ok: true, considered: leads.length, wouldAdd: Math.max(0, leads.length - alreadyIn), alreadyIn, skippedResponders });
     }
 
     let enrolled = 0, already = 0, queued = 0, calls = 0;
@@ -106,7 +115,7 @@ export async function POST(request) {
       }
     }
 
-    return NextResponse.json({ ok: true, considered: leads.length, enrolled, already, queued, calls });
+    return NextResponse.json({ ok: true, considered: leads.length, enrolled, already, queued, calls, skippedResponders });
   } catch (err) {
     console.error('[campaigns enroll]', err);
     return NextResponse.json({ ok: false, error: err.message || 'Enroll failed' }, { status: 500 });
