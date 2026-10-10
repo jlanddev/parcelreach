@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { sendMessage } from '@/lib/projectBlue';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
-import { enrollLead, leadsForRule, PROTECTED_STAGES, recentRepliedSet } from '@/lib/campaignEnroll';
+import { enrollLead, leadsForRule, PROTECTED_STAGES } from '@/lib/campaignEnroll';
 import { fillTokens } from '@/lib/messageTokens';
 
 const DAY = 86400000;
@@ -64,11 +64,6 @@ async function run(request) {
     .eq('status', 'pending').eq('type', 'text').lte('due_at', now)
     .order('due_at', { ascending: true }).limit(100);
 
-  // Durable reply guard: anyone who replied in the last 30 days (an inbound
-  // activity exists) must never be dripped over, even if a later outbound flipped
-  // their last_contact_dir back to 'outbound'. Their queued texts are cancelled.
-  const recentReplied = await recentRepliedSet(supabase);
-
   let sent = 0, skipped = 0, failed = 0; const preview = [];
   const perLeadSent = new Set();  // leads we REALLY texted this run (drip + reminder share it)
   const previewLeads = new Set(); // leads already shown in the dry preview
@@ -90,10 +85,9 @@ async function run(request) {
         if (!dryRun) { await supabase.from('campaign_enrollments').update({ status: 'cancelled' }).eq('id', item.enrollment_id); await mark(supabase, item.id, 'cancelled'); }
         skipped++; continue;
       }
-      // If they've replied to us — either the last message is inbound now, OR they
-      // replied anytime in the last 30 days (durable signal) — never auto-drip over
-      // it. Pause the enrollment so a human handles it, and cancel queued texts.
-      if (recentReplied.has(item.lead_id) || String(lead.last_contact_dir || '').toLowerCase() === 'inbound') {
+      // If their last message to us is inbound (an unanswered reply), never drip
+      // over it. Pause the enrollment so a human handles it, and cancel queued texts.
+      if (String(lead.last_contact_dir || '').toLowerCase() === 'inbound') {
         if (!dryRun) {
           await supabase.from('campaign_enrollments').update({ status: 'replied' }).eq('id', item.enrollment_id).eq('status', 'active');
           await mark(supabase, item.id, 'cancelled');
