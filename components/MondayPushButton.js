@@ -136,7 +136,7 @@ export default function MondayPushButton({ lead, onToast, compact = false }) {
   // to the next partner.
   const send = async () => {
     const targets = boards.filter((b) => selectedBoards.has(String(b.id)));
-    if (!targets.length || !summary.trim()) return;
+    if (!targets.length) return; // the note is optional — a partner can be pushed without one
     setPushingMany(true);
     const newNames = [];
     const updatedNames = [];
@@ -406,7 +406,7 @@ export default function MondayPushButton({ lead, onToast, compact = false }) {
               <button
                 type="button"
                 onClick={send}
-                disabled={selectedBoards.size === 0 || !summary.trim() || pushingMany}
+                disabled={selectedBoards.size === 0 || pushingMany}
                 className="flex-1 px-3 py-2 rounded-md bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-semibold"
               >
                 {pushingMany
