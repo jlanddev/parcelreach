@@ -60,6 +60,27 @@ function ReviewPanel({ lead, onSave }) {
   const deadLost = VBB_DEAD_STATUSES.includes(String(lead.pipeline_status || lead.status || '').toUpperCase());
   const fmt = (n) => '$' + Math.round(Number(n || 0)).toLocaleString();
   const [draft, setDraft] = useState(null);
+  const [editing, setEditing] = useState(false);
+  // Re-sync when a review is saved here OR lands from another tab/device (realtime).
+  useEffect(() => { setDraft(null); setEditing(false); }, [rev?.reviewed_at]);
+
+  // Once reviewed, show a LOCKED summary (not the full form) until you hit Edit.
+  if (rev && !editing) {
+    const leanLbl = rev.lean ? rev.lean[0].toUpperCase() + rev.lean.slice(1) : 'no lean';
+    const spdLbl = { fast: 'Fast', normal: 'Normal', slow: 'Slow', hard: 'Hard to sell' }[rev.speed] || 'Normal';
+    return (
+      <div className="mb-4 rounded-lg border border-emerald-600/40 bg-emerald-500/5 px-3 py-2.5">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-[10px] font-bold uppercase tracking-wide text-emerald-300/80">Deal Value · Reviewed</span>
+          <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300" title={`Reviewed by ${rev.reviewed_by || ''}`}>✓ {new Date(rev.reviewed_at).toLocaleDateString()}</span>
+        </div>
+        <div className="text-xl font-bold text-emerald-300 leading-tight">{fmt(rev.value)}<span className="text-[11px] font-normal text-slate-500"> → Google</span></div>
+        <div className="text-[11px] text-slate-400 mt-0.5">{fmt(rev.worth)} worth · {leanLbl} · {spdLbl} · profit {fmt(rev.base_profit ?? rev.profit)}{rev.override != null ? ' · manual' : ''}</div>
+        <button type="button" onClick={() => setEditing(true)} className="mt-2 text-xs font-semibold px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200">Edit</button>
+      </div>
+    );
+  }
+
   const d = draft || {
     worth: rev?.worth != null ? String(rev.worth) : (v?.resale != null ? String(v.resale) : ''),
     exactAcres: rev?.exact_acres != null ? String(rev.exact_acres) : '',
@@ -81,11 +102,11 @@ function ReviewPanel({ lead, onSave }) {
     setD({ exactAcres: val, worth: nw });
   };
   return (
-    <div className="mb-4 rounded-lg border border-slate-600/50 bg-slate-800/60 px-3 py-2.5">
+    <div className={`mb-4 rounded-lg border ${rev ? 'border-blue-500/50' : 'border-slate-600/50'} bg-slate-800/60 px-3 py-2.5`}>
       <div className="flex items-center justify-between mb-1.5">
-        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Deal Value{rev ? ' · Reviewed' : ''}</span>
+        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Deal Value{rev ? ' · Editing' : ''}</span>
         {rev
-          ? <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300" title={`Reviewed by ${rev.reviewed_by || ''}`}>✓ {new Date(rev.reviewed_at).toLocaleDateString()}</span>
+          ? <button type="button" onClick={() => { setDraft(null); setEditing(false); }} className="text-[10px] text-slate-400 hover:underline">cancel</button>
           : (v?.fallback ? <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-slate-600/60 text-slate-200">est</span> : null)}
       </div>
       <label className="block text-[11px] text-slate-400 mb-1">What’s it worth? (resale ${v?.ppa ? ` · comps ${fmt(v.ppa)}/ac` : ''})</label>
@@ -116,7 +137,7 @@ function ReviewPanel({ lead, onSave }) {
           {d.override !== '' && <button type="button" onClick={() => setD({ override: '', showOverride: false })} className="text-[10px] text-slate-400 hover:underline">clear</button>}
         </div>
       )}
-      <button type="button" onClick={() => { onSave(lead, { value, worth: worthNum, offer, profit, lean: d.lean, speed: d.speed, exact_acres: d.exactAcres ? Number(d.exactAcres) : null, override: d.override !== '' ? Math.round(Number(d.override)) : null }); setDraft(null); }} className="w-full text-xs font-semibold px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white">{rev ? 'Update' : 'Mark Reviewed'}</button>
+      <button type="button" onClick={() => { onSave(lead, { value, worth: worthNum, offer, profit, lean: d.lean, speed: d.speed, exact_acres: d.exactAcres ? Number(d.exactAcres) : null, override: d.override !== '' ? Math.round(Number(d.override)) : null }); setDraft(null); setEditing(false); }} className="w-full text-xs font-semibold px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white">{rev ? 'Update & lock' : 'Mark Reviewed'}</button>
     </div>
   );
 }
