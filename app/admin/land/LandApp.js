@@ -4234,6 +4234,37 @@ export default function LandLeadsAdminPage() {
                         <TeammateBadge lead={lead} />
                       </div>
 
+                      {/* DEAL VALUE (read-only): the VBB score fed to Google Ads,
+                          from LandPortal comps. value + profit + comp count, with an
+                          "est" flag when it's a fallback (no comp data). */}
+                      {(() => {
+                        const v = lead.form_data?.vbb;
+                        if (!v || v.value == null) return null;
+                        const val = Number(v.value) || 0;
+                        const cls = val >= 50000
+                          ? 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10'
+                          : val >= 15000
+                            ? 'text-amber-300 border-amber-500/40 bg-amber-500/10'
+                            : 'text-slate-300 border-slate-600/50 bg-slate-700/30';
+                        const fmt = (n) => '$' + Number(n || 0).toLocaleString();
+                        return (
+                          <div className={`mb-4 rounded-lg border px-3 py-2 ${cls}`} title={v.fallback ? `Estimated (no comp data): ${v.reason || ''}` : (v.reason === 'under_profit_floor' ? 'Under the $15k profit floor' : v.reason === 'below_acre_floor' ? 'Below the acreage floor' : 'From LandPortal sold comps')}>
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-bold uppercase tracking-wide opacity-70">Deal Value</span>
+                              {v.fallback
+                                ? <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-600/60 text-slate-200">est</span>
+                                : (val === 0 && <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-600/60 text-slate-300">no spread</span>)}
+                            </div>
+                            <div className="text-lg font-bold leading-tight">{fmt(val)}</div>
+                            <div className="text-[11px] opacity-75">
+                              {v.profit != null && <>profit {fmt(v.profit)}</>}
+                              {v.comps != null && <> · {v.comps} comps</>}
+                              {v.ppa != null && <> · {fmt(v.ppa)}/ac</>}
+                            </div>
+                          </div>
+                        );
+                      })()}
+
                       {/* Send to partner (Partners tab only) */}
                       {activeTab === 'partners' && (
                         <div className="mb-4">
