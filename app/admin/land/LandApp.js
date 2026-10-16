@@ -33,8 +33,10 @@ const phoneKey = (p) => (p || '').replace(/\D/g, '').slice(-10);
 // close chance (by lean) x resale speed. Anchored to the real ~4% contract rate. ----
 const VBB_PROFIT_CAP = 100000;
 const VBB_CLOSE_CHANCE = { hot: 0.15, ready: 0.15, warm: 0.07, cold: 0.03, '': 0.05 };
-const VBB_RESALE_SPEED = { fast: 1.25, normal: 1.0, slow: 0.75 };
-const vbbReviewedValue = ({ profit, lean, speed }) => {
+const VBB_RESALE_SPEED = { fast: 1.25, normal: 1.0, slow: 0.75, hard: 0.25 };
+const VBB_DEAD_STATUSES = ['DEAD', 'LOST', 'WE_PASSED'];
+const vbbReviewedValue = ({ profit, lean, speed, deadLost }) => {
+  if (deadLost) return 0; // Dead / Lost leads are worth nothing to Google
   const p = Math.min(Math.max(Number(profit) || 0, 0), VBB_PROFIT_CAP);
   const cc = VBB_CLOSE_CHANCE[String(lean || '').toLowerCase()] ?? VBB_CLOSE_CHANCE[''];
   const rs = VBB_RESALE_SPEED[String(speed || 'normal').toLowerCase()] ?? 1;
@@ -62,8 +64,9 @@ function ReviewPanel({ lead, onSave }) {
     value: rev?.value != null ? String(rev.value) : '',
   };
   const setD = (patch) => setDraft({ ...d, ...patch });
+  const deadLost = VBB_DEAD_STATUSES.includes(String(lead.pipeline_status || lead.status || '').toUpperCase());
   const profit = v ? vbbProfitFor(v, d.exactAcres) : 0;
-  const auto = vbbReviewedValue({ profit, lean: d.lean, speed: d.speed });
+  const auto = vbbReviewedValue({ profit, lean: d.lean, speed: d.speed, deadLost });
   const estColor = (n) => (n >= 25000 ? 'text-emerald-300' : n >= 8000 ? 'text-amber-300' : 'text-slate-200');
   const overridden = d.value !== '' && Number(d.value) !== auto;
   return (
@@ -83,7 +86,7 @@ function ReviewPanel({ lead, onSave }) {
           <button key={ln} type="button" onClick={() => setD({ lean: d.lean === ln ? '' : ln })} className={`text-[11px] px-2 py-1 rounded border ${d.lean === ln ? 'bg-blue-600/40 border-blue-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-300'}`}>{ln[0].toUpperCase() + ln.slice(1)}</button>
         ))}
         <select value={d.speed} onChange={(e) => setD({ speed: e.target.value })} className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white">
-          <option value="fast">Fast</option><option value="normal">Normal</option><option value="slow">Slow</option>
+          <option value="fast">Fast</option><option value="normal">Normal</option><option value="slow">Slow</option><option value="hard">Hard to sell</option>
         </select>
       </div>
       <div className="flex items-center gap-2">
@@ -93,7 +96,7 @@ function ReviewPanel({ lead, onSave }) {
         </div>
         <button type="button" onClick={() => { onSave(lead, { ...d, value: d.value !== '' ? d.value : String(auto) }); setDraft(null); }} className="text-xs font-semibold px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white whitespace-nowrap">{rev ? 'Update' : 'Mark Reviewed'}</button>
       </div>
-      <div className="text-[10px] text-slate-500 mt-1">auto = min(profit,$100k) × {Math.round((VBB_CLOSE_CHANCE[d.lean] ?? VBB_CLOSE_CHANCE['']) * 100)}% × {VBB_RESALE_SPEED[d.speed] ?? 1} = {fmt(auto)}{overridden ? ' · overridden' : ''}</div>
+      <div className="text-[10px] text-slate-500 mt-1">{deadLost ? 'Dead/Lost → $0' : <>auto = min(profit,$100k) × {Math.round((VBB_CLOSE_CHANCE[d.lean] ?? VBB_CLOSE_CHANCE['']) * 100)}% × {VBB_RESALE_SPEED[d.speed] ?? 1} = {fmt(auto)}</>}{overridden ? ' · overridden' : ''}</div>
     </div>
   );
 }
@@ -630,9 +633,10 @@ export default function LandLeadsAdminPage() {
   const saveReview = async (lead, draft) => {
     const v = lead.form_data?.vbb;
     const profit = vbbProfitFor(v, draft.exactAcres);
+    const deadLost = VBB_DEAD_STATUSES.includes(String(lead.pipeline_status || lead.status || '').toUpperCase());
     const value = (draft.value != null && draft.value !== '')
       ? Math.round(Number(draft.value))
-      : vbbReviewedValue({ profit, lean: draft.lean, speed: draft.speed });
+      : vbbReviewedValue({ profit, lean: draft.lean, speed: draft.speed, deadLost });
     const review = {
       value, lean: draft.lean || '', speed: draft.speed || 'normal',
       exact_acres: draft.exactAcres ? Number(draft.exactAcres) : null,
