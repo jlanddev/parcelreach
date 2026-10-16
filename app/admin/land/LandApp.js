@@ -28,6 +28,76 @@ const isConversationNote = (content) =>
 // Last 10 digits of a phone, the stable key for matching messages to leads.
 const phoneKey = (p) => (p || '').replace(/\D/g, '').slice(-10);
 
+// ---- Reviewed-value settings (editable defaults; feed Google as the conversion
+// value after a human reviews the lead). Reviewed Value = min(profit, $100k) x
+// close chance (by lean) x resale speed. Anchored to the real ~4% contract rate. ----
+const VBB_PROFIT_CAP = 100000;
+const VBB_CLOSE_CHANCE = { hot: 0.15, ready: 0.15, warm: 0.07, cold: 0.03, '': 0.05 };
+const VBB_RESALE_SPEED = { fast: 1.25, normal: 1.0, slow: 0.75 };
+const vbbReviewedValue = ({ profit, lean, speed }) => {
+  const p = Math.min(Math.max(Number(profit) || 0, 0), VBB_PROFIT_CAP);
+  const cc = VBB_CLOSE_CHANCE[String(lean || '').toLowerCase()] ?? VBB_CLOSE_CHANCE[''];
+  const rs = VBB_RESALE_SPEED[String(speed || 'normal').toLowerCase()] ?? 1;
+  return Math.round(p * cc * rs);
+};
+// Deal profit for a lead from its engine estimate + (optional) exact acres override.
+const vbbProfitFor = (v, exactAcres) => {
+  if (!v) return 0;
+  const acres = Number(exactAcres) > 0 ? Number(exactAcres) : null;
+  if (v.ppa && acres) return Math.round(v.ppa * acres * 0.5); // recompute from $/ac x real acres
+  return Number(v.profit) || 0;                                // else the engine's banded profit
+};
+
+// The Deal Value + review panel on a lead card: engine estimate, exact-acres /
+// lean / resale-speed inputs, the auto-computed reviewed value (editable), and
+// Mark Reviewed. Its own local state so typing never re-renders the whole board.
+function ReviewPanel({ lead, onSave }) {
+  const v = lead.form_data?.vbb;
+  const rev = lead.form_data?.review;
+  const fmt = (n) => '$' + Math.round(Number(n || 0)).toLocaleString();
+  const [draft, setDraft] = useState(null);
+  const d = draft || {
+    exactAcres: rev?.exact_acres != null ? String(rev.exact_acres) : '',
+    lean: rev?.lean || '', speed: rev?.speed || 'normal',
+    value: rev?.value != null ? String(rev.value) : '',
+  };
+  const setD = (patch) => setDraft({ ...d, ...patch });
+  const profit = v ? vbbProfitFor(v, d.exactAcres) : 0;
+  const auto = vbbReviewedValue({ profit, lean: d.lean, speed: d.speed });
+  const estColor = (n) => (n >= 25000 ? 'text-emerald-300' : n >= 8000 ? 'text-amber-300' : 'text-slate-200');
+  const overridden = d.value !== '' && Number(d.value) !== auto;
+  return (
+    <div className="mb-4 rounded-lg border border-slate-600/50 bg-slate-800/60 px-3 py-2.5">
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Deal Value{rev ? ' · Reviewed' : ''}</span>
+        {rev
+          ? <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300" title={`Reviewed by ${rev.reviewed_by || ''}`}>✓ {new Date(rev.reviewed_at).toLocaleDateString()}</span>
+          : (v?.fallback ? <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-slate-600/60 text-slate-200">est</span> : null)}
+      </div>
+      {!v
+        ? <div className="text-xs text-slate-500 mb-2">Estimating…</div>
+        : <div className="text-[11px] text-slate-400 mb-2">Engine: resale {fmt(v.resale)} · profit {fmt(v.profit)}{v.comps != null ? ` · ${v.comps} comps` : ''}{v.ppa ? ` · ${fmt(v.ppa)}/ac` : ''}{v.fallback ? ` · est (${v.reason})` : ''}</div>}
+      <div className="flex flex-wrap items-center gap-1.5 mb-2">
+        <input type="number" value={d.exactAcres} onChange={(e) => setD({ exactAcres: e.target.value })} placeholder="exact ac" className="w-20 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white" />
+        {['hot', 'warm', 'cold', 'ready'].map((ln) => (
+          <button key={ln} type="button" onClick={() => setD({ lean: d.lean === ln ? '' : ln })} className={`text-[11px] px-2 py-1 rounded border ${d.lean === ln ? 'bg-blue-600/40 border-blue-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-300'}`}>{ln[0].toUpperCase() + ln.slice(1)}</button>
+        ))}
+        <select value={d.speed} onChange={(e) => setD({ speed: e.target.value })} className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white">
+          <option value="fast">Fast</option><option value="normal">Normal</option><option value="slow">Slow</option>
+        </select>
+      </div>
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 flex-1 min-w-0">
+          <span className="text-slate-400 text-sm">$</span>
+          <input type="number" value={d.value} onChange={(e) => setD({ value: e.target.value })} placeholder={String(auto)} className={`w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm font-bold ${estColor(d.value !== '' ? Number(d.value) : auto)}`} />
+        </div>
+        <button type="button" onClick={() => { onSave(lead, { ...d, value: d.value !== '' ? d.value : String(auto) }); setDraft(null); }} className="text-xs font-semibold px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white whitespace-nowrap">{rev ? 'Update' : 'Mark Reviewed'}</button>
+      </div>
+      <div className="text-[10px] text-slate-500 mt-1">auto = min(profit,$100k) × {Math.round((VBB_CLOSE_CHANCE[d.lean] ?? VBB_CLOSE_CHANCE['']) * 100)}% × {VBB_RESALE_SPEED[d.speed] ?? 1} = {fmt(auto)}{overridden ? ' · overridden' : ''}</div>
+    </div>
+  );
+}
+
 // Short human label for a pipeline status, used in live stage-change alerts.
 const STAGE_LABEL_SHORT = (s) => ({
   NEW: 'New', CONTACTING: 'In Contact', CONTACTED: 'In Contact',
@@ -520,6 +590,64 @@ export default function LandLeadsAdminPage() {
   if (apptAlerted.current === null) {
     try { apptAlerted.current = new Set(JSON.parse(localStorage.getItem('pr_appt_alerted') || '[]')); } catch { apptAlerted.current = new Set(); }
   }
+
+  // ---- VBB reviewed-value system: auto-score leads, hold per-lead review drafts,
+  // and save the human-reviewed value that feeds Google. ----
+  const [reviewDraft, setReviewDraft] = useState({}); // leadId -> {exactAcres, lean, speed, value}
+  const [notReviewedOnly, setNotReviewedOnly] = useState(false);
+  const vbbScoredRef = useRef(new Set());
+
+  // Score a lead through the engine and merge the estimate onto it locally (also
+  // written to form_data.vbb server-side) so a new lead never shows up unvalued.
+  const autoScoreLead = async (lead) => {
+    if (!lead?.id || vbbScoredRef.current.has(lead.id)) return;
+    vbbScoredRef.current.add(lead.id);
+    try {
+      const res = await fetch('/api/google-vbb-handler', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          county: lead.property_county || lead.county,
+          state: lead.property_state || lead.state,
+          acres: lead.form_data?.acres || lead.acres,
+          isInherited: lead.form_data?.isInherited,
+          leadId: lead.id,
+        }),
+      });
+      const v = await res.json();
+      if (v && v.value != null) {
+        setRawLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, form_data: { ...(l.form_data || {}), vbb: v } } : l)));
+      }
+    } catch { /* leave unscored; retried next session */ }
+  };
+
+  // Background: any lead without an engine estimate gets one (a few at a time).
+  useEffect(() => {
+    const todo = (allLeads || []).filter((l) => l.id && !l.form_data?.vbb && !vbbScoredRef.current.has(l.id)).slice(0, 20);
+    todo.forEach((l, i) => setTimeout(() => autoScoreLead(l), i * 250));
+  }, [allLeads]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Save the human-reviewed value onto the lead (form_data.review).
+  const saveReview = async (lead, draft) => {
+    const v = lead.form_data?.vbb;
+    const profit = vbbProfitFor(v, draft.exactAcres);
+    const value = (draft.value != null && draft.value !== '')
+      ? Math.round(Number(draft.value))
+      : vbbReviewedValue({ profit, lean: draft.lean, speed: draft.speed });
+    const review = {
+      value, lean: draft.lean || '', speed: draft.speed || 'normal',
+      exact_acres: draft.exactAcres ? Number(draft.exactAcres) : null,
+      base_profit: profit, reviewed_at: new Date().toISOString(),
+      reviewed_by: currentUserName || currentUserId || null,
+    };
+    setRawLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, form_data: { ...(l.form_data || {}), review } } : l)));
+    setReviewDraft((d) => { const n = { ...d }; delete n[lead.id]; return n; });
+    try {
+      const { data: cur } = await supabase.from('leads').select('form_data').eq('id', lead.id).maybeSingle();
+      const fd = (cur && cur.form_data) || {};
+      await supabase.from('leads').update({ form_data: { ...fd, review } }).eq('id', lead.id);
+      showToast(`Reviewed: $${value.toLocaleString()}`, 'success', lead.full_name || lead.name);
+    } catch (e) { showToast('Could not save review', 'error'); }
+  };
   useEffect(() => {
     for (const { task, mins } of imminentAppts) {
       const key = `${task.id}:${new Date(task.due_at).getTime()}`; // re-alerts if rescheduled
@@ -1067,6 +1195,7 @@ export default function LandLeadsAdminPage() {
       if (s && s !== 'NEW') return false;
     }
     if (offerSetOnly && !l.offer_confirmed) return false;
+    if (notReviewedOnly && l.form_data?.review) return false; // hide leads whose value is already reviewed
     if (untouchedDays > 0) {
       // Measure from the last touch, or from when the lead arrived if never
       // touched, so a brand-new lead isn't counted as "untouched 7d+".
@@ -1089,6 +1218,9 @@ export default function LandLeadsAdminPage() {
         </button>
         <button onClick={() => setOfferSetOnly((v) => !v)} className={chip(offerSetOnly)} title="Has a locked offer">
           {offerSetOnly ? '✓ ' : ''}Offer set
+        </button>
+        <button onClick={() => setNotReviewedOnly((v) => !v)} className={chip(notReviewedOnly)} title="Deal value not yet reviewed/logged">
+          {notReviewedOnly ? '✓ ' : ''}Not reviewed
         </button>
         <select value={untouchedDays} onChange={(e) => setUntouchedDays(Number(e.target.value))} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500">
           <option value={0}>Any last touch</option>
@@ -4234,36 +4366,9 @@ export default function LandLeadsAdminPage() {
                         <TeammateBadge lead={lead} />
                       </div>
 
-                      {/* DEAL VALUE (read-only): the VBB score fed to Google Ads,
-                          from LandPortal comps. value + profit + comp count, with an
-                          "est" flag when it's a fallback (no comp data). */}
-                      {(() => {
-                        const v = lead.form_data?.vbb;
-                        if (!v || v.value == null) return null;
-                        const val = Number(v.value) || 0;
-                        const cls = val >= 50000
-                          ? 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10'
-                          : val >= 15000
-                            ? 'text-amber-300 border-amber-500/40 bg-amber-500/10'
-                            : 'text-slate-300 border-slate-600/50 bg-slate-700/30';
-                        const fmt = (n) => '$' + Number(n || 0).toLocaleString();
-                        return (
-                          <div className={`mb-4 rounded-lg border px-3 py-2 ${cls}`} title={v.fallback ? `Estimated (no comp data): ${v.reason || ''}` : (v.reason === 'under_profit_floor' ? 'Under the $15k profit floor' : v.reason === 'below_acre_floor' ? 'Below the acreage floor' : 'From LandPortal sold comps')}>
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] font-bold uppercase tracking-wide opacity-70">Deal Value</span>
-                              {v.fallback
-                                ? <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-600/60 text-slate-200">est</span>
-                                : (val === 0 && <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-600/60 text-slate-300">no spread</span>)}
-                            </div>
-                            <div className="text-lg font-bold leading-tight">{fmt(val)}</div>
-                            <div className="text-[11px] opacity-75">
-                              {v.profit != null && <>profit {fmt(v.profit)}</>}
-                              {v.comps != null && <> · {v.comps} comps</>}
-                              {v.ppa != null && <> · {fmt(v.ppa)}/ac</>}
-                            </div>
-                          </div>
-                        );
-                      })()}
+                      {/* DEAL VALUE + REVIEW: engine estimate (auto-scored) + the human
+                          reviewed value that feeds Google. */}
+                      <ReviewPanel lead={lead} onSave={saveReview} />
 
                       {/* Send to partner (Partners tab only) */}
                       {activeTab === 'partners' && (
