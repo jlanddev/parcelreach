@@ -17,6 +17,10 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 const REVIEW_DELAY_MS = 30 * 60 * 1000; // hold 30 min after review before sending
+const CONTRACT_STATUSES = ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'];
+const CONTRACT_RATIO = 0.75;            // est. chance a signed contract closes
+const PROFIT_CAP = 100000;
+const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000; // Google click/match window
 
 function authed(req) {
   const s = process.env.CAMPAIGN_RUN_SECRET;
@@ -44,61 +48,83 @@ async function handle(req) {
   if (!authed(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   const dry = new URL(req.url).searchParams.get('dry') === '1';
   const sb = supabaseAdmin();
-  const cutoff = Date.now() - REVIEW_DELAY_MS;
+  const now = Date.now();
+  const cutoff = now - REVIEW_DELAY_MS;
 
+  // Leads needing a Reviewed-Lead upload (have a review) OR a Contract-Signed upload
+  // (reached a signed-contract status — includes the historical contracts).
   let leads = [];
   for (let f = 0; ; f += 1000) {
-    const { data } = await sb.from('leads').select('id, email, phone, gclid, gbraid, wbraid, form_data')
-      .not('form_data->review', 'is', null).range(f, f + 999);
+    const { data } = await sb.from('leads')
+      .select('id, email, phone, gclid, gbraid, wbraid, pipeline_status, status, last_activity_at, updated_at, created_at, form_data')
+      .or('form_data->review.not.is.null,pipeline_status.in.(AGREEMENT_SENT,UNDER_CONTRACT,CLOSED)')
+      .range(f, f + 999);
     if (!data || !data.length) break;
     leads = leads.concat(data);
     if (data.length < 1000) break;
   }
 
-  const newConv = [], adjust = []; let tooRecent = 0, alreadySent = 0;
+  const ids = (l) => ({ gclid: l.form_data?.gclid || l.gclid || null, gbraid: l.form_data?.gbraid || l.gbraid || null, wbraid: l.form_data?.wbraid || l.wbraid || null });
+  const hashed = (l) => ({ email_sha256: l.email ? sha256(normEmail(l.email)) : null, phone_sha256: normPhone(l.phone) ? sha256(normPhone(l.phone)) : null });
+  const matchable = (c) => !!(c.gclid || c.gbraid || c.wbraid || c.email_sha256 || c.phone_sha256);
+
+  const reviewNew = [], reviewAdj = []; let reviewHeld = 0, reviewUnchanged = 0;
+  const contractNew = [], contractAdj = []; let contractUnmatchable = 0, contractUnchanged = 0, contractOutsideWindow = 0;
+
   for (const l of leads) {
+    // Reviewed Lead (transaction_id = lead ID; 30-min hold; edits -> restatement)
     const r = l.form_data?.review;
-    if (!r) continue;
-    if (new Date(r.reviewed_at || 0).getTime() > cutoff) { tooRecent++; continue; } // 30-min hold
-    const fd = l.form_data || {};
-    const base = {
-      transaction_id: l.id,                              // lead ID -> Google dedupes repeats
-      value: Number(r.value) || 0,
-      time: r.reviewed_at,
-      gclid: fd.gclid || l.gclid || null,
-      gbraid: fd.gbraid || l.gbraid || null,
-      wbraid: fd.wbraid || l.wbraid || null,
-      email_sha256: l.email ? sha256(normEmail(l.email)) : null,
-      phone_sha256: normPhone(l.phone) ? sha256(normPhone(l.phone)) : null,
-    };
-    if (!r.sent_at) newConv.push(base);
-    else if (Number(r.sent_value) !== Number(r.value)) adjust.push({ ...base, restatement: true });
-    else alreadySent++;
+    if (r && r.value != null) {
+      if (new Date(r.reviewed_at || 0).getTime() > cutoff) reviewHeld++;
+      else {
+        const base = { action: 'Reviewed Lead', transaction_id: l.id, value: Number(r.value) || 0, time: r.reviewed_at, ...ids(l), ...hashed(l) };
+        if (!r.sent_at) reviewNew.push(base);
+        else if (Number(r.sent_value) !== Number(r.value)) reviewAdj.push({ ...base, restatement: true });
+        else reviewUnchanged++;
+      }
+    }
+    // Contract Signed (value = min(profit,$100k) x 75%; order id = leadId-contract)
+    if (CONTRACT_STATUSES.includes(String(l.pipeline_status || l.status || '').toUpperCase())) {
+      const o = l.form_data?.outcomes || {};
+      const whenStr = o.UNDER_CONTRACT?.at || o.AGREEMENT_SENT?.at || o.CLOSED?.at || l.last_activity_at || l.updated_at || l.created_at;
+      const when = new Date(whenStr || 0).getTime();
+      if (!when || when < now - NINETY_DAYS_MS) { contractOutsideWindow++; } // Google won't match older than the window
+      else {
+        const prof = Number(l.form_data?.review?.base_profit ?? l.form_data?.vbb?.profit ?? 0);
+        const cval = Math.round(Math.min(Math.max(prof, 0), PROFIT_CAP) * CONTRACT_RATIO);
+        const cu = l.form_data?.contract_upload || {};
+        const base = { action: 'Contract Signed', transaction_id: `${l.id}-contract`, lead_id: l.id, value: cval, time: new Date(when).toISOString(), ...ids(l), ...hashed(l) };
+        if (!matchable(base)) contractUnmatchable++;       // no gclid AND no hashed PII -> Google can't match (the old 13 w/o gclid)
+        else if (!cu.sent_at) contractNew.push(base);
+        else if (Number(cu.sent_value) !== cval) contractAdj.push({ ...base, restatement: true });
+        else contractUnchanged++;
+      }
+    }
   }
 
   if (dry) {
     return NextResponse.json({
       ok: true, dry: true,
-      newConversions: newConv.length, adjustments: adjust.length,
-      heldUnder30min: tooRecent, alreadySentUnchanged: alreadySent,
-      sampleNew: newConv.slice(0, 5).map((c) => ({ id: c.transaction_id, value: c.value, hasGclid: !!(c.gclid || c.gbraid || c.wbraid) })),
-      sampleAdjustments: adjust.slice(0, 5).map((c) => ({ id: c.transaction_id, newValue: c.value })),
+      reviewedLead: { new: reviewNew.length, adjustments: reviewAdj.length, heldUnder30min: reviewHeld, unchanged: reviewUnchanged },
+      contractSigned: { new: contractNew.length, adjustments: contractAdj.length, unmatchable_no_gclid_or_pii: contractUnmatchable, unchanged: contractUnchanged, outsideWindow: contractOutsideWindow },
+      sampleContract: contractNew.slice(0, 8).map((c) => ({ leadId: c.lead_id, value: c.value, hasClickId: !!(c.gclid || c.gbraid || c.wbraid), hasHashedPII: !!(c.email_sha256 || c.phone_sha256) })),
     });
   }
 
   let result;
-  try { result = await uploadToGoogle(newConv, adjust); }
+  try { result = await uploadToGoogle(reviewNew, reviewAdj, contractNew, contractAdj); }
   catch (e) {
-    return NextResponse.json({ ok: false, error: e.message, wouldSend: { newConversions: newConv.length, adjustments: adjust.length } });
+    return NextResponse.json({ ok: false, error: e.message, wouldSend: { reviewedNew: reviewNew.length, reviewedAdj: reviewAdj.length, contractNew: contractNew.length, contractAdj: contractAdj.length } });
   }
 
-  // Mark each lead sent (so it isn't re-sent; an edit later shows as value != sent_value -> adjustment).
   const nowIso = new Date().toISOString();
-  for (const c of [...newConv, ...adjust]) {
-    const l = leads.find((x) => x.id === c.transaction_id);
-    const fd = l?.form_data || {};
-    await sb.from('leads').update({ form_data: { ...fd, review: { ...fd.review, sent_at: nowIso, sent_value: c.value } } })
-      .eq('id', c.transaction_id).then(() => {}, () => {});
+  for (const c of [...reviewNew, ...reviewAdj]) {
+    const l = leads.find((x) => x.id === c.transaction_id); const fd = l?.form_data || {};
+    await sb.from('leads').update({ form_data: { ...fd, review: { ...fd.review, sent_at: nowIso, sent_value: c.value } } }).eq('id', c.transaction_id).then(() => {}, () => {});
+  }
+  for (const c of [...contractNew, ...contractAdj]) {
+    const l = leads.find((x) => x.id === c.lead_id); const fd = l?.form_data || {};
+    await sb.from('leads').update({ form_data: { ...fd, contract_upload: { sent_at: nowIso, sent_value: c.value } } }).eq('id', c.lead_id).then(() => {}, () => {});
   }
   return NextResponse.json({ ok: true, ...result });
 }

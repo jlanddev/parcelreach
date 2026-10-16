@@ -56,19 +56,30 @@ const vbbProfitFor = (v, exactAcres) => {
 function ReviewPanel({ lead, onSave }) {
   const v = lead.form_data?.vbb;
   const rev = lead.form_data?.review;
+  const offer = Number(lead.offer_amount) || 0;
+  const deadLost = VBB_DEAD_STATUSES.includes(String(lead.pipeline_status || lead.status || '').toUpperCase());
   const fmt = (n) => '$' + Math.round(Number(n || 0)).toLocaleString();
   const [draft, setDraft] = useState(null);
   const d = draft || {
+    worth: rev?.worth != null ? String(rev.worth) : (v?.resale != null ? String(v.resale) : ''),
     exactAcres: rev?.exact_acres != null ? String(rev.exact_acres) : '',
     lean: rev?.lean || '', speed: rev?.speed || 'normal',
-    value: rev?.value != null ? String(rev.value) : '',
+    override: rev?.override != null ? String(rev.override) : '',
+    worthEdited: false, showOverride: false,
   };
   const setD = (patch) => setDraft({ ...d, ...patch });
-  const deadLost = VBB_DEAD_STATUSES.includes(String(lead.pipeline_status || lead.status || '').toUpperCase());
-  const profit = v ? vbbProfitFor(v, d.exactAcres) : 0;
+  const worthNum = Number(d.worth) || 0;
+  // Profit = worth − offer (if the card's Offer is filled), else worth × 50%.
+  const profit = offer > 0 ? Math.max(0, worthNum - offer) : Math.round(worthNum * 0.5);
   const auto = vbbReviewedValue({ profit, lean: d.lean, speed: d.speed, deadLost });
-  const estColor = (n) => (n >= 25000 ? 'text-emerald-300' : n >= 8000 ? 'text-amber-300' : 'text-slate-200');
-  const overridden = d.value !== '' && Number(d.value) !== auto;
+  const value = d.override !== '' ? Math.round(Number(d.override)) : auto;
+  const ccPct = Math.round((VBB_CLOSE_CHANCE[d.lean] ?? VBB_CLOSE_CHANCE['']) * 100);
+  const rs = VBB_RESALE_SPEED[d.speed] ?? 1;
+  // Exact acres recomputes "worth" from $/ac — unless the rep typed worth manually.
+  const onAcres = (val) => {
+    const nw = (!d.worthEdited && v?.ppa && Number(val) > 0) ? String(Math.round(v.ppa * Number(val))) : d.worth;
+    setD({ exactAcres: val, worth: nw });
+  };
   return (
     <div className="mb-4 rounded-lg border border-slate-600/50 bg-slate-800/60 px-3 py-2.5">
       <div className="flex items-center justify-between mb-1.5">
@@ -77,11 +88,13 @@ function ReviewPanel({ lead, onSave }) {
           ? <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300" title={`Reviewed by ${rev.reviewed_by || ''}`}>✓ {new Date(rev.reviewed_at).toLocaleDateString()}</span>
           : (v?.fallback ? <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-slate-600/60 text-slate-200">est</span> : null)}
       </div>
-      {!v
-        ? <div className="text-xs text-slate-500 mb-2">Estimating…</div>
-        : <div className="text-[11px] text-slate-400 mb-2">Engine: resale {fmt(v.resale)} · profit {fmt(v.profit)}{v.comps != null ? ` · ${v.comps} comps` : ''}{v.ppa ? ` · ${fmt(v.ppa)}/ac` : ''}{v.fallback ? ` · est (${v.reason})` : ''}</div>}
+      <label className="block text-[11px] text-slate-400 mb-1">What’s it worth? (resale ${v?.ppa ? ` · comps ${fmt(v.ppa)}/ac` : ''})</label>
+      <div className="flex items-center gap-1 mb-2">
+        <span className="text-slate-400 text-sm">$</span>
+        <input type="number" value={d.worth} onChange={(e) => setD({ worth: e.target.value, worthEdited: true })} placeholder={v?.resale != null ? String(v.resale) : (v ? 'resale' : 'estimating…')} className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm font-bold text-white" />
+      </div>
       <div className="flex flex-wrap items-center gap-1.5 mb-2">
-        <input type="number" value={d.exactAcres} onChange={(e) => setD({ exactAcres: e.target.value })} placeholder="exact ac" className="w-20 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white" />
+        <input type="number" value={d.exactAcres} onChange={(e) => onAcres(e.target.value)} placeholder="exact ac" className="w-20 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white" />
         {['hot', 'warm', 'cold', 'ready'].map((ln) => (
           <button key={ln} type="button" onClick={() => setD({ lean: d.lean === ln ? '' : ln })} className={`text-[11px] px-2 py-1 rounded border ${d.lean === ln ? 'bg-blue-600/40 border-blue-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-300'}`}>{ln[0].toUpperCase() + ln.slice(1)}</button>
         ))}
@@ -89,14 +102,21 @@ function ReviewPanel({ lead, onSave }) {
           <option value="fast">Fast</option><option value="normal">Normal</option><option value="slow">Slow</option><option value="hard">Hard to sell</option>
         </select>
       </div>
-      <div className="flex items-center gap-2">
-        <div className="flex items-center gap-1 flex-1 min-w-0">
-          <span className="text-slate-400 text-sm">$</span>
-          <input type="number" value={d.value} onChange={(e) => setD({ value: e.target.value })} placeholder={String(auto)} className={`w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm font-bold ${estColor(d.value !== '' ? Number(d.value) : auto)}`} />
-        </div>
-        <button type="button" onClick={() => { onSave(lead, { ...d, value: d.value !== '' ? d.value : String(auto) }); setDraft(null); }} className="text-xs font-semibold px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white whitespace-nowrap">{rev ? 'Update' : 'Mark Reviewed'}</button>
+      <div className="text-[11px] mb-0.5">
+        {deadLost
+          ? <span className="font-bold text-slate-300">Sends to Google: $0 · Dead/Lost</span>
+          : <><span className="font-bold text-emerald-300">Sends to Google: {fmt(value)}</span><span className="text-slate-500"> = {fmt(Math.min(profit, VBB_PROFIT_CAP))} × {ccPct}% × {rs}</span>{d.override !== '' && <span className="text-amber-300"> · override</span>}</>}
+        {!deadLost && d.override === '' && !d.showOverride && <> · <button type="button" onClick={() => setD({ showOverride: true })} className="text-blue-400 hover:underline">override</button></>}
       </div>
-      <div className="text-[10px] text-slate-500 mt-1">{deadLost ? 'Dead/Lost → $0' : <>auto = min(profit,$100k) × {Math.round((VBB_CLOSE_CHANCE[d.lean] ?? VBB_CLOSE_CHANCE['']) * 100)}% × {VBB_RESALE_SPEED[d.speed] ?? 1} = {fmt(auto)}</>}{overridden ? ' · overridden' : ''}</div>
+      <div className="text-[10px] text-slate-500 mb-2">profit = {offer > 0 ? `worth − offer (${fmt(offer)})` : 'worth × 50%'} = {fmt(profit)}</div>
+      {(d.showOverride || d.override !== '') && (
+        <div className="flex items-center gap-1 mb-2">
+          <span className="text-slate-400 text-xs">override $</span>
+          <input type="number" value={d.override} onChange={(e) => setD({ override: e.target.value })} placeholder={String(auto)} className="w-28 bg-slate-900 border border-amber-600/50 rounded px-2 py-1 text-xs text-white" />
+          {d.override !== '' && <button type="button" onClick={() => setD({ override: '', showOverride: false })} className="text-[10px] text-slate-400 hover:underline">clear</button>}
+        </div>
+      )}
+      <button type="button" onClick={() => { onSave(lead, { value, worth: worthNum, offer, profit, lean: d.lean, speed: d.speed, exact_acres: d.exactAcres ? Number(d.exactAcres) : null, override: d.override !== '' ? Math.round(Number(d.override)) : null }); setDraft(null); }} className="w-full text-xs font-semibold px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white">{rev ? 'Update' : 'Mark Reviewed'}</button>
     </div>
   );
 }
@@ -596,7 +616,6 @@ export default function LandLeadsAdminPage() {
 
   // ---- VBB reviewed-value system: auto-score leads, hold per-lead review drafts,
   // and save the human-reviewed value that feeds Google. ----
-  const [reviewDraft, setReviewDraft] = useState({}); // leadId -> {exactAcres, lean, speed, value}
   const [notReviewedOnly, setNotReviewedOnly] = useState(false);
   const vbbScoredRef = useRef(new Set());
 
@@ -629,27 +648,20 @@ export default function LandLeadsAdminPage() {
     todo.forEach((l, i) => setTimeout(() => autoScoreLead(l), i * 250));
   }, [allLeads]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Save the human-reviewed value onto the lead (form_data.review).
-  const saveReview = async (lead, draft) => {
-    const v = lead.form_data?.vbb;
-    const profit = vbbProfitFor(v, draft.exactAcres);
-    const deadLost = VBB_DEAD_STATUSES.includes(String(lead.pipeline_status || lead.status || '').toUpperCase());
-    const value = (draft.value != null && draft.value !== '')
-      ? Math.round(Number(draft.value))
-      : vbbReviewedValue({ profit, lean: draft.lean, speed: draft.speed, deadLost });
-    const review = {
-      value, lean: draft.lean || '', speed: draft.speed || 'normal',
-      exact_acres: draft.exactAcres ? Number(draft.exactAcres) : null,
-      base_profit: profit, reviewed_at: new Date().toISOString(),
+  // Persist the human-reviewed value onto the lead (form_data.review). The panel does
+  // all the math and passes the finished review object.
+  const saveReview = async (lead, review) => {
+    const full = {
+      ...review, base_profit: review.profit,
+      reviewed_at: new Date().toISOString(),
       reviewed_by: currentUserName || currentUserId || null,
     };
-    setRawLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, form_data: { ...(l.form_data || {}), review } } : l)));
-    setReviewDraft((d) => { const n = { ...d }; delete n[lead.id]; return n; });
+    setRawLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, form_data: { ...(l.form_data || {}), review: full } } : l)));
     try {
       const { data: cur } = await supabase.from('leads').select('form_data').eq('id', lead.id).maybeSingle();
       const fd = (cur && cur.form_data) || {};
-      await supabase.from('leads').update({ form_data: { ...fd, review } }).eq('id', lead.id);
-      showToast(`Reviewed: $${value.toLocaleString()}`, 'success', lead.full_name || lead.name);
+      await supabase.from('leads').update({ form_data: { ...fd, review: full } }).eq('id', lead.id);
+      showToast(`Reviewed: $${(review.value || 0).toLocaleString()}`, 'success', lead.full_name || lead.name);
     } catch (e) { showToast('Could not save review', 'error'); }
   };
   useEffect(() => {
