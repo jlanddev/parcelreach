@@ -36,24 +36,28 @@ async function handle(req) {
       if (data.length < 1000) break;
     }
     const recs = rows.map((r) => r.form_data?.vbb).filter(Boolean);
+    const med = (arr) => { const a = arr.slice().sort((x, y) => x - y); return a.length ? (a.length % 2 ? a[(a.length - 1) / 2] : Math.round((a[a.length / 2 - 1] + a[a.length / 2]) / 2)) : null; };
     const vals = recs.map((v) => Number(v.value)).filter((n) => Number.isFinite(n));
-    const med = (arr) => arr.length ? (arr.length % 2 ? arr[(arr.length - 1) / 2] : Math.round((arr[arr.length / 2 - 1] + arr[arr.length / 2]) / 2)) : null;
-    const all = vals.slice().sort((a, b) => a - b);
-    const positive = vals.filter((n) => n > 1).sort((a, b) => a - b); // real deal scores (exclude $0/$1)
+    // Real-deal median = comp-based scores only (NOT fallbacks, value > 0) — this is
+    // what anchors the discounted/unknown fallback tiers.
+    const realDeal = recs.filter((v) => !v.fallback && Number(v.value) > 0).map((v) => Number(v.value));
     const fallbackCount = recs.filter((v) => v.fallback).length;
     const zeroCount = recs.filter((v) => Number(v.value) === 0).length;
+    const byTier = {}; const byReason = {};
+    recs.forEach((v) => { byTier[v.tier || '?'] = (byTier[v.tier || '?'] || 0) + 1; byReason[v.reason || '?'] = (byReason[v.reason || '?'] || 0) + 1; });
     return NextResponse.json({
       scored: recs.length,
       fallbackCount,
       fallbackPct: recs.length ? Math.round((1000 * fallbackCount) / recs.length) / 10 : 0,
       zeroCount,
-      positiveCount: positive.length,
-      medianAll: med(all),
-      medianPositive: med(positive),
+      realDealCount: realDeal.length,
+      medianRealDeal: med(realDeal),
+      medianAll: med(vals),
+      byTier, byReason,
       distribution: {
         zero: zeroCount,
-        under10k: vals.filter((n) => n > 1 && n < 10000).length,
-        k10_50: vals.filter((n) => n >= 10000 && n < 50000).length,
+        under15k: vals.filter((n) => n > 0 && n < 15000).length,
+        k15_50: vals.filter((n) => n >= 15000 && n < 50000).length,
         k50_100: vals.filter((n) => n >= 50000 && n < 100000).length,
         over100k: vals.filter((n) => n >= 100000).length,
       },
