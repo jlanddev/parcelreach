@@ -32,7 +32,7 @@ const phoneKey = (p) => (p || '').replace(/\D/g, '').slice(-10);
 // value after a human reviews the lead). Reviewed Value = min(profit, $100k) x
 // close chance (by lean) x resale speed. Anchored to the real ~4% contract rate. ----
 const VBB_PROFIT_CAP = 100000;
-const VBB_CLOSE_CHANCE = { hot: 0.15, ready: 0.15, warm: 0.07, cold: 0.03, '': 0.05 };
+const VBB_CLOSE_CHANCE = { hot: 0.09, ready: 0.09, warm: 0.04, cold: 0.02, '': 0.03 }; // real ~2-3% contract rate; editable
 const VBB_RESALE_SPEED = { fast: 1.25, normal: 1.0, slow: 0.75, hard: 0.25 };
 const VBB_DEAD_STATUSES = ['DEAD', 'LOST', 'WE_PASSED'];
 const vbbReviewedValue = ({ profit, lean, speed, deadLost }) => {
@@ -2347,6 +2347,21 @@ export default function LandLeadsAdminPage() {
 
     console.log('Status updated successfully to:', newStatus);
     showToast(`Status: ${newStatus}`, 'success', leadName);
+
+    // Stamp an outcome timestamp (+ the lean at that moment) the FIRST time a lead
+    // reaches a Signed-Contract / Closed status, so real close rates per lean tag can
+    // be computed later. Best-effort; merged into form_data.outcomes.
+    if (['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(newStatus)) {
+      try {
+        const { data: cur } = await supabase.from('leads').select('form_data').eq('id', leadId).maybeSingle();
+        const fd = (cur && cur.form_data) || {};
+        const outcomes = fd.outcomes || {};
+        if (!outcomes[newStatus]) {
+          outcomes[newStatus] = { at: new Date().toISOString(), lean: fd.review?.lean || null };
+          await supabase.from('leads').update({ form_data: { ...fd, outcomes } }).eq('id', leadId);
+        }
+      } catch (e) { /* non-fatal */ }
+    }
 
     // Status change always clears hammer mode, hammering is meant to push toward the
     // next status, so once that lands the mode resets.
