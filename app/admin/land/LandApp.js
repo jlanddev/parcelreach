@@ -5160,10 +5160,10 @@ export default function LandLeadsAdminPage() {
             const MAIN_TABS = ['ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent', 'campaigns'];
             const hasOffer = (l) => l.offer_amount != null && Number(l.offer_amount) !== 0;
             const overflow = isAdmin
-              ? ['shared-calendar', 'follow-up', 'lost', 'activity-log', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search', 'investors']
+              ? ['vbb-queue', 'shared-calendar', 'follow-up', 'lost', 'activity-log', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search', 'investors']
               : ['shared-calendar', 'follow-up', 'lost', 'subdivision-inflow', 'all-leads', 'investors'];
             const up = (l) => (l.pipeline_status || l.status || '').toUpperCase();
-            const labelFor = (tab) => tab === 'needs-touch' ? 'Needs a Touch' : tab === 'ppc-inflow' ? 'PPC Inflow' : tab === 'appointment-set' ? 'Mapped & Appointment Set' : tab === 'offer-curated' ? 'Offer Curated' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Signed Contracts' : tab === 'om-search' ? 'OM Search' : tab === 'campaigns' ? 'Follow-Up Campaigns' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab === 'investors' ? 'Investors' : tab === 'organizations' ? 'Organizations' : tab === 'unassigned' ? 'Unassigned' : tab === 'create-lead' ? 'Create Lead' : tab === 'all-leads' ? 'All Leads' : tab.replace('-', ' ');
+            const labelFor = (tab) => tab === 'vbb-queue' ? 'Google Upload Queue' : tab === 'needs-touch' ? 'Needs a Touch' : tab === 'ppc-inflow' ? 'PPC Inflow' : tab === 'appointment-set' ? 'Mapped & Appointment Set' : tab === 'offer-curated' ? 'Offer Curated' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Signed Contracts' : tab === 'om-search' ? 'OM Search' : tab === 'campaigns' ? 'Follow-Up Campaigns' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab === 'investors' ? 'Investors' : tab === 'organizations' ? 'Organizations' : tab === 'unassigned' ? 'Unassigned' : tab === 'create-lead' ? 'Create Lead' : tab === 'all-leads' ? 'All Leads' : tab.replace('-', ' ');
             const countFor = (tab) => {
               if (tab === 'needs-touch') { const n = needsTouchLeads().length; return n ? ` (${n})` : ''; }
               if (tab === 'unassigned') return ` (${unassignedLeads.length})`;
@@ -5950,6 +5950,72 @@ export default function LandLeadsAdminPage() {
             </div>
           </div>
         )}
+
+        {/* GOOGLE UPLOAD QUEUE TAB — what the hourly uploader will send (computed from
+            the same rules: 30-min hold on reviews, contracts in the 90-day window). */}
+        {activeTab === 'vbb-queue' && isAdmin && (() => {
+          const now = Date.now();
+          const HOLD = 30 * 60 * 1000, WINDOW = 90 * 24 * 60 * 60 * 1000;
+          const CONTRACT = ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'];
+          const fmt = (n) => '$' + Math.round(Number(n || 0)).toLocaleString();
+          const reviewed = { held: 0, ready: [], sent: 0 };
+          const contracts = { ready: [], sent: 0, unmatchable: 0, outside: 0 };
+          for (const l of (allLeads || [])) {
+            const r = l.form_data?.review;
+            if (r && r.value != null) {
+              if (new Date(r.reviewed_at || 0).getTime() > now - HOLD) reviewed.held++;
+              else if (!r.sent_at || Number(r.sent_value) !== Number(r.value)) reviewed.ready.push(l);
+              else reviewed.sent++;
+            }
+            if (CONTRACT.includes(String(l.pipeline_status || l.status || '').toUpperCase())) {
+              const o = l.form_data?.outcomes || {};
+              const whenStr = o.UNDER_CONTRACT?.at || o.AGREEMENT_SENT?.at || o.CLOSED?.at || l.last_activity_at || l.updated_at || l.created_at;
+              const when = new Date(whenStr || 0).getTime();
+              const hasClick = !!(l.form_data?.gclid || l.gclid);
+              const hasPII = !!(l.email || l.phone);
+              if (!when || when < now - WINDOW) contracts.outside++;
+              else if (!hasClick && !hasPII) contracts.unmatchable++;
+              else {
+                const cu = l.form_data?.contract_upload || {};
+                const prof = Number(l.form_data?.review?.base_profit ?? l.form_data?.vbb?.profit ?? 0);
+                const cval = Math.round(Math.min(Math.max(prof, 0), 100000) * 0.75);
+                if (!cu.sent_at || Number(cu.sent_value) !== cval) contracts.ready.push({ l, cval, via: hasClick ? 'gclid' : 'hashed PII' });
+                else contracts.sent++;
+              }
+            }
+          }
+          const card = (label, n, color) => (<div className={`rounded-xl border px-4 py-3 ${color}`}><div className="text-3xl font-bold">{n}</div><div className="text-[11px] uppercase tracking-wide opacity-70 mt-0.5">{label}</div></div>);
+          const row = (l, val, meta) => (<button key={l.id} onClick={() => navigateToLeadCard(l)} className="w-full text-left px-4 py-2 hover:bg-slate-700/40 flex items-center justify-between gap-3 border-b border-slate-700/40"><span className="text-sm text-white truncate flex-1">{l.full_name || l.name || 'Lead'}</span><span className="text-[11px] text-slate-500 flex-shrink-0">{meta}</span><span className="text-sm font-bold text-emerald-300 flex-shrink-0 w-24 text-right">{fmt(val)}</span></button>);
+          return (
+            <div className="space-y-6">
+              <div className="bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-xl p-6">
+                <h2 className="text-2xl font-bold text-white">Google Upload Queue</h2>
+                <p className="text-slate-400 text-sm mt-1">What the hourly uploader will send to Google Ads. Reviewed values wait 30 min before going out (so you can still fix one); a value edited after it's sent goes up as an adjustment. Nothing actually sends until the Data Manager API is connected.</p>
+              </div>
+              <div>
+                <div className="text-sm font-bold text-slate-300 mb-2">Reviewed Lead</div>
+                <div className="grid grid-cols-3 gap-3 mb-3">
+                  {card('Ready to send', reviewed.ready.length, 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200')}
+                  {card('Held (<30 min)', reviewed.held, 'border-amber-500/40 bg-amber-500/10 text-amber-200')}
+                  {card('Already sent', reviewed.sent, 'border-slate-600/50 bg-slate-800/60 text-slate-300')}
+                </div>
+                {reviewed.ready.length > 0
+                  ? <div className="bg-slate-800/50 border border-slate-700 rounded-xl overflow-hidden max-h-80 overflow-y-auto">{reviewed.ready.slice(0, 60).map((l) => row(l, l.form_data.review.value, l.form_data.review.sent_at ? 'edited → adjust' : 'new'))}</div>
+                  : <div className="text-sm text-slate-500 px-1">Nothing queued — reviewed leads show here 30 min after Mark Reviewed.</div>}
+              </div>
+              <div>
+                <div className="text-sm font-bold text-slate-300 mb-2">Contract Signed <span className="text-slate-500 font-normal">· value = profit × 75%</span></div>
+                <div className="grid grid-cols-4 gap-3 mb-3">
+                  {card('Ready to send', contracts.ready.length, 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200')}
+                  {card('Already sent', contracts.sent, 'border-slate-600/50 bg-slate-800/60 text-slate-300')}
+                  {card('No gclid / PII', contracts.unmatchable, 'border-slate-600/50 bg-slate-800/60 text-slate-400')}
+                  {card('> 90 days', contracts.outside, 'border-slate-600/50 bg-slate-800/60 text-slate-400')}
+                </div>
+                {contracts.ready.length > 0 && <div className="bg-slate-800/50 border border-slate-700 rounded-xl overflow-hidden max-h-80 overflow-y-auto">{contracts.ready.slice(0, 60).map(({ l, cval, via }) => row(l, cval, via))}</div>}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* PPC INFLOW TAB */}
         {activeTab === 'activity-log' && isAdmin && (() => {
