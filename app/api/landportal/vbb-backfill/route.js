@@ -73,7 +73,7 @@ async function handle(req) {
     .select('id, county, property_county, state, property_state, acres, form_data')
     .order('county', { ascending: true })
     .limit(150);
-  if (!force) q = q.is('form_data->vbb', null);
+  if (!force) q = q.is('form_data->vbb->>tier', null);
   q = NOT_TEST(q);
   const { data: leads } = await q;
 
@@ -99,7 +99,7 @@ async function handle(req) {
 
   let remaining = null;
   try {
-    const { count } = await NOT_TEST(sb.from('leads').select('id', { count: 'exact', head: true }).is('form_data->vbb', null));
+    const { count } = await NOT_TEST(sb.from('leads').select('id', { count: 'exact', head: true }).is('form_data->vbb->>tier', null));
     remaining = count ?? null;
   } catch { /* ignore */ }
 
