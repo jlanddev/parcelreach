@@ -617,6 +617,8 @@ export default function LandLeadsAdminPage() {
   // ---- VBB reviewed-value system: auto-score leads, hold per-lead review drafts,
   // and save the human-reviewed value that feeds Google. ----
   const [notReviewedOnly, setNotReviewedOnly] = useState(false);
+  const [queueReviewedView, setQueueReviewedView] = useState('ready'); // ready|held|sent
+  const [queueContractView, setQueueContractView] = useState('ready'); // ready|sent|unmatchable|outside
   const vbbScoredRef = useRef(new Set());
 
   // Score a lead through the engine and merge the estimate onto it locally (also
@@ -5958,60 +5960,70 @@ export default function LandLeadsAdminPage() {
           const HOLD = 30 * 60 * 1000, WINDOW = 90 * 24 * 60 * 60 * 1000;
           const CONTRACT = ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'];
           const fmt = (n) => '$' + Math.round(Number(n || 0)).toLocaleString();
-          const reviewed = { held: 0, ready: [], sent: 0 };
-          const contracts = { ready: [], sent: 0, unmatchable: 0, outside: 0 };
+          const ago = (ts) => { const m = Math.max(0, Math.round((now - new Date(ts).getTime()) / 60000)); if (m < 60) return `${m}m ago`; const h = Math.round(m / 60); return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`; };
+          const reviewed = { ready: [], held: [], sent: [] };
+          const contracts = { ready: [], sent: [], unmatchable: [], outside: [] };
           for (const l of (allLeads || [])) {
             const r = l.form_data?.review;
             if (r && r.value != null) {
-              if (new Date(r.reviewed_at || 0).getTime() > now - HOLD) reviewed.held++;
-              else if (!r.sent_at || Number(r.sent_value) !== Number(r.value)) reviewed.ready.push(l);
-              else reviewed.sent++;
+              if (new Date(r.reviewed_at || 0).getTime() > now - HOLD) reviewed.held.push({ l, val: r.value, meta: `ready in ${Math.max(1, 30 - Math.round((now - new Date(r.reviewed_at).getTime()) / 60000))}m` });
+              else if (!r.sent_at) reviewed.ready.push({ l, val: r.value, meta: 'new' });
+              else if (Number(r.sent_value) !== Number(r.value)) reviewed.ready.push({ l, val: r.value, meta: `edited → adjust (was ${fmt(r.sent_value)})` });
+              else reviewed.sent.push({ l, val: r.value, meta: `sent ${ago(r.sent_at)}` });
             }
             if (CONTRACT.includes(String(l.pipeline_status || l.status || '').toUpperCase())) {
               const o = l.form_data?.outcomes || {};
               const whenStr = o.UNDER_CONTRACT?.at || o.AGREEMENT_SENT?.at || o.CLOSED?.at || l.last_activity_at || l.updated_at || l.created_at;
               const when = new Date(whenStr || 0).getTime();
-              const hasClick = !!(l.form_data?.gclid || l.gclid);
-              const hasPII = !!(l.email || l.phone);
-              if (!when || when < now - WINDOW) contracts.outside++;
-              else if (!hasClick && !hasPII) contracts.unmatchable++;
-              else {
-                const cu = l.form_data?.contract_upload || {};
-                const prof = Number(l.form_data?.review?.base_profit ?? l.form_data?.vbb?.profit ?? 0);
-                const cval = Math.round(Math.min(Math.max(prof, 0), 100000) * 0.75);
-                if (!cu.sent_at || Number(cu.sent_value) !== cval) contracts.ready.push({ l, cval, via: hasClick ? 'gclid' : 'hashed PII' });
-                else contracts.sent++;
-              }
+              const hasClick = !!(l.form_data?.gclid || l.gclid), hasPII = !!(l.email || l.phone);
+              const prof = Number(l.form_data?.review?.base_profit ?? l.form_data?.vbb?.profit ?? 0);
+              const cval = Math.round(Math.min(Math.max(prof, 0), 100000) * 0.75);
+              const cu = l.form_data?.contract_upload || {};
+              if (!when || when < now - WINDOW) contracts.outside.push({ l, val: cval, meta: 'outside 90-day window' });
+              else if (!hasClick && !hasPII) contracts.unmatchable.push({ l, val: cval, meta: 'no gclid / email / phone' });
+              else if (!cu.sent_at) contracts.ready.push({ l, val: cval, meta: hasClick ? 'via gclid' : 'via hashed PII' });
+              else if (Number(cu.sent_value) !== cval) contracts.ready.push({ l, val: cval, meta: 'edited → adjust' });
+              else contracts.sent.push({ l, val: cval, meta: `sent ${ago(cu.sent_at)}` });
             }
           }
-          const card = (label, n, color) => (<div className={`rounded-xl border px-4 py-3 ${color}`}><div className="text-3xl font-bold">{n}</div><div className="text-[11px] uppercase tracking-wide opacity-70 mt-0.5">{label}</div></div>);
-          const row = (l, val, meta) => (<button key={l.id} onClick={() => navigateToLeadCard(l)} className="w-full text-left px-4 py-2 hover:bg-slate-700/40 flex items-center justify-between gap-3 border-b border-slate-700/40"><span className="text-sm text-white truncate flex-1">{l.full_name || l.name || 'Lead'}</span><span className="text-[11px] text-slate-500 flex-shrink-0">{meta}</span><span className="text-sm font-bold text-emerald-300 flex-shrink-0 w-24 text-right">{fmt(val)}</span></button>);
+          const card = (label, items, active, onClick, color) => (
+            <button type="button" onClick={onClick} className={`text-left rounded-xl border px-4 py-3 transition ${active ? color + ' ring-2 ring-white/20' : 'border-slate-700 bg-slate-800/40 text-slate-300 hover:bg-slate-800/70'}`}>
+              <div className="text-3xl font-bold">{items.length}</div>
+              <div className="text-[11px] uppercase tracking-wide opacity-70 mt-0.5">{label}</div>
+            </button>
+          );
+          const list = (items) => items.length
+            ? <div className="bg-slate-800/50 border border-slate-700 rounded-xl overflow-hidden max-h-96 overflow-y-auto">{items.slice(0, 100).map(({ l, val, meta }) => (
+                <button key={l.id} type="button" onClick={() => navigateToLeadCard(l)} className="w-full text-left px-4 py-2 hover:bg-slate-700/40 flex items-center justify-between gap-3 border-b border-slate-700/40">
+                  <span className="text-sm text-white truncate flex-1 min-w-0">{l.full_name || l.name || 'Lead'}</span>
+                  <span className="text-[11px] text-slate-500 flex-shrink-0">{meta}</span>
+                  <span className="text-sm font-bold text-emerald-300 flex-shrink-0 w-24 text-right">{fmt(val)}</span>
+                </button>))}</div>
+            : <div className="text-sm text-slate-500 px-1 py-2">Nothing here yet.</div>;
           return (
             <div className="space-y-6">
               <div className="bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-xl p-6">
                 <h2 className="text-2xl font-bold text-white">Google Upload Queue</h2>
-                <p className="text-slate-400 text-sm mt-1">What the hourly uploader will send to Google Ads. Reviewed values wait 30 min before going out (so you can still fix one); a value edited after it's sent goes up as an adjustment. Nothing actually sends until the Data Manager API is connected.</p>
+                <p className="text-slate-400 text-sm mt-1"><strong>Tap a tile</strong> to see its leads; click a lead to open it. Reviewed values wait 30 min before going out; a value edited after it's sent goes up as an adjustment. A lead that's both reviewed and signed shows in BOTH sections — they're two separate conversions. Nothing actually sends until the Data Manager API is connected (so "Already sent" stays 0 until then).</p>
               </div>
               <div>
                 <div className="text-sm font-bold text-slate-300 mb-2">Reviewed Lead</div>
                 <div className="grid grid-cols-3 gap-3 mb-3">
-                  {card('Ready to send', reviewed.ready.length, 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200')}
-                  {card('Held (<30 min)', reviewed.held, 'border-amber-500/40 bg-amber-500/10 text-amber-200')}
-                  {card('Already sent', reviewed.sent, 'border-slate-600/50 bg-slate-800/60 text-slate-300')}
+                  {card('Ready to send', reviewed.ready, queueReviewedView === 'ready', () => setQueueReviewedView('ready'), 'border-emerald-500/50 bg-emerald-500/15 text-emerald-200')}
+                  {card('Held (<30 min)', reviewed.held, queueReviewedView === 'held', () => setQueueReviewedView('held'), 'border-amber-500/50 bg-amber-500/15 text-amber-200')}
+                  {card('Already sent', reviewed.sent, queueReviewedView === 'sent', () => setQueueReviewedView('sent'), 'border-sky-500/50 bg-sky-500/15 text-sky-200')}
                 </div>
-                {reviewed.ready.length > 0
-                  ? <div className="bg-slate-800/50 border border-slate-700 rounded-xl overflow-hidden max-h-80 overflow-y-auto">{reviewed.ready.slice(0, 60).map((l) => row(l, l.form_data.review.value, l.form_data.review.sent_at ? 'edited → adjust' : 'new'))}</div>
-                  : <div className="text-sm text-slate-500 px-1">Nothing queued — reviewed leads show here 30 min after Mark Reviewed.</div>}
+                {list(reviewed[queueReviewedView] || reviewed.ready)}
               </div>
               <div>
                 <div className="text-sm font-bold text-slate-300 mb-2">Contract Signed <span className="text-slate-500 font-normal">· value = profit × 75%</span></div>
                 <div className="grid grid-cols-4 gap-3 mb-3">
-                  {card('Ready to send', contracts.ready.length, 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200')}
-                  {card('Already sent', contracts.sent, 'border-slate-600/50 bg-slate-800/60 text-slate-300')}
-                  {card('No gclid / PII', contracts.unmatchable, 'border-slate-600/50 bg-slate-800/60 text-slate-400')}
-                  {card('> 90 days', contracts.outside, 'border-slate-600/50 bg-slate-800/60 text-slate-400')}
+                  {card('Ready to send', contracts.ready, queueContractView === 'ready', () => setQueueContractView('ready'), 'border-emerald-500/50 bg-emerald-500/15 text-emerald-200')}
+                  {card('Already sent', contracts.sent, queueContractView === 'sent', () => setQueueContractView('sent'), 'border-sky-500/50 bg-sky-500/15 text-sky-200')}
+                  {card('No gclid / PII', contracts.unmatchable, queueContractView === 'unmatchable', () => setQueueContractView('unmatchable'), 'border-slate-500/50 bg-slate-600/20 text-slate-300')}
+                  {card('> 90 days', contracts.outside, queueContractView === 'outside', () => setQueueContractView('outside'), 'border-slate-500/50 bg-slate-600/20 text-slate-300')}
                 </div>
-                {contracts.ready.length > 0 && <div className="bg-slate-800/50 border border-slate-700 rounded-xl overflow-hidden max-h-80 overflow-y-auto">{contracts.ready.slice(0, 60).map(({ l, cval, via }) => row(l, cval, via))}</div>}
+                {list(contracts[queueContractView] || contracts.ready)}
               </div>
             </div>
           );
