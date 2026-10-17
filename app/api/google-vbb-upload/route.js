@@ -73,6 +73,7 @@ function toEvent(c, value) {
     destinationReferences: ['d'],
     transactionId: c.transaction_id,
     eventTimestamp: c.time || new Date().toISOString(),
+    eventSource: process.env.GOOGLE_DM_EVENT_SOURCE || 'WEB', // leads originate on the website form
     conversionValue: Number(value) || 0,
     currency: 'USD',
   };
