@@ -6171,9 +6171,12 @@ export default function LandLeadsAdminPage() {
           const lastRun = qRuns[0];
 
           const qlc = qSearch.trim().toLowerCase();
+          const drill = (status, stage = 'all') => { setQView('queue'); setQStatus(status); setQStage(stage); setQRep('all'); setQSearch(''); };
           const table = rows.filter((r) => {
             if (qStage !== 'all' && r.stage !== qStage) return false;
-            if (qStatus !== 'all' && r.status !== qStatus) return false;
+            if (qStatus === 'sending') { if (r.status !== 'ready' && r.status !== 'adjust') return false; }
+            else if (qStatus === 'attention') { if (r.status !== 'needs_review' && r.status !== 'needs_offer') return false; }
+            else if (qStatus !== 'all' && r.status !== qStatus) return false;
             if (qRep !== 'all' && r.reviewedBy !== qRep) return false;
             if (qlc && !((r.lead.full_name || r.lead.name || '').toLowerCase().includes(qlc))) return false;
             return true;
@@ -6212,11 +6215,11 @@ export default function LandLeadsAdminPage() {
                   </button>
                 </div>
                 <div className="grid sm:grid-cols-3 gap-3 mt-4 text-sm">
-                  <div className="bg-slate-900/50 rounded-lg px-3 py-2.5">
+                  <button type="button" onClick={() => drill('sending')} className="text-left bg-slate-900/50 rounded-lg px-3 py-2.5 hover:bg-slate-900/80">
                     <div className="text-[10px] uppercase tracking-wide text-slate-500">Next upload</div>
                     <div className="text-white font-semibold mt-0.5">{qAutoUpload ? `in ${minsToTop} min` : 'paused'}</div>
-                    <div className="text-slate-400 text-xs">{ready.length} ready · {fmt(readyTotal)}</div>
-                  </div>
+                    <div className="text-slate-400 text-xs">{ready.length} ready · {fmt(readyTotal)} <span className="text-blue-400">· view</span></div>
+                  </button>
                   <button type="button" onClick={() => setQView('history')} className="text-left bg-slate-900/50 rounded-lg px-3 py-2.5 hover:bg-slate-900/80">
                     <div className="text-[10px] uppercase tracking-wide text-slate-500">Last upload</div>
                     <div className="text-white font-semibold mt-0.5">{lastRun ? fmtDT(lastRun.ran_at) : 'none yet'}</div>
@@ -6257,7 +6260,7 @@ export default function LandLeadsAdminPage() {
                   {/* Needs your attention */}
                   {attention.length > 0 && (
                     <div className="bg-rose-950/20 border border-rose-800/40 rounded-xl p-4">
-                      <div className="text-sm font-bold text-rose-200 mb-2">⚠ Needs your attention · {attention.length}</div>
+                      <button type="button" onClick={() => drill('attention')} className="text-sm font-bold text-rose-200 mb-2 hover:underline">⚠ Needs your attention · {attention.length} <span className="text-rose-300/70 font-normal">· view all in table</span></button>
                       <div className="space-y-1.5">
                         {attention.slice(0, 12).map((r) => (
                           <div key={r.key} className="flex items-center justify-between gap-3 bg-slate-900/40 rounded-lg px-3 py-2">
@@ -6277,9 +6280,10 @@ export default function LandLeadsAdminPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <input value={qSearch} onChange={(e) => setQSearch(e.target.value)} placeholder="Search name…" className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white w-40" />
                     <select value={qStage} onChange={(e) => setQStage(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"><option value="all">All stages</option><option>Reviewed</option><option>Contract</option><option>Closed</option></select>
-                    <select value={qStatus} onChange={(e) => setQStatus(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"><option value="all">All statuses</option>{Object.keys(ST).map((k) => <option key={k} value={k}>{ST[k].label}</option>)}</select>
+                    <select value={qStatus} onChange={(e) => setQStatus(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"><option value="all">All statuses</option><option value="sending">Ready + Adjustments</option><option value="attention">Needs attention</option>{Object.keys(ST).map((k) => <option key={k} value={k}>{ST[k].label}</option>)}</select>
                     {reps.length > 0 && <select value={qRep} onChange={(e) => setQRep(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"><option value="all">All reps</option>{reps.map((rp) => <option key={rp} value={rp}>{rp}</option>)}</select>}
                     <select value={qSort} onChange={(e) => setQSort(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"><option value="daysLeft">Sort: days left</option><option value="value">Sort: value</option><option value="date">Sort: click date</option></select>
+                    {(qStatus !== 'all' || qStage !== 'all' || qRep !== 'all' || qSearch) && <button type="button" onClick={() => { setQStatus('all'); setQStage('all'); setQRep('all'); setQSearch(''); }} className="text-xs text-blue-400 hover:underline">clear filters</button>}
                     <span className="text-xs text-slate-500 ml-auto">{table.length} rows</span>
                   </div>
 
@@ -6307,10 +6311,10 @@ export default function LandLeadsAdminPage() {
                   </div>
 
                   {/* Totals */}
-                  <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-slate-400 px-1">
-                    <span>Queued now: <b className="text-white">{fmt(readyTotal)}</b> ({ready.length})</span>
-                    <span>Sent last 7 days: <b className="text-white">{fmt(sumSince(7))}</b></span>
-                    <span>Sent last 30 days: <b className="text-white">{fmt(sumSince(30))}</b></span>
+                  <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm text-slate-400 px-1">
+                    <button type="button" onClick={() => drill('sending')} className="hover:text-white">Queued now: <b className="text-white">{fmt(readyTotal)}</b> ({ready.length})</button>
+                    <button type="button" onClick={() => drill('sent')} className="hover:text-white">Sent last 7 days: <b className="text-white">{fmt(sumSince(7))}</b></button>
+                    <button type="button" onClick={() => drill('sent')} className="hover:text-white">Sent last 30 days: <b className="text-white">{fmt(sumSince(30))}</b></button>
                     <span className="text-slate-500">Hover a value to see the math.</span>
                   </div>
                 </>
