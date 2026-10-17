@@ -13,7 +13,10 @@ import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 
 const REDIRECT_URI = `${process.env.NEXT_PUBLIC_SITE_URL || 'https://parcelreach.ai'}/api/google-oauth/callback`;
-const DEFAULT_SCOPE = 'https://www.googleapis.com/auth/adwords';
+// Data Manager API (offline-conversion ingestion) requires the datamanager scope;
+// the adwords scope is kept alongside for conversion-action lookups on the legacy
+// Ads API surface. Space-separated; override wholesale with GOOGLE_OAUTH_SCOPE.
+const DEFAULT_SCOPE = 'https://www.googleapis.com/auth/datamanager https://www.googleapis.com/auth/adwords';
 
 export async function GET(req) {
   const u = new URL(req.url);
