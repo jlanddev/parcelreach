@@ -1,26 +1,35 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
+import { VBB_PROFIT_CAP, VBB_DEAD_STATUSES, contractValue } from '@/lib/reviewedValue';
 import crypto from 'node:crypto';
 
-// Hourly offline-conversion uploader for the reviewed-value system. Sends leads
-// marked reviewed > 30 min ago (so a rep can still correct a value first) that
-// haven't been sent yet, as "Reviewed Lead" offline conversions keyed on the LEAD
-// ID (transaction_id) so Google dedupes repeats. If a reviewed value is edited AFTER
-// it was sent, it goes up as a conversion ADJUSTMENT (restatement), not a new
-// conversion. Secret-protected; ?dry=1 shows what would send without sending.
+// Hourly offline-conversion uploader for the reviewed-value system.
 //
-// The actual Google Data Manager API call is stubbed until the OAuth credentials are
-// in (see uploadToGoogle). Everything else — the 30-min queue, dedupe, adjustments,
-// and the per-lead sent bookkeeping — is live and testable via ?dry=1.
+// Reviewed Lead: send leads marked reviewed > 30 min ago (so a rep can still
+// correct a value first) that haven't been sent, keyed on the LEAD ID
+// (transaction_id) so Google dedupes. A value edited AFTER it was sent goes up as
+// a conversion ADJUSTMENT (restatement), not a new conversion.
+//
+// Contract Signed: ONLY if the lead has a human-reviewed worth AND an offer
+// (engine-only values never go out as contracts). Value = min(worth − offer, $100k)
+// × 75%. Contracts missing a reviewed worth or an offer are flagged, not sent.
+//
+// Safety: 30-min hold; lead ID (+"-contract") as order ID; sent timestamps so
+// nothing resends; a run log row every run; an admin alert on failure / many
+// rejections / a >2× spike (which also HOLDS the run unless ?force=1); and a
+// single-lead retract (?retract=<leadId>&kind=review|contract) that queues a
+// RETRACTION and clears the sent state.
+//
+// The Google Data Manager API call itself is stubbed until OAuth creds are in
+// (uploadToGoogle). Everything else is live and testable via ?dry=1.
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const REVIEW_DELAY_MS = 30 * 60 * 1000; // hold 30 min after review before sending
+const REVIEW_DELAY_MS = 30 * 60 * 1000;  // hold 30 min after review before sending
 const CONTRACT_STATUSES = ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'];
-const CONTRACT_RATIO = 0.75;            // est. chance a signed contract closes
-const PROFIT_CAP = 100000;
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000; // Google click/match window
+const SPIKE_FACTOR = 2;                  // >2× the recent average = hold + alert
 
 function authed(req) {
   const s = process.env.CAMPAIGN_RUN_SECRET;
@@ -33,100 +42,200 @@ const normPhone = (p) => { const d = String(p || '').replace(/\D/g, ''); return 
 
 // Send to Google Data Manager API. Wired once OAuth credentials are configured;
 // throws until then so a live run is a clear, safe no-op (nothing gets marked sent).
-async function uploadToGoogle(/* conversions, adjustments */) {
+async function uploadToGoogle(/* payload */) {
   if (!process.env.GOOGLE_DM_REFRESH_TOKEN) {
     throw new Error('Data Manager API not configured yet (awaiting OAuth credentials)');
   }
   // TODO: build the Data Manager ingest request:
-  //   - new conversions: {conversionAction:"Reviewed Lead", gclid/gbraid/wbraid,
+  //   - new conversions: {conversionAction, gclid/gbraid/wbraid,
   //     userIdentifiers:[hashedEmail, hashedPhone], conversionValue, currency, orderId, time}
-  //   - adjustments: RESTATEMENT with the same orderId and the new value
+  //   - adjustments: RESTATEMENT (same orderId, new value)
+  //   - retractions:  RETRACTION  (same orderId)
+  // and return { sent, rejected, rejections: [...] } so the caller can alert on rejects.
   throw new Error('not implemented');
 }
 
-async function handle(req) {
-  if (!authed(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  const dry = new URL(req.url).searchParams.get('dry') === '1';
-  const sb = supabaseAdmin();
-  const now = Date.now();
-  const cutoff = now - REVIEW_DELAY_MS;
+// Best-effort admin alert (reuses the notifications table; type 'mention' is always
+// allowed by its CHECK). Never throws.
+async function alertAdmins(sb, title, message) {
+  try {
+    const { data: admins } = await sb.from('users').select('id').eq('role', 'admin');
+    for (const a of admins || []) {
+      await sb.from('notifications').insert({ user_id: a.id, from_user_id: null, type: 'mention', title, message: String(message).slice(0, 300), link: '/admin/land?tab=vbb-queue' }).then(() => {}, () => {});
+    }
+  } catch (e) { /* non-fatal */ }
+}
 
-  // Leads needing a Reviewed-Lead upload (have a review) OR a Contract-Signed upload
-  // (reached a signed-contract status — includes the historical contracts).
+// Best-effort run log (table may not exist yet; see the CREATE TABLE in chat). Never throws.
+async function logRun(sb, row) {
+  try { await sb.from('vbb_upload_runs').insert(row); } catch (e) { /* non-fatal */ }
+}
+async function recentAvgSent(sb) {
+  try {
+    const { data } = await sb.from('vbb_upload_runs').select('sent_count').eq('dry', false).eq('ok', true).order('ran_at', { ascending: false }).limit(10);
+    const nums = (data || []).map((r) => Number(r.sent_count) || 0).filter((n) => n > 0);
+    if (!nums.length) return 0;
+    return nums.reduce((a, b) => a + b, 0) / nums.length;
+  } catch (e) { return 0; }
+}
+
+async function fetchLeads(sb) {
   let leads = [];
   for (let f = 0; ; f += 1000) {
     const { data } = await sb.from('leads')
-      .select('id, email, phone, gclid, gbraid, wbraid, pipeline_status, status, last_activity_at, updated_at, created_at, form_data')
+      .select('id, email, phone, gclid, gbraid, wbraid, pipeline_status, status, offer_amount, last_activity_at, updated_at, created_at, form_data')
       .or('form_data->review.not.is.null,pipeline_status.in.(AGREEMENT_SENT,UNDER_CONTRACT,CLOSED)')
       .range(f, f + 999);
     if (!data || !data.length) break;
     leads = leads.concat(data);
     if (data.length < 1000) break;
   }
+  return leads;
+}
+
+// Mark a single lead's conversion for retraction, then let the next run send it.
+async function handleRetract(req, sb) {
+  const u = new URL(req.url);
+  const leadId = u.searchParams.get('retract');
+  const kind = (u.searchParams.get('kind') || 'review').toLowerCase();
+  const { data: cur } = await sb.from('leads').select('form_data').eq('id', leadId).maybeSingle();
+  if (!cur) return NextResponse.json({ error: 'lead not found' }, { status: 404 });
+  const fd = cur.form_data || {};
+  const key = kind === 'contract' ? 'contract_upload' : 'review';
+  const node = fd[key];
+  if (!node || !node.sent_at) return NextResponse.json({ ok: false, error: `nothing sent for ${kind} on this lead to retract` });
+  const updated = { ...fd, [key]: { ...node, retract: true, retract_requested_at: new Date().toISOString() } };
+  await sb.from('leads').update({ form_data: updated }).eq('id', leadId);
+  await alertAdmins(sb, 'VBB conversion retraction queued', `${kind} conversion for lead ${leadId} will be retracted on the next run.`);
+  return NextResponse.json({ ok: true, queuedRetraction: { leadId, kind } });
+}
+
+async function handle(req) {
+  if (!authed(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const u = new URL(req.url);
+  if (u.searchParams.get('retract')) return handleRetract(req, supabaseAdmin());
+  const dry = u.searchParams.get('dry') === '1';
+  const force = u.searchParams.get('force') === '1';
+  const sb = supabaseAdmin();
+  const now = Date.now();
+  const cutoff = now - REVIEW_DELAY_MS;
+  const ranAt = new Date().toISOString();
+
+  const leads = await fetchLeads(sb);
 
   const ids = (l) => ({ gclid: l.form_data?.gclid || l.gclid || null, gbraid: l.form_data?.gbraid || l.gbraid || null, wbraid: l.form_data?.wbraid || l.wbraid || null });
   const hashed = (l) => ({ email_sha256: l.email ? sha256(normEmail(l.email)) : null, phone_sha256: normPhone(l.phone) ? sha256(normPhone(l.phone)) : null });
   const matchable = (c) => !!(c.gclid || c.gbraid || c.wbraid || c.email_sha256 || c.phone_sha256);
 
-  const reviewNew = [], reviewAdj = []; let reviewHeld = 0, reviewUnchanged = 0;
-  const contractNew = [], contractAdj = []; let contractUnmatchable = 0, contractUnchanged = 0, contractOutsideWindow = 0;
+  const reviewNew = [], reviewAdj = [], reviewRetract = []; let reviewHeld = 0, reviewUnchanged = 0;
+  const contractNew = [], contractAdj = [], contractRetract = [];
+  const contractNeedsReview = [], contractNeedsOffer = [];
+  let contractUnmatchable = 0, contractUnchanged = 0, contractOutsideWindow = 0;
 
   for (const l of leads) {
-    // Reviewed Lead (transaction_id = lead ID; 30-min hold; edits -> restatement)
     const r = l.form_data?.review;
+    // Reviewed Lead (transaction_id = lead ID; 30-min hold; edits -> restatement)
     if (r && r.value != null) {
-      if (new Date(r.reviewed_at || 0).getTime() > cutoff) reviewHeld++;
-      else {
+      if (r.retract && r.sent_at) {
+        reviewRetract.push({ action: 'Reviewed Lead', transaction_id: l.id, ...ids(l), ...hashed(l) });
+      } else if (new Date(r.reviewed_at || 0).getTime() > cutoff) {
+        reviewHeld++;
+      } else {
         const base = { action: 'Reviewed Lead', transaction_id: l.id, value: Number(r.value) || 0, time: r.reviewed_at, ...ids(l), ...hashed(l) };
         if (!r.sent_at) reviewNew.push(base);
         else if (Number(r.sent_value) !== Number(r.value)) reviewAdj.push({ ...base, restatement: true });
         else reviewUnchanged++;
       }
     }
-    // Contract Signed (value = min(profit,$100k) x 75%; order id = leadId-contract)
+
+    // Contract Signed — requires a HUMAN-reviewed worth + an offer. Engine-only never ships.
     if (CONTRACT_STATUSES.includes(String(l.pipeline_status || l.status || '').toUpperCase())) {
       const o = l.form_data?.outcomes || {};
       const whenStr = o.UNDER_CONTRACT?.at || o.AGREEMENT_SENT?.at || o.CLOSED?.at || l.last_activity_at || l.updated_at || l.created_at;
       const when = new Date(whenStr || 0).getTime();
-      if (!when || when < now - NINETY_DAYS_MS) { contractOutsideWindow++; } // Google won't match older than the window
-      else {
-        const prof = Number(l.form_data?.review?.base_profit ?? l.form_data?.vbb?.profit ?? 0);
-        const cval = Math.round(Math.min(Math.max(prof, 0), PROFIT_CAP) * CONTRACT_RATIO);
-        const cu = l.form_data?.contract_upload || {};
-        const base = { action: 'Contract Signed', transaction_id: `${l.id}-contract`, lead_id: l.id, value: cval, time: new Date(when).toISOString(), ...ids(l), ...hashed(l) };
-        if (!matchable(base)) contractUnmatchable++;       // no gclid AND no hashed PII -> Google can't match (the old 13 w/o gclid)
-        else if (!cu.sent_at) contractNew.push(base);
-        else if (Number(cu.sent_value) !== cval) contractAdj.push({ ...base, restatement: true });
-        else contractUnchanged++;
+      const cu = l.form_data?.contract_upload || {};
+      // Fold the card's live offer into the review so "needs offer" clears when it's filled.
+      const reviewForContract = r ? { ...r, offer: r.offer != null ? r.offer : (Number(l.offer_amount) || 0) } : null;
+      if (cu.retract && cu.sent_at) {
+        contractRetract.push({ action: 'Contract Signed', transaction_id: `${l.id}-contract`, lead_id: l.id, ...ids(l), ...hashed(l) });
+        continue;
       }
+      if (!when || when < now - NINETY_DAYS_MS) { contractOutsideWindow++; continue; } // Google won't match older than the window
+      const cv = contractValue(reviewForContract);
+      if (cv.value == null) {
+        const flag = { lead_id: l.id, status: String(l.pipeline_status || l.status || '').toUpperCase(), worth: Number(r?.worth) || null, offer: Number(reviewForContract?.offer) || null };
+        if (cv.reason === 'needs_offer') contractNeedsOffer.push(flag); else contractNeedsReview.push(flag);
+        continue;
+      }
+      const base = { action: 'Contract Signed', transaction_id: `${l.id}-contract`, lead_id: l.id, value: cv.value, time: new Date(when).toISOString(), ...ids(l), ...hashed(l) };
+      if (!matchable(base)) contractUnmatchable++;        // no gclid AND no hashed PII -> Google can't match
+      else if (!cu.sent_at) contractNew.push(base);
+      else if (Number(cu.sent_value) !== cv.value) contractAdj.push({ ...base, restatement: true });
+      else contractUnchanged++;
     }
   }
 
+  const toSendCount = reviewNew.length + reviewAdj.length + reviewRetract.length + contractNew.length + contractAdj.length + contractRetract.length;
+
+  const summary = {
+    reviewedLead: { new: reviewNew.length, adjustments: reviewAdj.length, retractions: reviewRetract.length, heldUnder30min: reviewHeld, unchanged: reviewUnchanged },
+    contractSigned: { new: contractNew.length, adjustments: contractAdj.length, retractions: contractRetract.length, needsReview: contractNeedsReview.length, needsOffer: contractNeedsOffer.length, unmatchable_no_gclid_or_pii: contractUnmatchable, unchanged: contractUnchanged, outsideWindow: contractOutsideWindow },
+  };
+
   if (dry) {
+    await logRun(sb, { ran_at: ranAt, dry: true, ok: true, sent_count: 0, to_send: toSendCount, summary });
     return NextResponse.json({
-      ok: true, dry: true,
-      reviewedLead: { new: reviewNew.length, adjustments: reviewAdj.length, heldUnder30min: reviewHeld, unchanged: reviewUnchanged },
-      contractSigned: { new: contractNew.length, adjustments: contractAdj.length, unmatchable_no_gclid_or_pii: contractUnmatchable, unchanged: contractUnchanged, outsideWindow: contractOutsideWindow },
+      ok: true, dry: true, ...summary,
+      flagged: { needsReview: contractNeedsReview.slice(0, 10), needsOffer: contractNeedsOffer.slice(0, 10) },
       sampleContract: contractNew.slice(0, 8).map((c) => ({ leadId: c.lead_id, value: c.value, hasClickId: !!(c.gclid || c.gbraid || c.wbraid), hasHashedPII: !!(c.email_sha256 || c.phone_sha256) })),
     });
   }
 
-  let result;
-  try { result = await uploadToGoogle(reviewNew, reviewAdj, contractNew, contractAdj); }
-  catch (e) {
-    return NextResponse.json({ ok: false, error: e.message, wouldSend: { reviewedNew: reviewNew.length, reviewedAdj: reviewAdj.length, contractNew: contractNew.length, contractAdj: contractAdj.length } });
+  // Spike guard: hold the run (don't send) if it's >2× the recent average, unless forced.
+  const avg = await recentAvgSent(sb);
+  if (!force && avg > 0 && toSendCount > avg * SPIKE_FACTOR) {
+    await alertAdmins(sb, 'VBB upload HELD — volume spike', `Run wanted to send ${toSendCount} conversions vs a recent avg of ${Math.round(avg)}. Held for review. Re-run with ?force=1 to send.`);
+    await logRun(sb, { ran_at: ranAt, dry: false, ok: false, sent_count: 0, to_send: toSendCount, summary, note: 'held: volume spike' });
+    return NextResponse.json({ ok: false, held: true, reason: 'volume_spike', toSend: toSendCount, recentAvg: Math.round(avg), hint: 'add ?force=1 to send anyway' });
   }
 
+  let result;
+  try {
+    result = await uploadToGoogle({ reviewNew, reviewAdj, reviewRetract, contractNew, contractAdj, contractRetract });
+  } catch (e) {
+    const notConfigured = /not configured/i.test(e.message || '');
+    if (!notConfigured) await alertAdmins(sb, 'VBB upload FAILED', `${e.message}. Wanted to send ${toSendCount}.`);
+    await logRun(sb, { ran_at: ranAt, dry: false, ok: false, sent_count: 0, to_send: toSendCount, summary, note: e.message });
+    return NextResponse.json({ ok: false, error: e.message, wouldSend: { reviewedNew: reviewNew.length, reviewedAdj: reviewAdj.length, reviewRetract: reviewRetract.length, contractNew: contractNew.length, contractAdj: contractAdj.length, contractRetract: contractRetract.length } });
+  }
+
+  // Alert on a bad rejection rate from Google's partial-failure response.
+  const rejected = Number(result?.rejected) || 0;
+  if (rejected > 0 && toSendCount > 0 && rejected / toSendCount >= 0.25) {
+    await alertAdmins(sb, 'VBB upload — many rejections', `${rejected} of ${toSendCount} conversions were rejected by Google. ${JSON.stringify((result.rejections || []).slice(0, 5))}`);
+  }
+
+  // Bookkeeping: stamp sent state (new/adjusted) and clear it for retractions.
   const nowIso = new Date().toISOString();
   for (const c of [...reviewNew, ...reviewAdj]) {
     const l = leads.find((x) => x.id === c.transaction_id); const fd = l?.form_data || {};
     await sb.from('leads').update({ form_data: { ...fd, review: { ...fd.review, sent_at: nowIso, sent_value: c.value } } }).eq('id', c.transaction_id).then(() => {}, () => {});
   }
+  for (const c of reviewRetract) {
+    const l = leads.find((x) => x.id === c.transaction_id); const fd = l?.form_data || {};
+    await sb.from('leads').update({ form_data: { ...fd, review: { ...fd.review, retract: false, retracted_at: nowIso, sent_at: null, sent_value: null } } }).eq('id', c.transaction_id).then(() => {}, () => {});
+  }
   for (const c of [...contractNew, ...contractAdj]) {
     const l = leads.find((x) => x.id === c.lead_id); const fd = l?.form_data || {};
-    await sb.from('leads').update({ form_data: { ...fd, contract_upload: { sent_at: nowIso, sent_value: c.value } } }).eq('id', c.lead_id).then(() => {}, () => {});
+    await sb.from('leads').update({ form_data: { ...fd, contract_upload: { ...(fd.contract_upload || {}), sent_at: nowIso, sent_value: c.value } } }).eq('id', c.lead_id).then(() => {}, () => {});
   }
-  return NextResponse.json({ ok: true, ...result });
+  for (const c of contractRetract) {
+    const l = leads.find((x) => x.id === c.lead_id); const fd = l?.form_data || {};
+    await sb.from('leads').update({ form_data: { ...fd, contract_upload: { ...(fd.contract_upload || {}), retract: false, retracted_at: nowIso, sent_at: null, sent_value: null } } }).eq('id', c.lead_id).then(() => {}, () => {});
+  }
+
+  await logRun(sb, { ran_at: ranAt, dry: false, ok: true, sent_count: toSendCount, to_send: toSendCount, summary, note: result?.note || null });
+  return NextResponse.json({ ok: true, sent: toSendCount, ...summary, ...result });
 }
 
 export async function GET(req) { return handle(req); }

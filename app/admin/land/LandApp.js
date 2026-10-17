@@ -20,6 +20,7 @@ import CampaignsPanel from '@/components/CampaignsPanel';
 import { timeAgo, channelLabel } from '@/lib/format';
 import { playDing } from '@/lib/sound';
 import { DIRECTIONS, OFFER_DIRECTIONS, GENERAL_DIRECTIONS, FOLLOWUP_BUCKETS, FOLLOWUP_KEYS, LOST_REASONS, formatOffer, mergeScript, firstTouch, touchForStep } from '@/lib/followups';
+import { VBB_PROFIT_CAP, VBB_CLOSE_CHANCE, VBB_RESALE_SPEED, VBB_DEAD_STATUSES, reviewedValue as vbbReviewedValue, reviewedProfit, recomputeReview, contractValue, closeChance, pctLabel } from '@/lib/reviewedValue';
 
 // A conversation note is anything that isn't an auto-logged activity marker.
 const isConversationNote = (content) =>
@@ -28,20 +29,8 @@ const isConversationNote = (content) =>
 // Last 10 digits of a phone, the stable key for matching messages to leads.
 const phoneKey = (p) => (p || '').replace(/\D/g, '').slice(-10);
 
-// ---- Reviewed-value settings (editable defaults; feed Google as the conversion
-// value after a human reviews the lead). Reviewed Value = min(profit, $100k) x
-// close chance (by lean) x resale speed. Anchored to the real ~4% contract rate. ----
-const VBB_PROFIT_CAP = 100000;
-const VBB_CLOSE_CHANCE = { hot: 0.09, ready: 0.09, warm: 0.04, cold: 0.02, '': 0.03 }; // real ~2-3% contract rate; editable
-const VBB_RESALE_SPEED = { fast: 1.25, normal: 1.0, slow: 0.75, hard: 0.25 };
-const VBB_DEAD_STATUSES = ['DEAD', 'LOST', 'WE_PASSED'];
-const vbbReviewedValue = ({ profit, lean, speed, deadLost }) => {
-  if (deadLost) return 0; // Dead / Lost leads are worth nothing to Google
-  const p = Math.min(Math.max(Number(profit) || 0, 0), VBB_PROFIT_CAP);
-  const cc = VBB_CLOSE_CHANCE[String(lean || '').toLowerCase()] ?? VBB_CLOSE_CHANCE[''];
-  const rs = VBB_RESALE_SPEED[String(speed || 'normal').toLowerCase()] ?? 1;
-  return Math.round(p * cc * rs);
-};
+// Reviewed-value settings + math now live in @/lib/reviewedValue (shared with the
+// recalc endpoint and the hourly uploader). Imported above.
 // Deal profit for a lead from its engine estimate + (optional) exact acres override.
 const vbbProfitFor = (v, exactAcres) => {
   if (!v) return 0;
@@ -94,7 +83,7 @@ function ReviewPanel({ lead, onSave }) {
   const profit = offer > 0 ? Math.max(0, worthNum - offer) : Math.round(worthNum * 0.5);
   const auto = vbbReviewedValue({ profit, lean: d.lean, speed: d.speed, deadLost });
   const value = d.override !== '' ? Math.round(Number(d.override)) : auto;
-  const ccPct = Math.round((VBB_CLOSE_CHANCE[d.lean] ?? VBB_CLOSE_CHANCE['']) * 100);
+  const ccPct = pctLabel(closeChance(d.lean));
   const rs = VBB_RESALE_SPEED[d.speed] ?? 1;
   // Exact acres recomputes "worth" from $/ac — unless the rep typed worth manually.
   const onAcres = (val) => {
@@ -126,7 +115,7 @@ function ReviewPanel({ lead, onSave }) {
       <div className="text-[11px] mb-0.5">
         {deadLost
           ? <span className="font-bold text-slate-300">Sends to Google: $0 · Dead/Lost</span>
-          : <><span className="font-bold text-emerald-300">Sends to Google: {fmt(value)}</span><span className="text-slate-500"> = {fmt(Math.min(profit, VBB_PROFIT_CAP))} × {ccPct}% × {rs}</span>{d.override !== '' && <span className="text-amber-300"> · override</span>}</>}
+          : <><span className="font-bold text-emerald-300">Sends to Google: {fmt(value)}</span><span className="text-slate-500"> = {fmt(Math.min(profit, VBB_PROFIT_CAP))} × {ccPct} × {rs}</span>{d.override !== '' && <span className="text-amber-300"> · override</span>}</>}
         {!deadLost && d.override === '' && !d.showOverride && <> · <button type="button" onClick={() => setD({ showOverride: true })} className="text-blue-400 hover:underline">override</button></>}
       </div>
       <div className="text-[10px] text-slate-500 mb-2">profit = {offer > 0 ? `worth − offer (${fmt(offer)})` : 'worth × 50%'} = {fmt(profit)}</div>
@@ -686,6 +675,32 @@ export default function LandLeadsAdminPage() {
       await supabase.from('leads').update({ form_data: { ...fd, review: full } }).eq('id', lead.id);
       showToast(`Reviewed: $${(review.value || 0).toLocaleString()}`, 'success', lead.full_name || lead.name);
     } catch (e) { showToast('Could not save review', 'error'); }
+  };
+
+  // Auto-recalc a reviewed lead's value when something OUTSIDE the review panel
+  // moves the math: the Offer changes (profit = worth − offer) or the stage flips
+  // to/from Dead/Lost. We keep the human's worth/lean/speed and just restate the
+  // value. If it was already sent to Google the uploader picks up the difference as
+  // an adjustment (sent_value != value); reviewed_at is untouched so the 30-min hold
+  // on a not-yet-sent lead still applies. No-op for leads without a review.
+  const recalcReview = async (leadId, { offer, status } = {}) => {
+    try {
+      const { data: cur } = await supabase.from('leads')
+        .select('form_data, offer_amount, pipeline_status, status').eq('id', leadId).maybeSingle();
+      const fd = (cur && cur.form_data) || {};
+      const rev = fd.review;
+      if (!rev) return;
+      const effOffer = offer != null ? (Number(offer) || 0) : (Number(cur?.offer_amount) || 0);
+      const effStatus = String(status || cur?.pipeline_status || cur?.status || '').toUpperCase();
+      const deadLost = VBB_DEAD_STATUSES.includes(effStatus);
+      const { value: newVal, profit: newProfit } = recomputeReview(rev, { offer: effOffer, deadLost });
+      if (Number(rev.value) === newVal && Number(rev.offer || 0) === effOffer) return; // nothing moved
+      const updated = { ...rev, value: newVal, offer: effOffer, profit: newProfit, base_profit: newProfit, recomputed_at: new Date().toISOString() };
+      setRawLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, form_data: { ...(l.form_data || {}), review: updated } } : l)));
+      setSelectedLead((prev) => (prev && prev.id === leadId ? { ...prev, form_data: { ...(prev.form_data || {}), review: updated } } : prev));
+      await supabase.from('leads').update({ form_data: { ...fd, review: updated } }).eq('id', leadId);
+      if (rev.sent_at && Number(rev.sent_value) !== newVal) showToast(`Reviewed value → $${newVal.toLocaleString()} (queued as adjustment)`, 'success');
+    } catch (e) { /* non-fatal */ }
   };
   useEffect(() => {
     for (const { task, mins } of imminentAppts) {
@@ -1668,6 +1683,7 @@ export default function LandLeadsAdminPage() {
     const n = raw === null || Number.isNaN(raw) ? null : raw;
     // Entering an offer locks it (green); clearing it unlocks.
     patchLead(leadId, { offer_amount: n, offer_confirmed: n != null });
+    recalcReview(leadId, { offer: n }); // profit = worth − offer, so restate the reviewed value
   };
   const setDealDirection = (leadId, value) => patchLead(leadId, { deal_direction: value || null });
 
@@ -1715,6 +1731,7 @@ export default function LandLeadsAdminPage() {
       follow_up_bucket: null,
       next_follow_up_at: null,
     });
+    recalcReview(lead.id, { status: 'NEGOTIATING' }); // back from Lost/Dead → restore value
     showToast('Back in play · Negotiating', 'success');
   };
 
@@ -1725,6 +1742,7 @@ export default function LandLeadsAdminPage() {
       lost_reason: reason || null,
       next_follow_up_at: null,
     });
+    recalcReview(lead.id, { status: 'LOST' }); // Lost → reviewed value becomes $0
     showToast('Marked Lost', 'success');
   };
 
@@ -2397,6 +2415,10 @@ export default function LandLeadsAdminPage() {
         }
       } catch (e) { /* non-fatal */ }
     }
+
+    // A stage change to/from Dead/Lost flips the reviewed value (Dead/Lost = $0),
+    // so restate it automatically for any reviewed lead.
+    recalcReview(leadId, { status: newStatus });
 
     // Status change always clears hammer mode, hammering is meant to push toward the
     // next status, so once that lands the mode resets.
@@ -5983,7 +6005,7 @@ export default function LandLeadsAdminPage() {
           const fmt = (n) => '$' + Math.round(Number(n || 0)).toLocaleString();
           const ago = (ts) => { const m = Math.max(0, Math.round((now - new Date(ts).getTime()) / 60000)); if (m < 60) return `${m}m ago`; const h = Math.round(m / 60); return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`; };
           const reviewed = { ready: [], held: [], sent: [] };
-          const contracts = { ready: [], sent: [], unmatchable: [], outside: [] };
+          const contracts = { ready: [], sent: [], needsReview: [], needsOffer: [], unmatchable: [], outside: [] };
           for (const l of (allLeads || [])) {
             const r = l.form_data?.review;
             if (r && r.value != null) {
@@ -5997,10 +6019,14 @@ export default function LandLeadsAdminPage() {
               const whenStr = o.UNDER_CONTRACT?.at || o.AGREEMENT_SENT?.at || o.CLOSED?.at || l.last_activity_at || l.updated_at || l.created_at;
               const when = new Date(whenStr || 0).getTime();
               const hasClick = !!(l.form_data?.gclid || l.gclid), hasPII = !!(l.email || l.phone);
-              const prof = Number(l.form_data?.review?.base_profit ?? l.form_data?.vbb?.profit ?? 0);
-              const cval = Math.round(Math.min(Math.max(prof, 0), 100000) * 0.75);
               const cu = l.form_data?.contract_upload || {};
+              // Contract value needs a HUMAN-reviewed worth + an offer (card offer folds in).
+              const reviewForContract = r ? { ...r, offer: r.offer != null ? r.offer : (Number(l.offer_amount) || 0) } : null;
+              const cv = contractValue(reviewForContract);
+              const cval = cv.value || 0;
               if (!when || when < now - WINDOW) contracts.outside.push({ l, val: cval, meta: 'outside 90-day window' });
+              else if (cv.reason === 'needs_review') contracts.needsReview.push({ l, val: 0, meta: 'no reviewed worth — fill in the deal value' });
+              else if (cv.reason === 'needs_offer') contracts.needsOffer.push({ l, val: 0, meta: 'no offer — enter the offer amount' });
               else if (!hasClick && !hasPII) contracts.unmatchable.push({ l, val: cval, meta: 'no gclid / email / phone' });
               else if (!cu.sent_at) contracts.ready.push({ l, val: cval, meta: hasClick ? 'via gclid' : 'via hashed PII' });
               else if (Number(cu.sent_value) !== cval) contracts.ready.push({ l, val: cval, meta: 'edited → adjust' });
@@ -6037,9 +6063,11 @@ export default function LandLeadsAdminPage() {
                 {list(reviewed[queueReviewedView] || reviewed.ready)}
               </div>
               <div>
-                <div className="text-sm font-bold text-slate-300 mb-2">Contract Signed <span className="text-slate-500 font-normal">· value = profit × 75%</span></div>
-                <div className="grid grid-cols-4 gap-3 mb-3">
+                <div className="text-sm font-bold text-slate-300 mb-2">Contract Signed <span className="text-slate-500 font-normal">· value = (reviewed worth − offer, cap $100k) × 75% · needs a human review</span></div>
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-3">
                   {card('Ready to send', contracts.ready, queueContractView === 'ready', () => setQueueContractView('ready'), 'border-emerald-500/50 bg-emerald-500/15 text-emerald-200')}
+                  {card('Needs review', contracts.needsReview, queueContractView === 'needsReview', () => setQueueContractView('needsReview'), 'border-rose-500/50 bg-rose-500/15 text-rose-200')}
+                  {card('Needs offer', contracts.needsOffer, queueContractView === 'needsOffer', () => setQueueContractView('needsOffer'), 'border-amber-500/50 bg-amber-500/15 text-amber-200')}
                   {card('Already sent', contracts.sent, queueContractView === 'sent', () => setQueueContractView('sent'), 'border-sky-500/50 bg-sky-500/15 text-sky-200')}
                   {card('No gclid / PII', contracts.unmatchable, queueContractView === 'unmatchable', () => setQueueContractView('unmatchable'), 'border-slate-500/50 bg-slate-600/20 text-slate-300')}
                   {card('> 90 days', contracts.outside, queueContractView === 'outside', () => setQueueContractView('outside'), 'border-slate-500/50 bg-slate-600/20 text-slate-300')}
