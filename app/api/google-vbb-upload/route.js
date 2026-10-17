@@ -30,6 +30,8 @@ const REVIEW_DELAY_MS = 30 * 60 * 1000;  // hold 30 min after review before send
 const CONTRACT_STATUSES = ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'];
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000; // Google click/match window
 const SPIKE_FACTOR = 2;                  // >2× the recent average = hold + alert
+const DM_INGEST_URL = 'https://datamanager.googleapis.com/v1/events:ingest';
+const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
 function authed(req) {
   const s = process.env.CAMPAIGN_RUN_SECRET;
@@ -40,19 +42,109 @@ const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex'
 const normEmail = (e) => String(e || '').trim().toLowerCase();
 const normPhone = (p) => { const d = String(p || '').replace(/\D/g, ''); return d ? (d.length === 10 ? `+1${d}` : `+${d}`) : ''; };
 
-// Send to Google Data Manager API. Wired once OAuth credentials are configured;
-// throws until then so a live run is a clear, safe no-op (nothing gets marked sent).
-async function uploadToGoogle(/* payload */) {
-  if (!process.env.GOOGLE_DM_REFRESH_TOKEN) {
-    throw new Error('Data Manager API not configured yet (awaiting OAuth credentials)');
+// Mint a short-lived access token from the stored refresh token.
+async function getAccessToken() {
+  const resp = await fetch(TOKEN_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: process.env.GOOGLE_OAUTH_CLIENT_ID || '',
+      client_secret: process.env.GOOGLE_OAUTH_CLIENT_SECRET || '',
+      refresh_token: process.env.GOOGLE_DM_REFRESH_TOKEN || '',
+      grant_type: 'refresh_token',
+    }),
+  });
+  const d = await resp.json().catch(() => ({}));
+  if (!resp.ok || !d.access_token) throw new Error('OAuth token refresh failed: ' + JSON.stringify(d).slice(0, 300));
+  return d.access_token;
+}
+
+// One Data Manager event from a queued conversion. Identifiers are already SHA-256
+// hex (encoding:HEX); gclid/gbraid/wbraid go in adIdentifiers; value in conversionValue.
+function toEvent(c, value) {
+  const userIdentifiers = [];
+  if (c.email_sha256) userIdentifiers.push({ emailAddress: c.email_sha256 });
+  if (c.phone_sha256) userIdentifiers.push({ phoneNumber: c.phone_sha256 });
+  const adIdentifiers = {};
+  if (c.gclid) adIdentifiers.gclid = c.gclid;
+  if (c.gbraid) adIdentifiers.gbraid = c.gbraid;
+  if (c.wbraid) adIdentifiers.wbraid = c.wbraid;
+  const ev = {
+    destinationReferences: ['d'],
+    transactionId: c.transaction_id,
+    eventTimestamp: c.time || new Date().toISOString(),
+    conversionValue: Number(value) || 0,
+    currency: 'USD',
+  };
+  if (userIdentifiers.length) ev.userData = { userIdentifiers };
+  if (Object.keys(adIdentifiers).length) ev.adIdentifiers = adIdentifiers;
+  return ev;
+}
+
+// Send to the Google Data Manager API (events:ingest), one request per conversion
+// action. GATED: throws "not configured" (a safe no-op — nothing marked sent) until the
+// refresh token, customer ID, and at least one conversion-action ID are all set. Retracts
+// go up as $0 restatements (Data Manager doesn't support true retraction). With
+// validateOnly:true, Google checks the payload but records nothing. Returns the set of
+// transaction IDs it accepted so the caller only marks those sent.
+async function uploadToGoogle(payload, { validateOnly = false } = {}) {
+  const customerId = (process.env.GOOGLE_ADS_CUSTOMER_ID || '').replace(/\D/g, '');
+  const loginId = (process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID || '').replace(/\D/g, '');
+  const CA = { review: process.env.GOOGLE_CA_REVIEWED, contract: process.env.GOOGLE_CA_CONTRACT, closed: process.env.GOOGLE_CA_CLOSED };
+  if (!process.env.GOOGLE_DM_REFRESH_TOKEN) throw new Error('Data Manager API not configured yet (no GOOGLE_DM_REFRESH_TOKEN)');
+  if (!customerId) throw new Error('Data Manager API not configured yet (set GOOGLE_ADS_CUSTOMER_ID)');
+  if (!CA.review && !CA.contract && !CA.closed) throw new Error('Data Manager API not configured yet (set GOOGLE_CA_REVIEWED / _CONTRACT / _CLOSED)');
+
+  const { reviewNew, reviewAdj, reviewRetract, contract, closed } = payload;
+  const groups = [
+    { name: 'Reviewed Lead', caId: CA.review, sends: [...reviewNew, ...reviewAdj], zeros: reviewRetract },
+    { name: 'Contract Signed', caId: CA.contract, sends: [...contract.new, ...contract.adj], zeros: contract.retract },
+    { name: 'Closed Deal', caId: CA.closed, sends: [...closed.new, ...closed.adj], zeros: closed.retract },
+  ];
+
+  const accessToken = await getAccessToken();
+  const sentIds = new Set();
+  const rejections = [];
+  const skipped = [];
+  const debug = []; // per-group request/response, for the validateOnly preview
+  let rejected = 0;
+
+  for (const g of groups) {
+    const events = [...g.sends.map((c) => toEvent(c, c.value)), ...g.zeros.map((c) => toEvent(c, 0))];
+    if (!events.length) continue;
+    if (!g.caId) { skipped.push({ group: g.name, reason: 'no conversion action ID set', count: events.length }); continue; }
+    const body = {
+      destinations: [{
+        reference: 'd',
+        operatingAccount: { accountType: 'GOOGLE_ADS', accountId: customerId },
+        ...(loginId ? { loginAccount: { accountType: 'GOOGLE_ADS', accountId: loginId } } : {}),
+        productDestinationId: String(g.caId),
+      }],
+      events,
+      encoding: 'HEX',
+      consent: { adUserData: 'CONSENT_GRANTED', adPersonalization: 'CONSENT_GRANTED' },
+      validateOnly: !!validateOnly,
+    };
+    let resp, data;
+    try {
+      resp = await fetch(DM_INGEST_URL, { method: 'POST', headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      data = await resp.json().catch(() => ({}));
+    } catch (e) {
+      rejected += events.length; rejections.push({ group: g.name, error: String(e) });
+      debug.push({ group: g.name, productDestinationId: String(g.caId), eventCount: events.length, error: String(e) });
+      continue;
+    }
+    // Preview: the request shape (first 2 events) + Google's raw response.
+    debug.push({ group: g.name, productDestinationId: String(g.caId), eventCount: events.length, requestSample: { ...body, events: events.slice(0, 2) }, status: resp.status, response: data });
+    if (!resp.ok) {
+      rejected += events.length;
+      rejections.push({ group: g.name, status: resp.status, error: data?.error || data });
+      continue;
+    }
+    for (const ev of events) sentIds.add(ev.transactionId); // accepted (or validated)
   }
-  // TODO: build the Data Manager ingest request:
-  //   - new conversions: {conversionAction, gclid/gbraid/wbraid,
-  //     userIdentifiers:[hashedEmail, hashedPhone], conversionValue, currency, orderId, time}
-  //   - adjustments: RESTATEMENT (same orderId, new value)
-  //   - retractions:  RETRACTION  (same orderId)
-  // and return { sent, rejected, rejections: [...] } so the caller can alert on rejects.
-  throw new Error('not implemented');
+
+  return { sentIds, sentCount: sentIds.size, rejected, rejections, skipped, debug, validateOnly: !!validateOnly };
 }
 
 // Best-effort admin alert (reuses the notifications table; type 'mention' is always
@@ -116,6 +208,7 @@ async function handle(req) {
   if (u.searchParams.get('retract')) return handleRetract(req, supabaseAdmin());
   const dry = u.searchParams.get('dry') === '1';
   const force = u.searchParams.get('force') === '1';
+  const validate = u.searchParams.get('validate') === '1'; // call Google with validateOnly, mark nothing
   const sb = supabaseAdmin();
   const now = Date.now();
   const cutoff = now - REVIEW_DELAY_MS;
@@ -207,16 +300,19 @@ async function handle(req) {
   }
 
   // Spike guard: hold the run (don't send) if it's >2× the recent average, unless forced.
-  const avg = await recentAvgSent(sb);
-  if (!force && avg > 0 && toSendCount > avg * SPIKE_FACTOR) {
-    await alertAdmins(sb, 'VBB upload HELD — volume spike', `Run wanted to send ${toSendCount} conversions vs a recent avg of ${Math.round(avg)}. Held for review. Re-run with ?force=1 to send.`);
-    await logRun(sb, { ran_at: ranAt, dry: false, ok: false, sent_count: 0, to_send: toSendCount, summary, note: 'held: volume spike' });
-    return NextResponse.json({ ok: false, held: true, reason: 'volume_spike', toSend: toSendCount, recentAvg: Math.round(avg), hint: 'add ?force=1 to send anyway' });
+  // Skipped for validateOnly (nothing is recorded in that mode).
+  if (!validate) {
+    const avg = await recentAvgSent(sb);
+    if (!force && avg > 0 && toSendCount > avg * SPIKE_FACTOR) {
+      await alertAdmins(sb, 'VBB upload HELD — volume spike', `Run wanted to send ${toSendCount} conversions vs a recent avg of ${Math.round(avg)}. Held for review. Re-run with ?force=1 to send.`);
+      await logRun(sb, { ran_at: ranAt, dry: false, ok: false, sent_count: 0, to_send: toSendCount, summary, note: 'held: volume spike' });
+      return NextResponse.json({ ok: false, held: true, reason: 'volume_spike', toSend: toSendCount, recentAvg: Math.round(avg), hint: 'add ?force=1 to send anyway' });
+    }
   }
 
   let result;
   try {
-    result = await uploadToGoogle({ reviewNew, reviewAdj, reviewRetract, contract, closed });
+    result = await uploadToGoogle({ reviewNew, reviewAdj, reviewRetract, contract, closed }, { validateOnly: validate });
   } catch (e) {
     const notConfigured = /not configured/i.test(e.message || '');
     if (!notConfigured) await alertAdmins(sb, 'VBB upload FAILED', `${e.message}. Wanted to send ${toSendCount}.`);
@@ -224,38 +320,49 @@ async function handle(req) {
     return NextResponse.json({ ok: false, error: e.message, wouldSend: summary });
   }
 
-  // Alert on a bad rejection rate from Google's partial-failure response.
   const rejected = Number(result?.rejected) || 0;
   if (rejected > 0 && toSendCount > 0 && rejected / toSendCount >= 0.25) {
     await alertAdmins(sb, 'VBB upload — many rejections', `${rejected} of ${toSendCount} conversions were rejected by Google. ${JSON.stringify((result.rejections || []).slice(0, 5))}`);
   }
+  const g = { sentCount: result.sentCount, rejected, rejections: (result.rejections || []).slice(0, 10), skipped: result.skipped || [] };
 
-  // Bookkeeping: stamp sent state (new/adjusted) and clear it for retractions.
+  // validateOnly: Google checked the payload but recorded nothing, so mark nothing sent.
+  if (validate) {
+    await logRun(sb, { ran_at: ranAt, dry: false, ok: rejected === 0, sent_count: 0, to_send: toSendCount, summary, note: `validateOnly (validated ${result.sentCount}, rejected ${rejected})` });
+    return NextResponse.json({ ok: rejected === 0, validateOnly: true, ...summary, google: g, debug: result.debug || [] });
+  }
+
+  // Live: stamp sent state ONLY for the transaction IDs Google accepted.
+  const sentIds = result.sentIds instanceof Set ? result.sentIds : new Set(result.sentIds || []);
   const nowIso = new Date().toISOString();
   for (const c of [...reviewNew, ...reviewAdj]) {
+    if (!sentIds.has(c.transaction_id)) continue;
     const l = leads.find((x) => x.id === c.transaction_id); const fd = l?.form_data || {};
     await sb.from('leads').update({ form_data: { ...fd, review: { ...fd.review, sent_at: nowIso, sent_value: c.value } } }).eq('id', c.transaction_id).then(() => {}, () => {});
   }
   for (const c of reviewRetract) {
+    if (!sentIds.has(c.transaction_id)) continue;
     const l = leads.find((x) => x.id === c.transaction_id); const fd = l?.form_data || {};
-    await sb.from('leads').update({ form_data: { ...fd, review: { ...fd.review, retract: false, retracted_at: nowIso, sent_at: null, sent_value: null } } }).eq('id', c.transaction_id).then(() => {}, () => {});
+    await sb.from('leads').update({ form_data: { ...fd, review: { ...fd.review, retract: false, retracted_at: nowIso, sent_at: null, sent_value: 0 } } }).eq('id', c.transaction_id).then(() => {}, () => {});
   }
   // Contract + Closed share bookkeeping shape; only the form_data key differs.
   const stampDeal = async (d, key) => {
     for (const c of [...d.new, ...d.adj]) {
+      if (!sentIds.has(c.transaction_id)) continue;
       const l = leads.find((x) => x.id === c.lead_id); const fd = l?.form_data || {};
       await sb.from('leads').update({ form_data: { ...fd, [key]: { ...(fd[key] || {}), sent_at: nowIso, sent_value: c.value } } }).eq('id', c.lead_id).then(() => {}, () => {});
     }
     for (const c of d.retract) {
+      if (!sentIds.has(c.transaction_id)) continue;
       const l = leads.find((x) => x.id === c.lead_id); const fd = l?.form_data || {};
-      await sb.from('leads').update({ form_data: { ...fd, [key]: { ...(fd[key] || {}), retract: false, retracted_at: nowIso, sent_at: null, sent_value: null } } }).eq('id', c.lead_id).then(() => {}, () => {});
+      await sb.from('leads').update({ form_data: { ...fd, [key]: { ...(fd[key] || {}), retract: false, retracted_at: nowIso, sent_at: null, sent_value: 0 } } }).eq('id', c.lead_id).then(() => {}, () => {});
     }
   };
   await stampDeal(contract, 'contract_upload');
   await stampDeal(closed, 'closed_upload');
 
-  await logRun(sb, { ran_at: ranAt, dry: false, ok: true, sent_count: toSendCount, to_send: toSendCount, summary, note: result?.note || null });
-  return NextResponse.json({ ok: true, sent: toSendCount, ...summary, ...result });
+  await logRun(sb, { ran_at: ranAt, dry: false, ok: rejected === 0, sent_count: result.sentCount, to_send: toSendCount, summary, note: result.skipped?.length ? `skipped: ${result.skipped.map((s) => s.group).join(', ')}` : null });
+  return NextResponse.json({ ok: rejected === 0, sent: result.sentCount, ...summary, google: g });
 }
 
 export async function GET(req) { return handle(req); }
