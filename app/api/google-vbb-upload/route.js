@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
-import { VBB_PROFIT_CAP, VBB_DEAD_STATUSES, contractValue } from '@/lib/reviewedValue';
+import { VBB_PROFIT_CAP, VBB_DEAD_STATUSES, contractValue, closedValue } from '@/lib/reviewedValue';
 import crypto from 'node:crypto';
 
 // Hourly offline-conversion uploader for the reviewed-value system.
@@ -101,7 +101,7 @@ async function handleRetract(req, sb) {
   const { data: cur } = await sb.from('leads').select('form_data').eq('id', leadId).maybeSingle();
   if (!cur) return NextResponse.json({ error: 'lead not found' }, { status: 404 });
   const fd = cur.form_data || {};
-  const key = kind === 'contract' ? 'contract_upload' : 'review';
+  const key = kind === 'contract' ? 'contract_upload' : kind === 'closed' ? 'closed_upload' : 'review';
   const node = fd[key];
   if (!node || !node.sent_at) return NextResponse.json({ ok: false, error: `nothing sent for ${kind} on this lead to retract` });
   const updated = { ...fd, [key]: { ...node, retract: true, retract_requested_at: new Date().toISOString() } };
@@ -126,18 +126,40 @@ async function handle(req) {
   const ids = (l) => ({ gclid: l.form_data?.gclid || l.gclid || null, gbraid: l.form_data?.gbraid || l.gbraid || null, wbraid: l.form_data?.wbraid || l.wbraid || null });
   const hashed = (l) => ({ email_sha256: l.email ? sha256(normEmail(l.email)) : null, phone_sha256: normPhone(l.phone) ? sha256(normPhone(l.phone)) : null });
   const matchable = (c) => !!(c.gclid || c.gbraid || c.wbraid || c.email_sha256 || c.phone_sha256);
+  // Window is measured from the CLICK (≈ lead creation): Google won't match a
+  // conversion more than 90 days after the click.
+  const clickOf = (l) => new Date(l.created_at || 0).getTime();
+  const tooLate = (conv, l) => { const c = clickOf(l); return c > 0 && conv > 0 && (conv - c) > NINETY_DAYS_MS; };
 
-  const reviewNew = [], reviewAdj = [], reviewRetract = []; let reviewHeld = 0, reviewUnchanged = 0;
-  const contractNew = [], contractAdj = [], contractRetract = [];
-  const contractNeedsReview = [], contractNeedsOffer = [];
-  let contractUnmatchable = 0, contractUnchanged = 0, contractOutsideWindow = 0;
+  const reviewNew = [], reviewAdj = [], reviewRetract = []; let reviewHeld = 0, reviewUnchanged = 0, reviewOutside = 0;
+
+  // Shared Contract/Closed queueing (same shape, different conversion + bookkeeping key).
+  const mkDeal = () => ({ new: [], adj: [], retract: [], needsReview: [], needsOffer: [], unmatchable: 0, unchanged: 0, outside: 0 });
+  const contract = mkDeal(), closed = mkDeal();
+  const queueDeal = (bucket, { action, orderSuffix, upKey, value, reason }, l, when, up) => {
+    if (up.retract && up.sent_at) { bucket.retract.push({ action, transaction_id: `${l.id}${orderSuffix}`, lead_id: l.id, ...ids(l), ...hashed(l) }); return; }
+    if (tooLate(when, l)) { bucket.outside++; return; }
+    if (value == null) { const flag = { lead_id: l.id, worth: Number(l.form_data?.review?.worth) || null }; if (reason === 'needs_offer') bucket.needsOffer.push(flag); else bucket.needsReview.push(flag); return; }
+    const base = { action, transaction_id: `${l.id}${orderSuffix}`, lead_id: l.id, value, time: new Date(when).toISOString(), ...ids(l), ...hashed(l) };
+    if (!matchable(base)) bucket.unmatchable++;
+    else if (!up.sent_at) bucket.new.push(base);
+    else if (Number(up.sent_value) !== value) bucket.adj.push({ ...base, restatement: true });
+    else bucket.unchanged++;
+  };
 
   for (const l of leads) {
     const r = l.form_data?.review;
+    const o = l.form_data?.outcomes || {};
+    const status = String(l.pipeline_status || l.status || '').toUpperCase();
+    // Fold the card's live offer into the review so "needs offer" clears when it's filled.
+    const reviewForDeal = r ? { ...r, offer: r.offer != null ? r.offer : (Number(l.offer_amount) || 0) } : null;
+
     // Reviewed Lead (transaction_id = lead ID; 30-min hold; edits -> restatement)
     if (r && r.value != null) {
       if (r.retract && r.sent_at) {
         reviewRetract.push({ action: 'Reviewed Lead', transaction_id: l.id, ...ids(l), ...hashed(l) });
+      } else if (tooLate(new Date(r.reviewed_at || 0).getTime(), l)) {
+        reviewOutside++;
       } else if (new Date(r.reviewed_at || 0).getTime() > cutoff) {
         reviewHeld++;
       } else {
@@ -148,46 +170,39 @@ async function handle(req) {
       }
     }
 
-    // Contract Signed — requires a HUMAN-reviewed worth + an offer. Engine-only never ships.
-    if (CONTRACT_STATUSES.includes(String(l.pipeline_status || l.status || '').toUpperCase())) {
-      const o = l.form_data?.outcomes || {};
-      const whenStr = o.UNDER_CONTRACT?.at || o.AGREEMENT_SENT?.at || o.CLOSED?.at || l.last_activity_at || l.updated_at || l.created_at;
-      const when = new Date(whenStr || 0).getTime();
-      const cu = l.form_data?.contract_upload || {};
-      // Fold the card's live offer into the review so "needs offer" clears when it's filled.
-      const reviewForContract = r ? { ...r, offer: r.offer != null ? r.offer : (Number(l.offer_amount) || 0) } : null;
-      if (cu.retract && cu.sent_at) {
-        contractRetract.push({ action: 'Contract Signed', transaction_id: `${l.id}-contract`, lead_id: l.id, ...ids(l), ...hashed(l) });
-        continue;
-      }
-      if (!when || when < now - NINETY_DAYS_MS) { contractOutsideWindow++; continue; } // Google won't match older than the window
-      const cv = contractValue(reviewForContract);
-      if (cv.value == null) {
-        const flag = { lead_id: l.id, status: String(l.pipeline_status || l.status || '').toUpperCase(), worth: Number(r?.worth) || null, offer: Number(reviewForContract?.offer) || null };
-        if (cv.reason === 'needs_offer') contractNeedsOffer.push(flag); else contractNeedsReview.push(flag);
-        continue;
-      }
-      const base = { action: 'Contract Signed', transaction_id: `${l.id}-contract`, lead_id: l.id, value: cv.value, time: new Date(when).toISOString(), ...ids(l), ...hashed(l) };
-      if (!matchable(base)) contractUnmatchable++;        // no gclid AND no hashed PII -> Google can't match
-      else if (!cu.sent_at) contractNew.push(base);
-      else if (Number(cu.sent_value) !== cv.value) contractAdj.push({ ...base, restatement: true });
-      else contractUnchanged++;
+    // Contract Signed — profit × (75% − lean% at time of contract). Needs review + offer.
+    if (CONTRACT_STATUSES.includes(status)) {
+      const when = new Date(o.UNDER_CONTRACT?.at || o.AGREEMENT_SENT?.at || o.CLOSED?.at || l.last_activity_at || l.updated_at || l.created_at || 0).getTime();
+      const leanAtContract = o.UNDER_CONTRACT?.lean ?? o.AGREEMENT_SENT?.lean ?? r?.lean;
+      const cv = contractValue(reviewForDeal, { leanAtContract });
+      queueDeal(contract, { action: 'Contract Signed', orderSuffix: '-contract', upKey: 'contract_upload', value: cv.value, reason: cv.reason }, l, when, l.form_data?.contract_upload || {});
+    }
+
+    // Closed Deal — the final profit × 25%. Needs review + offer.
+    if (status === 'CLOSED') {
+      const when = new Date(o.CLOSED?.at || l.last_activity_at || l.updated_at || l.created_at || 0).getTime();
+      const dv = closedValue(reviewForDeal);
+      queueDeal(closed, { action: 'Closed Deal', orderSuffix: '-closed', upKey: 'closed_upload', value: dv.value, reason: dv.reason }, l, when, l.form_data?.closed_upload || {});
     }
   }
 
-  const toSendCount = reviewNew.length + reviewAdj.length + reviewRetract.length + contractNew.length + contractAdj.length + contractRetract.length;
+  const toSendCount = reviewNew.length + reviewAdj.length + reviewRetract.length
+    + contract.new.length + contract.adj.length + contract.retract.length
+    + closed.new.length + closed.adj.length + closed.retract.length;
 
+  const dealSummary = (d) => ({ new: d.new.length, adjustments: d.adj.length, retractions: d.retract.length, needsReview: d.needsReview.length, needsOffer: d.needsOffer.length, unmatchable_no_gclid_or_pii: d.unmatchable, unchanged: d.unchanged, outsideWindow: d.outside });
   const summary = {
-    reviewedLead: { new: reviewNew.length, adjustments: reviewAdj.length, retractions: reviewRetract.length, heldUnder30min: reviewHeld, unchanged: reviewUnchanged },
-    contractSigned: { new: contractNew.length, adjustments: contractAdj.length, retractions: contractRetract.length, needsReview: contractNeedsReview.length, needsOffer: contractNeedsOffer.length, unmatchable_no_gclid_or_pii: contractUnmatchable, unchanged: contractUnchanged, outsideWindow: contractOutsideWindow },
+    reviewedLead: { new: reviewNew.length, adjustments: reviewAdj.length, retractions: reviewRetract.length, heldUnder30min: reviewHeld, unchanged: reviewUnchanged, outsideWindow: reviewOutside },
+    contractSigned: dealSummary(contract),
+    closedDeal: dealSummary(closed),
   };
 
   if (dry) {
     await logRun(sb, { ran_at: ranAt, dry: true, ok: true, sent_count: 0, to_send: toSendCount, summary });
     return NextResponse.json({
       ok: true, dry: true, ...summary,
-      flagged: { needsReview: contractNeedsReview.slice(0, 10), needsOffer: contractNeedsOffer.slice(0, 10) },
-      sampleContract: contractNew.slice(0, 8).map((c) => ({ leadId: c.lead_id, value: c.value, hasClickId: !!(c.gclid || c.gbraid || c.wbraid), hasHashedPII: !!(c.email_sha256 || c.phone_sha256) })),
+      flagged: { contractNeedsReview: contract.needsReview.slice(0, 10), contractNeedsOffer: contract.needsOffer.slice(0, 10), closedNeedsReview: closed.needsReview.slice(0, 10), closedNeedsOffer: closed.needsOffer.slice(0, 10) },
+      sampleContract: contract.new.slice(0, 8).map((c) => ({ leadId: c.lead_id, value: c.value, hasClickId: !!(c.gclid || c.gbraid || c.wbraid), hasHashedPII: !!(c.email_sha256 || c.phone_sha256) })),
     });
   }
 
@@ -201,12 +216,12 @@ async function handle(req) {
 
   let result;
   try {
-    result = await uploadToGoogle({ reviewNew, reviewAdj, reviewRetract, contractNew, contractAdj, contractRetract });
+    result = await uploadToGoogle({ reviewNew, reviewAdj, reviewRetract, contract, closed });
   } catch (e) {
     const notConfigured = /not configured/i.test(e.message || '');
     if (!notConfigured) await alertAdmins(sb, 'VBB upload FAILED', `${e.message}. Wanted to send ${toSendCount}.`);
     await logRun(sb, { ran_at: ranAt, dry: false, ok: false, sent_count: 0, to_send: toSendCount, summary, note: e.message });
-    return NextResponse.json({ ok: false, error: e.message, wouldSend: { reviewedNew: reviewNew.length, reviewedAdj: reviewAdj.length, reviewRetract: reviewRetract.length, contractNew: contractNew.length, contractAdj: contractAdj.length, contractRetract: contractRetract.length } });
+    return NextResponse.json({ ok: false, error: e.message, wouldSend: summary });
   }
 
   // Alert on a bad rejection rate from Google's partial-failure response.
@@ -225,14 +240,19 @@ async function handle(req) {
     const l = leads.find((x) => x.id === c.transaction_id); const fd = l?.form_data || {};
     await sb.from('leads').update({ form_data: { ...fd, review: { ...fd.review, retract: false, retracted_at: nowIso, sent_at: null, sent_value: null } } }).eq('id', c.transaction_id).then(() => {}, () => {});
   }
-  for (const c of [...contractNew, ...contractAdj]) {
-    const l = leads.find((x) => x.id === c.lead_id); const fd = l?.form_data || {};
-    await sb.from('leads').update({ form_data: { ...fd, contract_upload: { ...(fd.contract_upload || {}), sent_at: nowIso, sent_value: c.value } } }).eq('id', c.lead_id).then(() => {}, () => {});
-  }
-  for (const c of contractRetract) {
-    const l = leads.find((x) => x.id === c.lead_id); const fd = l?.form_data || {};
-    await sb.from('leads').update({ form_data: { ...fd, contract_upload: { ...(fd.contract_upload || {}), retract: false, retracted_at: nowIso, sent_at: null, sent_value: null } } }).eq('id', c.lead_id).then(() => {}, () => {});
-  }
+  // Contract + Closed share bookkeeping shape; only the form_data key differs.
+  const stampDeal = async (d, key) => {
+    for (const c of [...d.new, ...d.adj]) {
+      const l = leads.find((x) => x.id === c.lead_id); const fd = l?.form_data || {};
+      await sb.from('leads').update({ form_data: { ...fd, [key]: { ...(fd[key] || {}), sent_at: nowIso, sent_value: c.value } } }).eq('id', c.lead_id).then(() => {}, () => {});
+    }
+    for (const c of d.retract) {
+      const l = leads.find((x) => x.id === c.lead_id); const fd = l?.form_data || {};
+      await sb.from('leads').update({ form_data: { ...fd, [key]: { ...(fd[key] || {}), retract: false, retracted_at: nowIso, sent_at: null, sent_value: null } } }).eq('id', c.lead_id).then(() => {}, () => {});
+    }
+  };
+  await stampDeal(contract, 'contract_upload');
+  await stampDeal(closed, 'closed_upload');
 
   await logRun(sb, { ran_at: ranAt, dry: false, ok: true, sent_count: toSendCount, to_send: toSendCount, summary, note: result?.note || null });
   return NextResponse.json({ ok: true, sent: toSendCount, ...summary, ...result });

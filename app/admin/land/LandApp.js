@@ -20,7 +20,7 @@ import CampaignsPanel from '@/components/CampaignsPanel';
 import { timeAgo, channelLabel } from '@/lib/format';
 import { playDing } from '@/lib/sound';
 import { DIRECTIONS, OFFER_DIRECTIONS, GENERAL_DIRECTIONS, FOLLOWUP_BUCKETS, FOLLOWUP_KEYS, LOST_REASONS, formatOffer, mergeScript, firstTouch, touchForStep } from '@/lib/followups';
-import { VBB_PROFIT_CAP, VBB_CLOSE_CHANCE, VBB_RESALE_SPEED, VBB_DEAD_STATUSES, reviewedValue as vbbReviewedValue, reviewedProfit, recomputeReview, contractValue, closeChance, pctLabel } from '@/lib/reviewedValue';
+import { VBB_PROFIT_CAP, VBB_CLOSE_CHANCE, VBB_DEAD_STATUSES, CONTRACT_TOTAL, CLOSED_SHARE, reviewedValue as vbbReviewedValue, reviewedProfit, cappedProfit, recomputeReview, contractValue, closedValue, closeChance, pctLabel } from '@/lib/reviewedValue';
 
 // A conversation note is anything that isn't an auto-logged activity marker.
 const isConversationNote = (content) =>
@@ -53,18 +53,23 @@ function ReviewPanel({ lead, onSave }) {
   // Re-sync when a review is saved here OR lands from another tab/device (realtime).
   useEffect(() => { setDraft(null); setEditing(false); }, [rev?.reviewed_at]);
 
+  const LEANS = ['hot', 'warm', 'cold', 'ready', 'rejected'];
+  const leanLabel = (ln) => ln ? ln[0].toUpperCase() + ln.slice(1) : 'no lean';
+
   // Once reviewed, show a LOCKED summary (not the full form) until you hit Edit.
   if (rev && !editing) {
-    const leanLbl = rev.lean ? rev.lean[0].toUpperCase() + rev.lean.slice(1) : 'no lean';
-    const spdLbl = { fast: 'Fast', normal: 'Normal', slow: 'Slow', hard: 'Hard to sell' }[rev.speed] || 'Normal';
+    const cProf = cappedProfit({ worth: rev.worth, offer: rev.offer });
+    const cAdd = rev.offer > 0 ? Math.round(cProf * Math.max(0, CONTRACT_TOTAL - closeChance(rev.lean))) : null;
+    const clAdd = rev.offer > 0 ? Math.round(cProf * CLOSED_SHARE) : null;
     return (
       <div className="mb-4 rounded-lg border border-emerald-600/40 bg-emerald-500/5 px-3 py-2.5">
         <div className="flex items-center justify-between mb-1">
           <span className="text-[10px] font-bold uppercase tracking-wide text-emerald-300/80">Deal Value · Reviewed</span>
           <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300" title={`Reviewed by ${rev.reviewed_by || ''}`}>✓ {new Date(rev.reviewed_at).toLocaleDateString()}</span>
         </div>
-        <div className="text-xl font-bold text-emerald-300 leading-tight">{fmt(rev.value)}<span className="text-[11px] font-normal text-slate-500"> → Google</span></div>
-        <div className="text-[11px] text-slate-400 mt-0.5">{fmt(rev.worth)} worth · {leanLbl} · {spdLbl} · profit {fmt(rev.base_profit ?? rev.profit)}{rev.override != null ? ' · manual' : ''}</div>
+        <div className="text-xl font-bold text-emerald-300 leading-tight">{fmt(rev.value)}<span className="text-[11px] font-normal text-slate-500"> → Google now</span></div>
+        <div className="text-[11px] text-slate-400 mt-0.5">{fmt(rev.worth)} worth · {leanLabel(rev.lean)} · profit {fmt(rev.base_profit ?? rev.profit)}{rev.override != null ? ' · manual' : ''}</div>
+        {cAdd != null && <div className="text-[10px] text-slate-500 mt-0.5">if it contracts +{fmt(cAdd)} · closes +{fmt(clAdd)} = {fmt(cProf)} total</div>}
         <button type="button" onClick={() => setEditing(true)} className="mt-2 text-xs font-semibold px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200">Edit</button>
       </div>
     );
@@ -73,7 +78,7 @@ function ReviewPanel({ lead, onSave }) {
   const d = draft || {
     worth: rev?.worth != null ? String(rev.worth) : (v?.resale != null ? String(v.resale) : ''),
     exactAcres: rev?.exact_acres != null ? String(rev.exact_acres) : '',
-    lean: rev?.lean || '', speed: rev?.speed || 'normal',
+    lean: rev?.lean || '',
     override: rev?.override != null ? String(rev.override) : '',
     worthEdited: false, showOverride: false,
   };
@@ -81,10 +86,13 @@ function ReviewPanel({ lead, onSave }) {
   const worthNum = Number(d.worth) || 0;
   // Profit = worth − offer (if the card's Offer is filled), else worth × 50%.
   const profit = offer > 0 ? Math.max(0, worthNum - offer) : Math.round(worthNum * 0.5);
-  const auto = vbbReviewedValue({ profit, lean: d.lean, speed: d.speed, deadLost });
+  const auto = vbbReviewedValue({ profit, lean: d.lean, deadLost });
   const value = d.override !== '' ? Math.round(Number(d.override)) : auto;
   const ccPct = pctLabel(closeChance(d.lean));
-  const rs = VBB_RESALE_SPEED[d.speed] ?? 1;
+  // Value ladder preview: the contract + closed conversions that will follow.
+  const cProf = cappedProfit({ worth: worthNum, offer });
+  const contractAdd = offer > 0 ? Math.round(cProf * Math.max(0, CONTRACT_TOTAL - closeChance(d.lean))) : null;
+  const closedAdd = offer > 0 ? Math.round(cProf * CLOSED_SHARE) : null;
   // Exact acres recomputes "worth" from $/ac — unless the rep typed worth manually.
   const onAcres = (val) => {
     const nw = (!d.worthEdited && v?.ppa && Number(val) > 0) ? String(Math.round(v.ppa * Number(val))) : d.worth;
@@ -105,20 +113,20 @@ function ReviewPanel({ lead, onSave }) {
       </div>
       <div className="flex flex-wrap items-center gap-1.5 mb-2">
         <input type="number" value={d.exactAcres} onChange={(e) => onAcres(e.target.value)} placeholder="exact ac" className="w-20 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white" />
-        {['hot', 'warm', 'cold', 'ready'].map((ln) => (
-          <button key={ln} type="button" onClick={() => setD({ lean: d.lean === ln ? '' : ln })} className={`text-[11px] px-2 py-1 rounded border ${d.lean === ln ? 'bg-blue-600/40 border-blue-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-300'}`}>{ln[0].toUpperCase() + ln.slice(1)}</button>
+        {LEANS.map((ln) => (
+          <button key={ln} type="button" onClick={() => setD({ lean: d.lean === ln ? '' : ln })} className={`text-[11px] px-2 py-1 rounded border ${d.lean === ln ? (ln === 'rejected' ? 'bg-rose-600/40 border-rose-500 text-white' : 'bg-blue-600/40 border-blue-500 text-white') : 'bg-slate-800 border-slate-700 text-slate-300'}`}>{leanLabel(ln)}</button>
         ))}
-        <select value={d.speed} onChange={(e) => setD({ speed: e.target.value })} className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white">
-          <option value="fast">Fast</option><option value="normal">Normal</option><option value="slow">Slow</option><option value="hard">Hard to sell</option>
-        </select>
       </div>
       <div className="text-[11px] mb-0.5">
         {deadLost
           ? <span className="font-bold text-slate-300">Sends to Google: $0 · Dead/Lost</span>
-          : <><span className="font-bold text-emerald-300">Sends to Google: {fmt(value)}</span><span className="text-slate-500"> = {fmt(Math.min(profit, VBB_PROFIT_CAP))} × {ccPct} × {rs}</span>{d.override !== '' && <span className="text-amber-300"> · override</span>}</>}
+          : <><span className="font-bold text-emerald-300">Sends to Google: {fmt(value)}</span><span className="text-slate-500"> = {fmt(Math.min(profit, VBB_PROFIT_CAP))} × {ccPct}</span>{d.override !== '' && <span className="text-amber-300"> · override</span>}</>}
         {!deadLost && d.override === '' && !d.showOverride && <> · <button type="button" onClick={() => setD({ showOverride: true })} className="text-blue-400 hover:underline">override</button></>}
       </div>
-      <div className="text-[10px] text-slate-500 mb-2">profit = {offer > 0 ? `worth − offer (${fmt(offer)})` : 'worth × 50%'} = {fmt(profit)}</div>
+      <div className="text-[10px] text-slate-500 mb-0.5">profit = {offer > 0 ? `worth − offer (${fmt(offer)})` : 'worth × 50%'} = {fmt(profit)}</div>
+      {contractAdd != null
+        ? <div className="text-[10px] text-slate-500 mb-2">then if it contracts +{fmt(contractAdd)} · closes +{fmt(closedAdd)} = {fmt(cProf)} total profit</div>
+        : <div className="text-[10px] text-amber-400/80 mb-2">set an Offer to unlock the Contract + Closed conversions</div>}
       {(d.showOverride || d.override !== '') && (
         <div className="flex items-center gap-1 mb-2">
           <span className="text-slate-400 text-xs">override $</span>
@@ -126,7 +134,7 @@ function ReviewPanel({ lead, onSave }) {
           {d.override !== '' && <button type="button" onClick={() => setD({ override: '', showOverride: false })} className="text-[10px] text-slate-400 hover:underline">clear</button>}
         </div>
       )}
-      <button type="button" onClick={() => { onSave(lead, { value, worth: worthNum, offer, profit, lean: d.lean, speed: d.speed, exact_acres: d.exactAcres ? Number(d.exactAcres) : null, override: d.override !== '' ? Math.round(Number(d.override)) : null }); setDraft(null); setEditing(false); }} className="w-full text-xs font-semibold px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white">{rev ? 'Update & lock' : 'Mark Reviewed'}</button>
+      <button type="button" onClick={() => { onSave(lead, { value, worth: worthNum, offer, profit, lean: d.lean, exact_acres: d.exactAcres ? Number(d.exactAcres) : null, override: d.override !== '' ? Math.round(Number(d.override)) : null }); setDraft(null); setEditing(false); }} className="w-full text-xs font-semibold px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white">{rev ? 'Update & lock' : 'Mark Reviewed'}</button>
     </div>
   );
 }
@@ -628,7 +636,8 @@ export default function LandLeadsAdminPage() {
   // and save the human-reviewed value that feeds Google. ----
   const [notReviewedOnly, setNotReviewedOnly] = useState(false);
   const [queueReviewedView, setQueueReviewedView] = useState('ready'); // ready|held|sent
-  const [queueContractView, setQueueContractView] = useState('ready'); // ready|sent|unmatchable|outside
+  const [queueContractView, setQueueContractView] = useState('ready'); // ready|needsReview|needsOffer|sent|unmatchable|outside
+  const [queueClosedView, setQueueClosedView] = useState('ready');     // ready|needsReview|needsOffer|sent|unmatchable|outside
   const vbbScoredRef = useRef(new Set());
 
   // Score a lead through the engine and merge the estimate onto it locally (also
@@ -6004,33 +6013,51 @@ export default function LandLeadsAdminPage() {
           const CONTRACT = ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'];
           const fmt = (n) => '$' + Math.round(Number(n || 0)).toLocaleString();
           const ago = (ts) => { const m = Math.max(0, Math.round((now - new Date(ts).getTime()) / 60000)); if (m < 60) return `${m}m ago`; const h = Math.round(m / 60); return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`; };
-          const reviewed = { ready: [], held: [], sent: [] };
-          const contracts = { ready: [], sent: [], needsReview: [], needsOffer: [], unmatchable: [], outside: [] };
+          // Window is measured from the CLICK (≈ lead creation) — Google can't match a
+          // conversion more than 90 days after the ad click, so those show "outside window".
+          const clickOf = (l) => new Date(l.created_at || 0).getTime();
+          const tooLate = (conv, l) => { const c = clickOf(l); return c > 0 && conv > 0 && (conv - c) > WINDOW; };
+          const reviewed = { ready: [], held: [], sent: [], outside: [] };
+          const dealBuckets = () => ({ ready: [], sent: [], needsReview: [], needsOffer: [], unmatchable: [], outside: [] });
+          const contracts = dealBuckets();
+          const closed = dealBuckets();
+          // Route a Contract/Closed lead into its bucket from a {value,reason} result.
+          const routeDeal = (bucket, cv, when, l, hasClick, hasPII, up) => {
+            const cval = cv.value || 0;
+            if (tooLate(when, l)) bucket.outside.push({ l, val: cval, meta: 'outside 90-day window' });
+            else if (cv.reason === 'needs_review') bucket.needsReview.push({ l, val: 0, meta: 'no reviewed worth — fill in the deal value' });
+            else if (cv.reason === 'needs_offer') bucket.needsOffer.push({ l, val: 0, meta: 'no offer — enter the offer amount' });
+            else if (!hasClick && !hasPII) bucket.unmatchable.push({ l, val: cval, meta: 'no gclid / email / phone' });
+            else if (!up.sent_at) bucket.ready.push({ l, val: cval, meta: hasClick ? 'via gclid' : 'via hashed PII' });
+            else if (Number(up.sent_value) !== cval) bucket.ready.push({ l, val: cval, meta: 'edited → adjust' });
+            else bucket.sent.push({ l, val: cval, meta: `sent ${ago(up.sent_at)}` });
+          };
           for (const l of (allLeads || [])) {
             const r = l.form_data?.review;
+            const hasClick = !!(l.form_data?.gclid || l.gclid), hasPII = !!(l.email || l.phone);
+            const o = l.form_data?.outcomes || {};
+            const status = String(l.pipeline_status || l.status || '').toUpperCase();
+            // Contract/Closed value needs a HUMAN-reviewed worth + offer (card offer folds in).
+            const reviewForDeal = r ? { ...r, offer: r.offer != null ? r.offer : (Number(l.offer_amount) || 0) } : null;
+            // Reviewed Lead
             if (r && r.value != null) {
-              if (new Date(r.reviewed_at || 0).getTime() > now - HOLD) reviewed.held.push({ l, val: r.value, meta: `ready in ${Math.max(1, 30 - Math.round((now - new Date(r.reviewed_at).getTime()) / 60000))}m` });
+              const revAt = new Date(r.reviewed_at || 0).getTime();
+              if (tooLate(revAt, l)) reviewed.outside.push({ l, val: r.value, meta: 'outside 90-day window' });
+              else if (revAt > now - HOLD) reviewed.held.push({ l, val: r.value, meta: `ready in ${Math.max(1, 30 - Math.round((now - revAt) / 60000))}m` });
               else if (!r.sent_at) reviewed.ready.push({ l, val: r.value, meta: 'new' });
               else if (Number(r.sent_value) !== Number(r.value)) reviewed.ready.push({ l, val: r.value, meta: `edited → adjust (was ${fmt(r.sent_value)})` });
               else reviewed.sent.push({ l, val: r.value, meta: `sent ${ago(r.sent_at)}` });
             }
-            if (CONTRACT.includes(String(l.pipeline_status || l.status || '').toUpperCase())) {
-              const o = l.form_data?.outcomes || {};
-              const whenStr = o.UNDER_CONTRACT?.at || o.AGREEMENT_SENT?.at || o.CLOSED?.at || l.last_activity_at || l.updated_at || l.created_at;
-              const when = new Date(whenStr || 0).getTime();
-              const hasClick = !!(l.form_data?.gclid || l.gclid), hasPII = !!(l.email || l.phone);
-              const cu = l.form_data?.contract_upload || {};
-              // Contract value needs a HUMAN-reviewed worth + an offer (card offer folds in).
-              const reviewForContract = r ? { ...r, offer: r.offer != null ? r.offer : (Number(l.offer_amount) || 0) } : null;
-              const cv = contractValue(reviewForContract);
-              const cval = cv.value || 0;
-              if (!when || when < now - WINDOW) contracts.outside.push({ l, val: cval, meta: 'outside 90-day window' });
-              else if (cv.reason === 'needs_review') contracts.needsReview.push({ l, val: 0, meta: 'no reviewed worth — fill in the deal value' });
-              else if (cv.reason === 'needs_offer') contracts.needsOffer.push({ l, val: 0, meta: 'no offer — enter the offer amount' });
-              else if (!hasClick && !hasPII) contracts.unmatchable.push({ l, val: cval, meta: 'no gclid / email / phone' });
-              else if (!cu.sent_at) contracts.ready.push({ l, val: cval, meta: hasClick ? 'via gclid' : 'via hashed PII' });
-              else if (Number(cu.sent_value) !== cval) contracts.ready.push({ l, val: cval, meta: 'edited → adjust' });
-              else contracts.sent.push({ l, val: cval, meta: `sent ${ago(cu.sent_at)}` });
+            // Contract Signed — profit × (75% − lean% at time of contract)
+            if (CONTRACT.includes(status)) {
+              const when = new Date(o.UNDER_CONTRACT?.at || o.AGREEMENT_SENT?.at || o.CLOSED?.at || l.last_activity_at || l.updated_at || l.created_at || 0).getTime();
+              const leanAtContract = o.UNDER_CONTRACT?.lean ?? o.AGREEMENT_SENT?.lean ?? r?.lean;
+              routeDeal(contracts, contractValue(reviewForDeal, { leanAtContract }), when, l, hasClick, hasPII, l.form_data?.contract_upload || {});
+            }
+            // Closed Deal — the final profit × 25%
+            if (status === 'CLOSED') {
+              const when = new Date(o.CLOSED?.at || l.last_activity_at || l.updated_at || l.created_at || 0).getTime();
+              routeDeal(closed, closedValue(reviewForDeal), when, l, hasClick, hasPII, l.form_data?.closed_upload || {});
             }
           }
           const card = (label, items, active, onClick, color) => (
@@ -6051,19 +6078,20 @@ export default function LandLeadsAdminPage() {
             <div className="space-y-6">
               <div className="bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-xl p-6">
                 <h2 className="text-2xl font-bold text-white">Google Upload Queue</h2>
-                <p className="text-slate-400 text-sm mt-1"><strong>Tap a tile</strong> to see its leads; click a lead to open it. Reviewed values wait 30 min before going out; a value edited after it's sent goes up as an adjustment. A lead that's both reviewed and signed shows in BOTH sections — they're two separate conversions. Nothing actually sends until the Data Manager API is connected (so "Already sent" stays 0 until then).</p>
+                <p className="text-slate-400 text-sm mt-1"><strong>Tap a tile</strong> to see its leads; click a lead to open it. The three conversions are a ladder that adds up to the deal's real profit: <strong>Reviewed</strong> = profit × lean%, <strong>Contract</strong> = profit × (75% − lean%), <strong>Closed</strong> = profit × 25%. Reviewed values wait 30 min; a value edited after it's sent goes up as an adjustment. Contract/Closed need a human review + an offer. A conversion can't match more than 90 days after the ad click → "outside window". Nothing sends until the Data Manager API is connected (so "Already sent" stays 0 until then).</p>
               </div>
               <div>
-                <div className="text-sm font-bold text-slate-300 mb-2">Reviewed Lead</div>
-                <div className="grid grid-cols-3 gap-3 mb-3">
+                <div className="text-sm font-bold text-slate-300 mb-2">Reviewed Lead <span className="text-slate-500 font-normal">· profit × lean%</span></div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
                   {card('Ready to send', reviewed.ready, queueReviewedView === 'ready', () => setQueueReviewedView('ready'), 'border-emerald-500/50 bg-emerald-500/15 text-emerald-200')}
                   {card('Held (<30 min)', reviewed.held, queueReviewedView === 'held', () => setQueueReviewedView('held'), 'border-amber-500/50 bg-amber-500/15 text-amber-200')}
                   {card('Already sent', reviewed.sent, queueReviewedView === 'sent', () => setQueueReviewedView('sent'), 'border-sky-500/50 bg-sky-500/15 text-sky-200')}
+                  {card('> 90 days', reviewed.outside, queueReviewedView === 'outside', () => setQueueReviewedView('outside'), 'border-slate-500/50 bg-slate-600/20 text-slate-300')}
                 </div>
                 {list(reviewed[queueReviewedView] || reviewed.ready)}
               </div>
               <div>
-                <div className="text-sm font-bold text-slate-300 mb-2">Contract Signed <span className="text-slate-500 font-normal">· value = (reviewed worth − offer, cap $100k) × 75% · needs a human review</span></div>
+                <div className="text-sm font-bold text-slate-300 mb-2">Contract Signed <span className="text-slate-500 font-normal">· profit × (75% − lean% at contract) · needs a human review + offer</span></div>
                 <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-3">
                   {card('Ready to send', contracts.ready, queueContractView === 'ready', () => setQueueContractView('ready'), 'border-emerald-500/50 bg-emerald-500/15 text-emerald-200')}
                   {card('Needs review', contracts.needsReview, queueContractView === 'needsReview', () => setQueueContractView('needsReview'), 'border-rose-500/50 bg-rose-500/15 text-rose-200')}
@@ -6073,6 +6101,18 @@ export default function LandLeadsAdminPage() {
                   {card('> 90 days', contracts.outside, queueContractView === 'outside', () => setQueueContractView('outside'), 'border-slate-500/50 bg-slate-600/20 text-slate-300')}
                 </div>
                 {list(contracts[queueContractView] || contracts.ready)}
+              </div>
+              <div>
+                <div className="text-sm font-bold text-slate-300 mb-2">Closed Deal <span className="text-slate-500 font-normal">· profit × 25% · needs a human review + offer</span></div>
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-3">
+                  {card('Ready to send', closed.ready, queueClosedView === 'ready', () => setQueueClosedView('ready'), 'border-emerald-500/50 bg-emerald-500/15 text-emerald-200')}
+                  {card('Needs review', closed.needsReview, queueClosedView === 'needsReview', () => setQueueClosedView('needsReview'), 'border-rose-500/50 bg-rose-500/15 text-rose-200')}
+                  {card('Needs offer', closed.needsOffer, queueClosedView === 'needsOffer', () => setQueueClosedView('needsOffer'), 'border-amber-500/50 bg-amber-500/15 text-amber-200')}
+                  {card('Already sent', closed.sent, queueClosedView === 'sent', () => setQueueClosedView('sent'), 'border-sky-500/50 bg-sky-500/15 text-sky-200')}
+                  {card('No gclid / PII', closed.unmatchable, queueClosedView === 'unmatchable', () => setQueueClosedView('unmatchable'), 'border-slate-500/50 bg-slate-600/20 text-slate-300')}
+                  {card('> 90 days', closed.outside, queueClosedView === 'outside', () => setQueueClosedView('outside'), 'border-slate-500/50 bg-slate-600/20 text-slate-300')}
+                </div>
+                {list(closed[queueClosedView] || closed.ready)}
               </div>
             </div>
           );
