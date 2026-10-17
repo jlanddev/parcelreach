@@ -39,70 +39,117 @@ const vbbProfitFor = (v, exactAcres) => {
   return Number(v.profit) || 0;                                // else the engine's banded profit
 };
 
-// The Deal Value + review panel on a lead card: engine estimate, exact-acres /
-// lean / resale-speed inputs, the auto-computed reviewed value (editable), and
-// Mark Reviewed. Its own local state so typing never re-renders the whole board.
+// Pipeline-stage rank + labels so the Deal Value card can MIRROR the lead's actual
+// stage (read-only; it never changes the status). Contract fires once a lead reaches
+// Agreement Sent, Closed once it reaches Closed — matching the uploader.
+const VBB_STAGE_RANK = { NEW: 0, CONTACTING: 1, CONTACTED: 1, ANTHONY_CONTACTED: 1, ANTHONY_FOLLOW_UP: 1, FOLLOW_UP: 1, NURTURE: 1, OFFER_CURATED: 2, APPT_SET_FOR_JORDAN: 2, OFFER_SENT: 3, NEGOTIATING: 3, AGREEMENT_SENT: 4, UNDER_CONTRACT: 5, CLOSED: 6 };
+const VBB_CONTRACT_RANK = 4, VBB_CLOSED_RANK = 6;
+const VBB_STAGE_LABEL = { NEW: 'New', CONTACTING: 'In contact', CONTACTED: 'In contact', ANTHONY_CONTACTED: 'In contact', ANTHONY_FOLLOW_UP: 'Follow-up', FOLLOW_UP: 'Follow-up', NURTURE: 'Nurture', OFFER_CURATED: 'Offer curated', APPT_SET_FOR_JORDAN: 'Appt set', OFFER_SENT: 'Offer sent', NEGOTIATING: 'Negotiating', AGREEMENT_SENT: 'Agreement sent', UNDER_CONTRACT: 'Under contract', CLOSED: 'Closed', DEAD: 'Dead', LOST: 'Lost', WE_PASSED: 'We passed' };
+const vbbStageRank = (s) => VBB_STAGE_RANK[String(s || '').toUpperCase()] ?? 0;
+
+// The Deal Value card: a READ-ONLY MIRROR of the lead's pipeline stage + its existing
+// lean (deal_direction, set in the Lean row). The rep only enters the WORTH here; the
+// card derives the 3-conversion ladder and shows each step's real status. It never
+// changes the lead's status.
 function ReviewPanel({ lead, onSave }) {
   const v = lead.form_data?.vbb;
   const rev = lead.form_data?.review;
   const offer = Number(lead.offer_amount) || 0;
-  const deadLost = VBB_DEAD_STATUSES.includes(String(lead.pipeline_status || lead.status || '').toUpperCase());
+  const status = String(lead.pipeline_status || lead.status || '').toUpperCase();
+  const deadLost = VBB_DEAD_STATUSES.includes(status);
+  const lean = lead.deal_direction || rev?.lean || '';  // single lean source = the Lean row
+  const rank = vbbStageRank(status);
+  const leanPct = closeChance(lean);
+  const leanBadge = lean ? lean[0].toUpperCase() + lean.slice(1) : 'no lean';
+  const stageLabel = VBB_STAGE_LABEL[status] || status || 'New';
   const fmt = (n) => '$' + Math.round(Number(n || 0)).toLocaleString();
+  const dt = (ts) => new Date(ts).toLocaleDateString([], { month: 'numeric', day: 'numeric' });
   const [draft, setDraft] = useState(null);
   const [editing, setEditing] = useState(false);
-  // Re-sync when a review is saved here OR lands from another tab/device (realtime).
   useEffect(() => { setDraft(null); setEditing(false); }, [rev?.reviewed_at]);
 
-  const LEANS = ['hot', 'warm', 'cold', 'ready', 'rejected'];
-  const leanLabel = (ln) => ln ? ln[0].toUpperCase() + ln.slice(1) : 'no lean';
+  const worth = rev?.worth != null ? Number(rev.worth) : null;
+  const hasWorth = worth != null && worth > 0;
 
-  // Once reviewed, show a LOCKED summary (not the full form) until you hit Edit.
-  if (rev && !editing) {
-    const cProf = cappedProfit({ worth: rev.worth, offer: rev.offer });
-    const cAdd = rev.offer > 0 ? Math.round(cProf * Math.max(0, CONTRACT_TOTAL - closeChance(rev.lean))) : null;
-    const clAdd = rev.offer > 0 ? Math.round(cProf * CLOSED_SHARE) : null;
+  // Ladder values derived from the CURRENT worth / offer / lean / stage.
+  const revProfit = hasWorth ? (offer > 0 ? Math.max(0, worth - offer) : Math.round(worth * 0.5)) : 0;
+  const dealProfit = hasWorth ? cappedProfit({ worth, offer }) : 0; // needs a real offer
+  const reviewedVal = deadLost ? 0 : (rev?.override != null ? Math.round(Number(rev.override)) : Math.round(Math.min(revProfit, VBB_PROFIT_CAP) * leanPct));
+  const contractVal = deadLost ? 0 : Math.round(dealProfit * Math.max(0, CONTRACT_TOTAL - leanPct));
+  const closedVal = deadLost ? 0 : Math.round(dealProfit * CLOSED_SHARE);
+  const cu = lead.form_data?.contract_upload || {};
+  const du = lead.form_data?.closed_upload || {};
+
+  // Per-step status badge.
+  const B = { sent: 'bg-sky-500/20 text-sky-300', queued: 'bg-emerald-500/20 text-emerald-300', hold: 'bg-amber-500/15 text-amber-200', pending: 'bg-slate-600/30 text-slate-400', adjust: 'bg-indigo-500/20 text-indigo-300', need: 'bg-rose-500/20 text-rose-300' };
+  const reviewedStep = () => {
+    if (!hasWorth) return { s: 'needs worth', c: B.need };
+    if (deadLost) return { s: '$0 · dead/lost', c: B.pending };
+    if (rev?.sent_at && Number(rev.sent_value) === reviewedVal) return { s: `sent ✓ ${dt(rev.sent_at)}`, c: B.sent };
+    if (rev?.sent_at) return { s: 'adjustment queued', c: B.adjust };
+    if (new Date(rev?.reviewed_at || 0).getTime() > Date.now() - 30 * 60000) return { s: 'queued · 30-min hold', c: B.hold };
+    return { s: 'queued', c: B.queued };
+  };
+  const dealStep = (minRank, up, val, atName) => {
+    if (rank < minRank) return { s: `not yet · at ${atName}`, c: B.pending };
+    if (deadLost) return { s: '$0', c: B.pending };
+    if (!hasWorth) return { s: 'needs worth', c: B.need };
+    if (!(offer > 0)) return { s: 'needs offer', c: B.need };
+    if (up.sent_at && Number(up.sent_value) === val) return { s: `sent ✓ ${dt(up.sent_at)}`, c: B.sent };
+    if (up.sent_at) return { s: 'adjustment queued', c: B.adjust };
+    return { s: 'queued', c: B.queued };
+  };
+  const steps = [
+    { label: 'Reviewed Lead', val: reviewedVal, st: reviewedStep() },
+    { label: 'Contract Signed', val: contractVal, st: dealStep(VBB_CONTRACT_RANK, cu, contractVal, 'Agreement/Contract') },
+    { label: 'Closed Deal', val: closedVal, st: dealStep(VBB_CLOSED_RANK, du, closedVal, 'Closed') },
+  ];
+
+  // LOCKED view: the 3-step ladder mirroring the lead's actual stage.
+  if (hasWorth && !editing) {
     return (
       <div className="mb-4 rounded-lg border border-emerald-600/40 bg-emerald-500/5 px-3 py-2.5">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-[10px] font-bold uppercase tracking-wide text-emerald-300/80">Deal Value · Reviewed</span>
-          <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300" title={`Reviewed by ${rev.reviewed_by || ''}`}>✓ {new Date(rev.reviewed_at).toLocaleDateString()}</span>
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[10px] font-bold uppercase tracking-wide text-emerald-300/80">Deal Value · {stageLabel}</span>
+          <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-slate-600/50 text-slate-200">{leanBadge}{deadLost ? '' : ` · ${pctLabel(leanPct)}`}</span>
         </div>
-        <div className="text-xl font-bold text-emerald-300 leading-tight">{fmt(rev.value)}<span className="text-[11px] font-normal text-slate-500"> → Google now</span></div>
-        <div className="text-[11px] text-slate-400 mt-0.5">{fmt(rev.worth)} worth · {leanLabel(rev.lean)} · profit {fmt(rev.base_profit ?? rev.profit)}{rev.override != null ? ' · manual' : ''}</div>
-        {cAdd != null && <div className="text-[10px] text-slate-500 mt-0.5">if it contracts +{fmt(cAdd)} · closes +{fmt(clAdd)} = {fmt(cProf)} total</div>}
-        <button type="button" onClick={() => setEditing(true)} className="mt-2 text-xs font-semibold px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200">Edit</button>
+        <div className="space-y-1">
+          {steps.map((s) => (
+            <div key={s.label} className="flex items-center justify-between gap-2">
+              <span className="text-[11px] text-slate-300 w-24 flex-shrink-0">{s.label}</span>
+              <span className="text-sm font-bold text-emerald-300 w-20 text-right flex-shrink-0">{fmt(s.val)}</span>
+              <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded flex-1 text-center truncate ${s.st.c}`}>{s.st.s}</span>
+            </div>
+          ))}
+        </div>
+        <div className="text-[10px] text-slate-500 mt-2">{fmt(worth)} worth · profit {fmt(dealProfit || revProfit)}{rev.override != null ? ' · manual reviewed' : ''} · <button type="button" onClick={() => setEditing(true)} className="text-blue-400 hover:underline">edit worth</button></div>
+        {!lean && !deadLost && <div className="text-[10px] text-amber-400/80 mt-0.5">no lean set — pick Hot/Warm/Cold in the Lean row below</div>}
       </div>
     );
   }
 
+  // EDIT / first-review view: just the WORTH (+ exact acres + optional override). Lean
+  // comes from the Lean row below, not here.
   const d = draft || {
     worth: rev?.worth != null ? String(rev.worth) : (v?.resale != null ? String(v.resale) : ''),
     exactAcres: rev?.exact_acres != null ? String(rev.exact_acres) : '',
-    lean: rev?.lean || '',
     override: rev?.override != null ? String(rev.override) : '',
     worthEdited: false, showOverride: false,
   };
   const setD = (patch) => setDraft({ ...d, ...patch });
   const worthNum = Number(d.worth) || 0;
-  // Profit = worth − offer (if the card's Offer is filled), else worth × 50%.
   const profit = offer > 0 ? Math.max(0, worthNum - offer) : Math.round(worthNum * 0.5);
-  const auto = vbbReviewedValue({ profit, lean: d.lean, deadLost });
+  const auto = deadLost ? 0 : Math.round(Math.min(profit, VBB_PROFIT_CAP) * leanPct);
   const value = d.override !== '' ? Math.round(Number(d.override)) : auto;
-  const ccPct = pctLabel(closeChance(d.lean));
-  // Value ladder preview: the contract + closed conversions that will follow.
-  const cProf = cappedProfit({ worth: worthNum, offer });
-  const contractAdd = offer > 0 ? Math.round(cProf * Math.max(0, CONTRACT_TOTAL - closeChance(d.lean))) : null;
-  const closedAdd = offer > 0 ? Math.round(cProf * CLOSED_SHARE) : null;
-  // Exact acres recomputes "worth" from $/ac — unless the rep typed worth manually.
   const onAcres = (val) => {
     const nw = (!d.worthEdited && v?.ppa && Number(val) > 0) ? String(Math.round(v.ppa * Number(val))) : d.worth;
     setD({ exactAcres: val, worth: nw });
   };
   return (
-    <div className={`mb-4 rounded-lg border ${rev ? 'border-blue-500/50' : 'border-slate-600/50'} bg-slate-800/60 px-3 py-2.5`}>
+    <div className={`mb-4 rounded-lg border ${hasWorth ? 'border-blue-500/50' : 'border-slate-600/50'} bg-slate-800/60 px-3 py-2.5`}>
       <div className="flex items-center justify-between mb-1.5">
-        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Deal Value{rev ? ' · Editing' : ''}</span>
-        {rev
+        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Deal Value · {hasWorth ? 'Edit worth' : stageLabel}</span>
+        {hasWorth
           ? <button type="button" onClick={() => { setDraft(null); setEditing(false); }} className="text-[10px] text-slate-400 hover:underline">cancel</button>
           : (v?.fallback ? <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-slate-600/60 text-slate-200">est</span> : null)}
       </div>
@@ -110,23 +157,15 @@ function ReviewPanel({ lead, onSave }) {
       <div className="flex items-center gap-1 mb-2">
         <span className="text-slate-400 text-sm">$</span>
         <input type="number" value={d.worth} onChange={(e) => setD({ worth: e.target.value, worthEdited: true })} placeholder={v?.resale != null ? String(v.resale) : (v ? 'resale' : 'estimating…')} className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm font-bold text-white" />
-      </div>
-      <div className="flex flex-wrap items-center gap-1.5 mb-2">
         <input type="number" value={d.exactAcres} onChange={(e) => onAcres(e.target.value)} placeholder="exact ac" className="w-20 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white" />
-        {LEANS.map((ln) => (
-          <button key={ln} type="button" onClick={() => setD({ lean: d.lean === ln ? '' : ln })} className={`text-[11px] px-2 py-1 rounded border ${d.lean === ln ? (ln === 'rejected' ? 'bg-rose-600/40 border-rose-500 text-white' : 'bg-blue-600/40 border-blue-500 text-white') : 'bg-slate-800 border-slate-700 text-slate-300'}`}>{leanLabel(ln)}</button>
-        ))}
       </div>
       <div className="text-[11px] mb-0.5">
         {deadLost
-          ? <span className="font-bold text-slate-300">Sends to Google: $0 · Dead/Lost</span>
-          : <><span className="font-bold text-emerald-300">Sends to Google: {fmt(value)}</span><span className="text-slate-500"> = {fmt(Math.min(profit, VBB_PROFIT_CAP))} × {ccPct}</span>{d.override !== '' && <span className="text-amber-300"> · override</span>}</>}
+          ? <span className="font-bold text-slate-300">Reviewed now: $0 · Dead/Lost</span>
+          : <><span className="font-bold text-emerald-300">Reviewed now: {fmt(value)}</span><span className="text-slate-500"> = {fmt(Math.min(profit, VBB_PROFIT_CAP))} × {pctLabel(leanPct)} ({leanBadge})</span>{d.override !== '' && <span className="text-amber-300"> · override</span>}</>}
         {!deadLost && d.override === '' && !d.showOverride && <> · <button type="button" onClick={() => setD({ showOverride: true })} className="text-blue-400 hover:underline">override</button></>}
       </div>
-      <div className="text-[10px] text-slate-500 mb-0.5">profit = {offer > 0 ? `worth − offer (${fmt(offer)})` : 'worth × 50%'} = {fmt(profit)}</div>
-      {contractAdd != null
-        ? <div className="text-[10px] text-slate-500 mb-2">then if it contracts +{fmt(contractAdd)} · closes +{fmt(closedAdd)} = {fmt(cProf)} total profit</div>
-        : <div className="text-[10px] text-amber-400/80 mb-2">set an Offer to unlock the Contract + Closed conversions</div>}
+      <div className="text-[10px] text-slate-500 mb-2">profit = {offer > 0 ? `worth − offer (${fmt(offer)})` : 'worth × 50%'} = {fmt(profit)} · lean is set in the Lean row below</div>
       {(d.showOverride || d.override !== '') && (
         <div className="flex items-center gap-1 mb-2">
           <span className="text-slate-400 text-xs">override $</span>
@@ -134,7 +173,7 @@ function ReviewPanel({ lead, onSave }) {
           {d.override !== '' && <button type="button" onClick={() => setD({ override: '', showOverride: false })} className="text-[10px] text-slate-400 hover:underline">clear</button>}
         </div>
       )}
-      <button type="button" onClick={() => { onSave(lead, { value, worth: worthNum, offer, profit, lean: d.lean, exact_acres: d.exactAcres ? Number(d.exactAcres) : null, override: d.override !== '' ? Math.round(Number(d.override)) : null }); setDraft(null); setEditing(false); }} className="w-full text-xs font-semibold px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white">{rev ? 'Update & lock' : 'Mark Reviewed'}</button>
+      <button type="button" onClick={() => { onSave(lead, { value, worth: worthNum, offer, profit, lean, exact_acres: d.exactAcres ? Number(d.exactAcres) : null, override: d.override !== '' ? Math.round(Number(d.override)) : null }); setDraft(null); setEditing(false); }} className="w-full text-xs font-semibold px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white">{hasWorth ? 'Update worth' : 'Mark Reviewed'}</button>
     </div>
   );
 }
@@ -753,19 +792,21 @@ export default function LandLeadsAdminPage() {
   // value. If it was already sent to Google the uploader picks up the difference as
   // an adjustment (sent_value != value); reviewed_at is untouched so the 30-min hold
   // on a not-yet-sent lead still applies. No-op for leads without a review.
-  const recalcReview = async (leadId, { offer, status } = {}) => {
+  const recalcReview = async (leadId, { offer, status, lean } = {}) => {
     try {
       const { data: cur } = await supabase.from('leads')
-        .select('form_data, offer_amount, pipeline_status, status').eq('id', leadId).maybeSingle();
+        .select('form_data, offer_amount, pipeline_status, status, deal_direction').eq('id', leadId).maybeSingle();
       const fd = (cur && cur.form_data) || {};
       const rev = fd.review;
       if (!rev) return;
       const effOffer = offer != null ? (Number(offer) || 0) : (Number(cur?.offer_amount) || 0);
       const effStatus = String(status || cur?.pipeline_status || cur?.status || '').toUpperCase();
+      // Lean is the lead's existing lean (deal_direction) — the single source of truth.
+      const effLean = lean !== undefined ? (lean || '') : (cur?.deal_direction ?? rev.lean ?? '');
       const deadLost = VBB_DEAD_STATUSES.includes(effStatus);
-      const { value: newVal, profit: newProfit } = recomputeReview(rev, { offer: effOffer, deadLost });
-      if (Number(rev.value) === newVal && Number(rev.offer || 0) === effOffer) return; // nothing moved
-      const updated = { ...rev, value: newVal, offer: effOffer, profit: newProfit, base_profit: newProfit, recomputed_at: new Date().toISOString() };
+      const { value: newVal, profit: newProfit } = recomputeReview({ ...rev, lean: effLean }, { offer: effOffer, deadLost });
+      if (Number(rev.value) === newVal && Number(rev.offer || 0) === effOffer && (rev.lean || '') === effLean) return; // nothing moved
+      const updated = { ...rev, lean: effLean, value: newVal, offer: effOffer, profit: newProfit, base_profit: newProfit, recomputed_at: new Date().toISOString() };
       setRawLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, form_data: { ...(l.form_data || {}), review: updated } } : l)));
       setSelectedLead((prev) => (prev && prev.id === leadId ? { ...prev, form_data: { ...(prev.form_data || {}), review: updated } } : prev));
       await supabase.from('leads').update({ form_data: { ...fd, review: updated } }).eq('id', leadId);
@@ -1755,7 +1796,7 @@ export default function LandLeadsAdminPage() {
     patchLead(leadId, { offer_amount: n, offer_confirmed: n != null });
     recalcReview(leadId, { offer: n }); // profit = worth − offer, so restate the reviewed value
   };
-  const setDealDirection = (leadId, value) => patchLead(leadId, { deal_direction: value || null });
+  const setDealDirection = (leadId, value) => { patchLead(leadId, { deal_direction: value || null }); recalcReview(leadId, { lean: value || '' }); };
 
   // Park a lead into a Follow-Up bucket: set status, bucket, and schedule touch 1.
   const moveToFollowUp = (lead, bucketKey) => {
