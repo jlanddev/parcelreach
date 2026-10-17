@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import { VBB_PROFIT_CAP, VBB_DEAD_STATUSES, contractValue, closedValue } from '@/lib/reviewedValue';
 import crypto from 'node:crypto';
@@ -37,6 +38,21 @@ function authed(req) {
   const s = process.env.CAMPAIGN_RUN_SECRET;
   const u = new URL(req.url);
   return !s || u.searchParams.get('secret') === s || (req.headers.get('authorization') || '') === `Bearer ${s}`;
+}
+// The cron uses the run secret; the CRM "Run now"/"Send now" buttons pass the admin's
+// Supabase access token instead. Accept either.
+async function authedAsync(req) {
+  if (authed(req)) return true;
+  const m = (req.headers.get('authorization') || '').match(/^Bearer (.+)$/);
+  if (!m) return false;
+  try {
+    const anon = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+    const { data } = await anon.auth.getUser(m[1]);
+    const uid = data?.user?.id;
+    if (!uid) return false;
+    const { data: u } = await supabaseAdmin().from('users').select('role').eq('id', uid).maybeSingle();
+    return u?.role === 'admin';
+  } catch (e) { return false; }
 }
 const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
 const normEmail = (e) => String(e || '').trim().toLowerCase();
@@ -163,6 +179,16 @@ async function alertAdmins(sb, title, message) {
 async function logRun(sb, row) {
   try { await sb.from('vbb_upload_runs').insert(row); } catch (e) { /* non-fatal */ }
 }
+// Auto-upload kill switch, stored in app_settings (key 'vbb_auto_upload'). Defaults
+// ON when the row/table is absent so a fresh setup still runs; the CRM toggle writes it.
+async function autoUploadOn(sb) {
+  try {
+    const { data } = await sb.from('app_settings').select('value').eq('key', 'vbb_auto_upload').maybeSingle();
+    if (!data) return true;
+    const v = data.value;
+    return v === true || v?.on === true || v === 'true';
+  } catch (e) { return true; }
+}
 async function recentAvgSent(sb) {
   try {
     const { data } = await sb.from('vbb_upload_runs').select('sent_count').eq('dry', false).eq('ok', true).order('ran_at', { ascending: false }).limit(10);
@@ -204,18 +230,21 @@ async function handleRetract(req, sb) {
 }
 
 async function handle(req) {
-  if (!authed(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  if (!(await authedAsync(req))) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   const u = new URL(req.url);
   if (u.searchParams.get('retract')) return handleRetract(req, supabaseAdmin());
   const dry = u.searchParams.get('dry') === '1';
   const force = u.searchParams.get('force') === '1';
   const validate = u.searchParams.get('validate') === '1'; // call Google with validateOnly, mark nothing
+  const manual = u.searchParams.get('manual') === '1';     // UI "Run now" — bypasses the kill switch
+  const only = u.searchParams.get('only');                 // UI "Send now" — just this lead id
   const sb = supabaseAdmin();
   const now = Date.now();
   const cutoff = now - REVIEW_DELAY_MS;
   const ranAt = new Date().toISOString();
 
-  const leads = await fetchLeads(sb);
+  let leads = await fetchLeads(sb);
+  if (only) leads = leads.filter((l) => l.id === only);
 
   const ids = (l) => ({ gclid: l.form_data?.gclid || l.gclid || null, gbraid: l.form_data?.gbraid || l.gbraid || null, wbraid: l.form_data?.wbraid || l.wbraid || null });
   const hashed = (l) => ({ email_sha256: l.email ? sha256(normEmail(l.email)) : null, phone_sha256: normPhone(l.phone) ? sha256(normPhone(l.phone)) : null });
@@ -225,13 +254,14 @@ async function handle(req) {
   const clickOf = (l) => new Date(l.created_at || 0).getTime();
   const tooLate = (conv, l) => { const c = clickOf(l); return c > 0 && conv > 0 && (conv - c) > NINETY_DAYS_MS; };
 
-  const reviewNew = [], reviewAdj = [], reviewRetract = []; let reviewHeld = 0, reviewUnchanged = 0, reviewOutside = 0;
+  const reviewNew = [], reviewAdj = [], reviewRetract = []; let reviewHeld = 0, reviewUnchanged = 0, reviewOutside = 0, reviewHeldManual = 0;
 
   // Shared Contract/Closed queueing (same shape, different conversion + bookkeeping key).
-  const mkDeal = () => ({ new: [], adj: [], retract: [], needsReview: [], needsOffer: [], unmatchable: 0, unchanged: 0, outside: 0 });
+  const mkDeal = () => ({ new: [], adj: [], retract: [], needsReview: [], needsOffer: [], unmatchable: 0, unchanged: 0, outside: 0, held: 0 });
   const contract = mkDeal(), closed = mkDeal();
   const queueDeal = (bucket, { action, orderSuffix, upKey, value, reason }, l, when, up) => {
     if (up.retract && up.sent_at) { bucket.retract.push({ action, transaction_id: `${l.id}${orderSuffix}`, lead_id: l.id, ...ids(l), ...hashed(l) }); return; }
+    if (up.hold) { bucket.held++; return; } // manually held — skip this one
     if (tooLate(when, l)) { bucket.outside++; return; }
     if (value == null) { const flag = { lead_id: l.id, worth: Number(l.form_data?.review?.worth) || null }; if (reason === 'needs_offer') bucket.needsOffer.push(flag); else bucket.needsReview.push(flag); return; }
     const base = { action, transaction_id: `${l.id}${orderSuffix}`, lead_id: l.id, value, time: new Date(when).toISOString(), ...ids(l), ...hashed(l) };
@@ -252,6 +282,8 @@ async function handle(req) {
     if (r && r.value != null) {
       if (r.retract && r.sent_at) {
         reviewRetract.push({ action: 'Reviewed Lead', transaction_id: l.id, ...ids(l), ...hashed(l) });
+      } else if (r.hold) {
+        reviewHeldManual++;
       } else if (tooLate(new Date(r.reviewed_at || 0).getTime(), l)) {
         reviewOutside++;
       } else if (new Date(r.reviewed_at || 0).getTime() > cutoff) {
@@ -284,9 +316,9 @@ async function handle(req) {
     + contract.new.length + contract.adj.length + contract.retract.length
     + closed.new.length + closed.adj.length + closed.retract.length;
 
-  const dealSummary = (d) => ({ new: d.new.length, adjustments: d.adj.length, retractions: d.retract.length, needsReview: d.needsReview.length, needsOffer: d.needsOffer.length, unmatchable_no_gclid_or_pii: d.unmatchable, unchanged: d.unchanged, outsideWindow: d.outside });
+  const dealSummary = (d) => ({ new: d.new.length, adjustments: d.adj.length, retractions: d.retract.length, needsReview: d.needsReview.length, needsOffer: d.needsOffer.length, unmatchable_no_gclid_or_pii: d.unmatchable, unchanged: d.unchanged, outsideWindow: d.outside, held: d.held });
   const summary = {
-    reviewedLead: { new: reviewNew.length, adjustments: reviewAdj.length, retractions: reviewRetract.length, heldUnder30min: reviewHeld, unchanged: reviewUnchanged, outsideWindow: reviewOutside },
+    reviewedLead: { new: reviewNew.length, adjustments: reviewAdj.length, retractions: reviewRetract.length, heldUnder30min: reviewHeld, held: reviewHeldManual, unchanged: reviewUnchanged, outsideWindow: reviewOutside },
     contractSigned: dealSummary(contract),
     closedDeal: dealSummary(closed),
   };
@@ -298,6 +330,13 @@ async function handle(req) {
       flagged: { contractNeedsReview: contract.needsReview.slice(0, 10), contractNeedsOffer: contract.needsOffer.slice(0, 10), closedNeedsReview: closed.needsReview.slice(0, 10), closedNeedsOffer: closed.needsOffer.slice(0, 10) },
       sampleContract: contract.new.slice(0, 8).map((c) => ({ leadId: c.lead_id, value: c.value, hasClickId: !!(c.gclid || c.gbraid || c.wbraid), hasHashedPII: !!(c.email_sha256 || c.phone_sha256) })),
     });
+  }
+
+  // Kill switch: the hourly cron respects the auto-upload toggle; a manual "Run now"
+  // (?manual=1) and validateOnly bypass it. Nothing is sent when paused.
+  if (!validate && !manual && !(await autoUploadOn(sb))) {
+    await logRun(sb, { ran_at: ranAt, dry: false, ok: true, sent_count: 0, to_send: toSendCount, summary, note: 'paused: auto-upload off' });
+    return NextResponse.json({ ok: true, paused: true, reason: 'auto_upload_off', toSend: toSendCount, hint: 'turn Auto-upload on, or add ?manual=1' });
   }
 
   // Spike guard: hold the run (don't send) if it's >2× the recent average, unless forced.
