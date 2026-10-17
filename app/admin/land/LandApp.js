@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo, Component } from 'react';
+import { useState, useEffect, useRef, useMemo, Component, Fragment } from 'react';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -649,6 +649,7 @@ export default function LandLeadsAdminPage() {
   const [qRep, setQRep] = useState('all');            // reviewed_by filter
   const [qSearch, setQSearch] = useState('');
   const [qSort, setQSort] = useState('daysLeft');     // daysLeft|value|date
+  const [qOpenRun, setQOpenRun] = useState(null);     // expanded History run id
 
   // Load the kill-switch setting + recent runs when the queue tab opens.
   const loadVbbMeta = async () => {
@@ -6240,18 +6241,40 @@ export default function LandLeadsAdminPage() {
 
               {qView === 'history' ? (
                 <div className="bg-slate-800/50 border border-slate-700 rounded-xl overflow-x-auto">
-                  <table className="w-full text-sm min-w-[520px]">
-                    <thead><tr className="border-b border-slate-700"><th className={th}>When</th><th className={th}>Sent</th><th className={th}>To send</th><th className={th}>Status</th><th className={th}>Note</th></tr></thead>
+                  <table className="w-full text-sm min-w-[560px]">
+                    <thead><tr className="border-b border-slate-700"><th className={th}>When</th><th className={th}>Sent</th><th className={th}>To send</th><th className={th}>Status</th><th className={th}>Details</th></tr></thead>
                     <tbody>
-                      {qRuns.length ? qRuns.map((run) => (
-                        <tr key={run.id || run.ran_at} className="border-b border-slate-700/40">
-                          <td className={`${td} text-slate-300 whitespace-nowrap`}>{fmtDT(run.ran_at)}{run.dry ? ' · dry' : ''}</td>
-                          <td className={`${td} font-semibold text-emerald-300`}>{run.sent_count || 0}</td>
-                          <td className={`${td} text-slate-400`}>{run.to_send ?? '—'}</td>
-                          <td className={td}>{run.ok ? <span className="text-emerald-400">✓ ok</span> : <span className="text-rose-400">✗ failed</span>}</td>
-                          <td className={`${td} text-slate-400 text-xs`}>{run.note || '—'}</td>
-                        </tr>
-                      )) : <tr><td className="px-3 py-4 text-slate-500" colSpan={5}>No runs logged yet.</td></tr>}
+                      {qRuns.length ? qRuns.map((run) => {
+                        const rid = run.id || run.ran_at;
+                        const items = Array.isArray(run.summary?.items) ? run.summary.items : [];
+                        const open = qOpenRun === rid;
+                        return (
+                          <Fragment key={rid}>
+                            <tr className={`border-b border-slate-700/40 ${items.length ? 'cursor-pointer hover:bg-slate-700/20' : ''}`} onClick={() => items.length && setQOpenRun(open ? null : rid)}>
+                              <td className={`${td} text-slate-300 whitespace-nowrap`}>{fmtDT(run.ran_at)}{run.dry ? ' · dry' : ''}</td>
+                              <td className={`${td} font-semibold text-emerald-300`}>{run.sent_count || 0}</td>
+                              <td className={`${td} text-slate-400`}>{run.to_send ?? '—'}</td>
+                              <td className={td}>{run.ok ? <span className="text-emerald-400">✓ ok</span> : <span className="text-rose-400">✗ failed</span>}{run.note ? <span className="text-slate-500 text-xs ml-1">· {run.note}</span> : null}</td>
+                              <td className={`${td} text-xs`}>{items.length ? <span className="text-blue-400">{open ? '▼ hide' : `▶ ${items.length} leads`}</span> : <span className="text-slate-600">—</span>}</td>
+                            </tr>
+                            {open && (
+                              <tr className="bg-slate-900/40"><td colSpan={5} className="px-3 py-2">
+                                <div className="space-y-1">
+                                  {items.map((it, i) => (
+                                    <div key={i} className="flex items-center justify-between gap-3 text-xs px-2 py-1 rounded hover:bg-slate-700/30 cursor-pointer" onClick={() => { const l = (allLeads || []).find((x) => x.id === it.leadId); if (l) navigateToLeadCard(l); }}>
+                                      <span className="text-white truncate flex-1 min-w-0">{it.name || 'Lead'}</span>
+                                      <span className="text-slate-400 w-20">{it.stage}</span>
+                                      <span className={`w-16 ${it.kind === 'retract' ? 'text-rose-300' : 'text-slate-500'}`}>{it.kind === 'new' ? 'new' : it.kind}</span>
+                                      <span className="text-slate-400 w-24 truncate">{it.match}</span>
+                                      <span className="font-bold text-emerald-300 w-20 text-right">{'$' + Math.round(Number(it.value) || 0).toLocaleString()}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </td></tr>
+                            )}
+                          </Fragment>
+                        );
+                      }) : <tr><td className="px-3 py-4 text-slate-500" colSpan={5}>No runs logged yet.</td></tr>}
                     </tbody>
                   </table>
                 </div>

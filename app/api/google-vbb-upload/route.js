@@ -202,7 +202,7 @@ async function fetchLeads(sb) {
   let leads = [];
   for (let f = 0; ; f += 1000) {
     const { data } = await sb.from('leads')
-      .select('id, email, phone, gclid, gbraid, wbraid, pipeline_status, status, offer_amount, last_activity_at, updated_at, created_at, form_data')
+      .select('id, full_name, name, email, phone, gclid, gbraid, wbraid, pipeline_status, status, offer_amount, last_activity_at, updated_at, created_at, form_data')
       .or('form_data->review.not.is.null,pipeline_status.in.(AGREEMENT_SENT,UNDER_CONTRACT,CLOSED)')
       .range(f, f + 999);
     if (!data || !data.length) break;
@@ -401,7 +401,19 @@ async function handle(req) {
   await stampDeal(contract, 'contract_upload');
   await stampDeal(closed, 'closed_upload');
 
-  await logRun(sb, { ran_at: ranAt, dry: false, ok: rejected === 0, sent_count: result.sentCount, to_send: toSendCount, summary, note: result.skipped?.length ? `skipped: ${result.skipped.map((s) => s.group).join(', ')}` : null });
+  // Record the exact line items of this run so History can show which leads + values.
+  const nameFor = (id) => { const l = leads.find((x) => x.id === id); return l?.full_name || l?.name || 'Lead'; };
+  const items = [];
+  for (const c of [...reviewNew, ...reviewAdj]) if (sentIds.has(c.transaction_id)) items.push({ leadId: c.transaction_id, name: nameFor(c.transaction_id), stage: 'Reviewed', value: c.value, match: (c.gclid || c.gbraid || c.wbraid) ? 'Click ID' : (c.email_sha256 || c.phone_sha256) ? 'Email/Phone' : 'none', kind: c.restatement ? 'adjust' : 'new' });
+  for (const c of reviewRetract) if (sentIds.has(c.transaction_id)) items.push({ leadId: c.transaction_id, name: nameFor(c.transaction_id), stage: 'Reviewed', value: 0, match: '', kind: 'retract' });
+  const dealItems = (d, stage) => {
+    for (const c of [...d.new, ...d.adj]) if (sentIds.has(c.transaction_id)) items.push({ leadId: c.lead_id, name: nameFor(c.lead_id), stage, value: c.value, match: (c.gclid || c.gbraid || c.wbraid) ? 'Click ID' : (c.email_sha256 || c.phone_sha256) ? 'Email/Phone' : 'none', kind: c.restatement ? 'adjust' : 'new' });
+    for (const c of d.retract) if (sentIds.has(c.transaction_id)) items.push({ leadId: c.lead_id, name: nameFor(c.lead_id), stage, value: 0, match: '', kind: 'retract' });
+  };
+  dealItems(contract, 'Contract');
+  dealItems(closed, 'Closed');
+
+  await logRun(sb, { ran_at: ranAt, dry: false, ok: rejected === 0, sent_count: result.sentCount, to_send: toSendCount, summary: { ...summary, items: items.slice(0, 500) }, note: result.skipped?.length ? `skipped: ${result.skipped.map((s) => s.group).join(', ')}` : null });
   return NextResponse.json({ ok: rejected === 0, sent: result.sentCount, ...summary, google: g });
 }
 
