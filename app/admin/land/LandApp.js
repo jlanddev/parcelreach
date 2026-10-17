@@ -639,6 +639,66 @@ export default function LandLeadsAdminPage() {
   const [queueContractView, setQueueContractView] = useState('ready'); // ready|needsReview|needsOffer|sent|unmatchable|outside
   const [queueClosedView, setQueueClosedView] = useState('ready');     // ready|needsReview|needsOffer|sent|unmatchable|outside
   const vbbScoredRef = useRef(new Set());
+  // Google Upload Queue (redesigned): a single table + status bar + history.
+  const [qView, setQView] = useState('queue');       // queue | history
+  const [qAutoUpload, setQAutoUpload] = useState(null); // null=loading, true/false
+  const [qRuns, setQRuns] = useState([]);             // vbb_upload_runs rows
+  const [qBusy, setQBusy] = useState(false);          // a run/send is in flight
+  const [qStatus, setQStatus] = useState('all');      // status filter
+  const [qStage, setQStage] = useState('all');        // Reviewed|Contract|Closed|all
+  const [qRep, setQRep] = useState('all');            // reviewed_by filter
+  const [qSearch, setQSearch] = useState('');
+  const [qSort, setQSort] = useState('daysLeft');     // daysLeft|value|date
+
+  // Load the kill-switch setting + recent runs when the queue tab opens.
+  const loadVbbMeta = async () => {
+    try {
+      const { data: s } = await supabase.from('app_settings').select('value').eq('key', 'vbb_auto_upload').maybeSingle();
+      setQAutoUpload(s ? (s.value === true || s.value?.on === true) : true);
+    } catch { setQAutoUpload(true); }
+    try {
+      const { data: r } = await supabase.from('vbb_upload_runs').select('*').order('ran_at', { ascending: false }).limit(50);
+      setQRuns(r || []);
+    } catch { setQRuns([]); }
+  };
+  useEffect(() => { if (activeTab === 'vbb-queue') loadVbbMeta(); }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggleAutoUpload = async () => {
+    const next = !qAutoUpload;
+    setQAutoUpload(next);
+    try {
+      await supabase.from('app_settings').upsert({ key: 'vbb_auto_upload', value: { on: next }, updated_at: new Date().toISOString() });
+      showToast(next ? 'Auto-upload ON' : 'Auto-upload OFF (uploads paused)', 'success');
+    } catch (e) { setQAutoUpload(!next); showToast('Could not change the setting', 'error'); }
+  };
+
+  // Trigger a real run (whole ready queue, or one lead via leadId) using the admin's
+  // session token so the uploader authorizes it.
+  const runUploadNow = async (leadId) => {
+    if (qBusy) return;
+    setQBusy(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      const res = await fetch(`/api/google-vbb-upload?manual=1${leadId ? `&only=${encodeURIComponent(leadId)}` : ''}`, { method: 'POST', headers: token ? { authorization: `Bearer ${token}` } : {} });
+      const j = await res.json().catch(() => ({}));
+      if (j.ok) showToast(`Sent ${j.sent ?? 0}${j.google?.rejected ? `, ${j.google.rejected} rejected` : ''}`, j.google?.rejected ? 'error' : 'success');
+      else showToast(j.paused ? 'Auto-upload is off' : (j.held ? 'Held: volume spike' : `Error: ${j.error || 'failed'}`), 'error');
+      await loadVbbMeta();
+    } catch (e) { showToast('Run failed', 'error'); }
+    setQBusy(false);
+  };
+
+  // Hold / unhold / retract a single conversion by writing its form_data upload node.
+  const setUploadFlag = async (lead, key, patch) => {
+    try {
+      const { data: cur } = await supabase.from('leads').select('form_data').eq('id', lead.id).maybeSingle();
+      const fd = cur?.form_data || {};
+      const node = { ...(fd[key] || {}), ...patch };
+      await supabase.from('leads').update({ form_data: { ...fd, [key]: node } }).eq('id', lead.id);
+      setRawLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, form_data: { ...(l.form_data || {}), [key]: node } } : l)));
+    } catch (e) { showToast('Could not update', 'error'); }
+  };
 
   // Score a lead through the engine and merge the estimate onto it locally (also
   // written to form_data.vbb server-side) so a new lead never shows up unvalued.
@@ -6009,111 +6069,252 @@ export default function LandLeadsAdminPage() {
             the same rules: 30-min hold on reviews, contracts in the 90-day window). */}
         {activeTab === 'vbb-queue' && isAdmin && (() => {
           const now = Date.now();
-          const HOLD = 30 * 60 * 1000, WINDOW = 90 * 24 * 60 * 60 * 1000;
+          const DAY = 86400000, HOLD = 30 * 60 * 1000, WINDOW = 90 * DAY;
           const CONTRACT = ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'];
           const fmt = (n) => '$' + Math.round(Number(n || 0)).toLocaleString();
-          const ago = (ts) => { const m = Math.max(0, Math.round((now - new Date(ts).getTime()) / 60000)); if (m < 60) return `${m}m ago`; const h = Math.round(m / 60); return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`; };
-          // Window is measured from the CLICK (≈ lead creation) — Google can't match a
-          // conversion more than 90 days after the ad click, so those show "outside window".
+          const fmtDT = (ts) => ts ? new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
+          const pctStr = (ln) => pctLabel(closeChance(ln));
+          const leanName = (ln) => ln ? ln[0].toUpperCase() + ln.slice(1) : 'Unleaned';
           const clickOf = (l) => new Date(l.created_at || 0).getTime();
-          const tooLate = (conv, l) => { const c = clickOf(l); return c > 0 && conv > 0 && (conv - c) > WINDOW; };
-          const reviewed = { ready: [], held: [], sent: [], outside: [] };
-          const dealBuckets = () => ({ ready: [], sent: [], needsReview: [], needsOffer: [], unmatchable: [], outside: [] });
-          const contracts = dealBuckets();
-          const closed = dealBuckets();
-          // Route a Contract/Closed lead into its bucket from a {value,reason} result.
-          const routeDeal = (bucket, cv, when, l, hasClick, hasPII, up) => {
-            const cval = cv.value || 0;
-            if (tooLate(when, l)) bucket.outside.push({ l, val: cval, meta: 'outside 90-day window' });
-            else if (cv.reason === 'needs_review') bucket.needsReview.push({ l, val: 0, meta: 'no reviewed worth — fill in the deal value' });
-            else if (cv.reason === 'needs_offer') bucket.needsOffer.push({ l, val: 0, meta: 'no offer — enter the offer amount' });
-            else if (!hasClick && !hasPII) bucket.unmatchable.push({ l, val: cval, meta: 'no gclid / email / phone' });
-            else if (!up.sent_at) bucket.ready.push({ l, val: cval, meta: hasClick ? 'via gclid' : 'via hashed PII' });
-            else if (Number(up.sent_value) !== cval) bucket.ready.push({ l, val: cval, meta: 'edited → adjust' });
-            else bucket.sent.push({ l, val: cval, meta: `sent ${ago(up.sent_at)}` });
+          const matchOf = (l) => {
+            if (l.form_data?.gclid || l.gclid || l.form_data?.gbraid || l.gbraid || l.form_data?.wbraid || l.wbraid) return 'Click ID';
+            const e = !!l.email, p = !!l.phone;
+            return e && p ? 'Email+Phone' : e ? 'Email' : p ? 'Phone' : 'None';
           };
+          const daysLeftOf = (l) => { const c = clickOf(l); return c ? Math.floor((WINDOW - (now - c)) / DAY) : null; };
+
+          // One flat row per (lead, stage) conversion.
+          const rows = [];
           for (const l of (allLeads || [])) {
             const r = l.form_data?.review;
-            const hasClick = !!(l.form_data?.gclid || l.gclid), hasPII = !!(l.email || l.phone);
             const o = l.form_data?.outcomes || {};
             const status = String(l.pipeline_status || l.status || '').toUpperCase();
-            // Contract/Closed value needs a HUMAN-reviewed worth + offer (card offer folds in).
+            const dleft = daysLeftOf(l);
+            const match = matchOf(l);
+            const expired = dleft != null && dleft < 0;
             const reviewForDeal = r ? { ...r, offer: r.offer != null ? r.offer : (Number(l.offer_amount) || 0) } : null;
-            // Reviewed Lead
+            const prof = cappedProfit({ worth: reviewForDeal?.worth, offer: reviewForDeal?.offer });
             if (r && r.value != null) {
               const revAt = new Date(r.reviewed_at || 0).getTime();
-              if (tooLate(revAt, l)) reviewed.outside.push({ l, val: r.value, meta: 'outside 90-day window' });
-              else if (revAt > now - HOLD) reviewed.held.push({ l, val: r.value, meta: `ready in ${Math.max(1, 30 - Math.round((now - revAt) / 60000))}m` });
-              else if (!r.sent_at) reviewed.ready.push({ l, val: r.value, meta: 'new' });
-              else if (Number(r.sent_value) !== Number(r.value)) reviewed.ready.push({ l, val: r.value, meta: `edited → adjust (was ${fmt(r.sent_value)})` });
-              else reviewed.sent.push({ l, val: r.value, meta: `sent ${ago(r.sent_at)}` });
+              let st;
+              if (r.hold) st = 'held';
+              else if (r.retract && r.sent_at) st = 'retract';
+              else if (expired) st = 'outside';
+              else if (revAt > now - HOLD) st = 'held30';
+              else if (!r.sent_at) st = 'ready';
+              else if (Number(r.sent_value) !== Number(r.value)) st = 'adjust';
+              else st = 'sent';
+              const rp = Math.min(Math.max(Number(r.base_profit ?? r.profit) || 0, 0), VBB_PROFIT_CAP);
+              rows.push({ key: `${l.id}:rev`, lead: l, stage: 'Reviewed', stageKey: 'review', value: r.value, status: st, match, dleft,
+                tip: `${fmt(rp)} profit × ${pctStr(r.lean)} ${leanName(r.lean)} = ${fmt(r.value)}`, reviewedBy: r.reviewed_by || null, sentAt: r.sent_at, heldUntil: st === 'held30' ? revAt + HOLD : null });
             }
-            // Contract Signed — profit × (75% − lean% at time of contract)
             if (CONTRACT.includes(status)) {
-              const when = new Date(o.UNDER_CONTRACT?.at || o.AGREEMENT_SENT?.at || o.CLOSED?.at || l.last_activity_at || l.updated_at || l.created_at || 0).getTime();
               const leanAtContract = o.UNDER_CONTRACT?.lean ?? o.AGREEMENT_SENT?.lean ?? r?.lean;
-              routeDeal(contracts, contractValue(reviewForDeal, { leanAtContract }), when, l, hasClick, hasPII, l.form_data?.contract_upload || {});
+              const cv = contractValue(reviewForDeal, { leanAtContract });
+              const cu = l.form_data?.contract_upload || {};
+              let st;
+              if (cu.hold) st = 'held';
+              else if (cu.retract && cu.sent_at) st = 'retract';
+              else if (expired) st = 'outside';
+              else if (cv.reason === 'needs_review') st = 'needs_review';
+              else if (cv.reason === 'needs_offer') st = 'needs_offer';
+              else if (match === 'None') st = 'unmatchable';
+              else if (!cu.sent_at) st = 'ready';
+              else if (Number(cu.sent_value) !== cv.value) st = 'adjust';
+              else st = 'sent';
+              rows.push({ key: `${l.id}:con`, lead: l, stage: 'Contract', stageKey: 'contract_upload', value: cv.value, status: st, match, dleft,
+                tip: cv.value != null ? `${fmt(prof)} profit × (75% − ${pctStr(leanAtContract)} ${leanName(leanAtContract)}) = ${fmt(cv.value)}` : 'needs a reviewed worth + an offer', reviewedBy: r?.reviewed_by || null, sentAt: cu.sent_at, heldUntil: null });
             }
-            // Closed Deal — the final profit × 25%
             if (status === 'CLOSED') {
-              const when = new Date(o.CLOSED?.at || l.last_activity_at || l.updated_at || l.created_at || 0).getTime();
-              routeDeal(closed, closedValue(reviewForDeal), when, l, hasClick, hasPII, l.form_data?.closed_upload || {});
+              const dv = closedValue(reviewForDeal);
+              const du = l.form_data?.closed_upload || {};
+              let st;
+              if (du.hold) st = 'held';
+              else if (du.retract && du.sent_at) st = 'retract';
+              else if (expired) st = 'outside';
+              else if (dv.reason === 'needs_review') st = 'needs_review';
+              else if (dv.reason === 'needs_offer') st = 'needs_offer';
+              else if (match === 'None') st = 'unmatchable';
+              else if (!du.sent_at) st = 'ready';
+              else if (Number(du.sent_value) !== dv.value) st = 'adjust';
+              else st = 'sent';
+              rows.push({ key: `${l.id}:clo`, lead: l, stage: 'Closed', stageKey: 'closed_upload', value: dv.value, status: st, match, dleft,
+                tip: dv.value != null ? `${fmt(prof)} profit × 25% = ${fmt(dv.value)}` : 'needs a reviewed worth + an offer', reviewedBy: r?.reviewed_by || null, sentAt: du.sent_at, heldUntil: null });
             }
           }
-          const card = (label, items, active, onClick, color) => (
-            <button type="button" onClick={onClick} className={`text-left rounded-xl border px-4 py-3 transition ${active ? color + ' ring-2 ring-white/20' : 'border-slate-700 bg-slate-800/40 text-slate-300 hover:bg-slate-800/70'}`}>
-              <div className="text-3xl font-bold">{items.length}</div>
-              <div className="text-[11px] uppercase tracking-wide opacity-70 mt-0.5">{label}</div>
-            </button>
+
+          const ST = {
+            needs_review: { label: 'Needs review', cls: 'bg-rose-500/20 text-rose-300' },
+            needs_offer: { label: 'Needs offer', cls: 'bg-amber-500/20 text-amber-300' },
+            held30: { label: 'Held 30-min', cls: 'bg-amber-500/15 text-amber-200' },
+            held: { label: 'Held', cls: 'bg-slate-500/25 text-slate-300' },
+            ready: { label: 'Ready', cls: 'bg-emerald-500/20 text-emerald-300' },
+            adjust: { label: 'Adjustment', cls: 'bg-indigo-500/20 text-indigo-300' },
+            sent: { label: 'Sent', cls: 'bg-sky-500/20 text-sky-300' },
+            retract: { label: 'Retract pending', cls: 'bg-rose-500/25 text-rose-300' },
+            unmatchable: { label: 'No match data', cls: 'bg-slate-500/20 text-slate-400' },
+            outside: { label: 'Outside window', cls: 'bg-slate-600/30 text-slate-400' },
+          };
+          const dBadge = (d) => {
+            if (d == null) return null;
+            const cls = d < 0 ? 'bg-slate-600/40 text-slate-400' : d <= 10 ? 'bg-rose-500/25 text-rose-300' : d <= 30 ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-700/50 text-slate-400';
+            return <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${cls}`}>{d < 0 ? 'expired' : `${d}d left`}</span>;
+          };
+
+          const attention = rows.filter((r) => r.status === 'needs_review' || r.status === 'needs_offer').sort((a, b) => (a.dleft ?? 9999) - (b.dleft ?? 9999));
+          const ready = rows.filter((r) => r.status === 'ready' || r.status === 'adjust');
+          const readyTotal = ready.reduce((s, r) => s + (Number(r.value) || 0), 0);
+          const minsToTop = 60 - new Date().getMinutes();
+          const reps = Array.from(new Set(rows.map((r) => r.reviewedBy).filter(Boolean)));
+          const sentRows = rows.filter((r) => r.status === 'sent' && r.sentAt);
+          const sumSince = (days) => sentRows.filter((r) => new Date(r.sentAt).getTime() >= now - days * DAY).reduce((s, r) => s + (Number(r.value) || 0), 0);
+          const lastRun = qRuns[0];
+
+          const qlc = qSearch.trim().toLowerCase();
+          const table = rows.filter((r) => {
+            if (qStage !== 'all' && r.stage !== qStage) return false;
+            if (qStatus !== 'all' && r.status !== qStatus) return false;
+            if (qRep !== 'all' && r.reviewedBy !== qRep) return false;
+            if (qlc && !((r.lead.full_name || r.lead.name || '').toLowerCase().includes(qlc))) return false;
+            return true;
+          }).sort((a, b) => {
+            if (qSort === 'value') return (Number(b.value) || 0) - (Number(a.value) || 0);
+            if (qSort === 'date') return (clickOf(b.lead) || 0) - (clickOf(a.lead) || 0);
+            return (a.dleft ?? 9999) - (b.dleft ?? 9999);
+          });
+
+          const act = (label, fn, cls = 'bg-slate-700 hover:bg-slate-600 text-slate-200') => (
+            <button type="button" onClick={(e) => { e.stopPropagation(); fn(); }} className={`text-[10px] px-2 py-0.5 rounded font-semibold ${cls}`}>{label}</button>
           );
-          const list = (items) => items.length
-            ? <div className="bg-slate-800/50 border border-slate-700 rounded-xl overflow-hidden max-h-96 overflow-y-auto">{items.slice(0, 100).map(({ l, val, meta }) => (
-                <button key={l.id} type="button" onClick={() => navigateToLeadCard(l)} className="w-full text-left px-4 py-2 hover:bg-slate-700/40 flex items-center justify-between gap-3 border-b border-slate-700/40">
-                  <span className="text-sm text-white truncate flex-1 min-w-0">{l.full_name || l.name || 'Lead'}</span>
-                  <span className="text-[11px] text-slate-500 flex-shrink-0">{meta}</span>
-                  <span className="text-sm font-bold text-emerald-300 flex-shrink-0 w-24 text-right">{fmt(val)}</span>
-                </button>))}</div>
-            : <div className="text-sm text-slate-500 px-1 py-2">Nothing here yet.</div>;
+          const rowActions = (r) => (
+            <div className="flex gap-1 flex-wrap justify-end">
+              {act('Open', () => navigateToLeadCard(r.lead))}
+              {(r.status === 'needs_review' || r.status === 'needs_offer') && act('Review', () => navigateToLeadCard(r.lead), 'bg-rose-600/70 hover:bg-rose-600 text-white')}
+              {(r.status === 'ready' || r.status === 'adjust') && act(qBusy ? '…' : 'Send', () => runUploadNow(r.lead.id), 'bg-emerald-600/80 hover:bg-emerald-600 text-white')}
+              {(r.status === 'ready' || r.status === 'adjust' || r.status === 'held30') && act('Hold', () => setUploadFlag(r.lead, r.stageKey, { hold: true }))}
+              {r.status === 'held' && act('Unhold', () => setUploadFlag(r.lead, r.stageKey, { hold: false }))}
+              {r.status === 'sent' && act('Retract', () => setUploadFlag(r.lead, r.stageKey, { retract: true }), 'bg-rose-600/60 hover:bg-rose-600 text-white')}
+            </div>
+          );
+          const nameOf = (l) => l.full_name || l.name || 'Lead';
+          const th = 'text-left text-[10px] uppercase tracking-wide text-slate-500 font-semibold px-3 py-2';
+          const td = 'px-3 py-2 align-middle';
+
           return (
-            <div className="space-y-6">
-              <div className="bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-xl p-6">
-                <h2 className="text-2xl font-bold text-white">Google Upload Queue</h2>
-                <p className="text-slate-400 text-sm mt-1"><strong>Tap a tile</strong> to see its leads; click a lead to open it. The three conversions are a ladder that adds up to the deal's real profit: <strong>Reviewed</strong> = profit × lean%, <strong>Contract</strong> = profit × (75% − lean%), <strong>Closed</strong> = profit × 25%. Reviewed values wait 30 min; a value edited after it's sent goes up as an adjustment. Contract/Closed need a human review + an offer. A conversion can't match more than 90 days after the ad click → "outside window". Nothing sends until the Data Manager API is connected (so "Already sent" stays 0 until then).</p>
-              </div>
-              <div>
-                <div className="text-sm font-bold text-slate-300 mb-2">Reviewed Lead <span className="text-slate-500 font-normal">· profit × lean%</span></div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
-                  {card('Ready to send', reviewed.ready, queueReviewedView === 'ready', () => setQueueReviewedView('ready'), 'border-emerald-500/50 bg-emerald-500/15 text-emerald-200')}
-                  {card('Held (<30 min)', reviewed.held, queueReviewedView === 'held', () => setQueueReviewedView('held'), 'border-amber-500/50 bg-amber-500/15 text-amber-200')}
-                  {card('Already sent', reviewed.sent, queueReviewedView === 'sent', () => setQueueReviewedView('sent'), 'border-sky-500/50 bg-sky-500/15 text-sky-200')}
-                  {card('> 90 days', reviewed.outside, queueReviewedView === 'outside', () => setQueueReviewedView('outside'), 'border-slate-500/50 bg-slate-600/20 text-slate-300')}
+            <div className="space-y-5">
+              {/* Status bar */}
+              <div className="bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-xl p-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <h2 className="text-2xl font-bold text-white">Google Upload Queue</h2>
+                  <button type="button" onClick={toggleAutoUpload} disabled={qAutoUpload == null} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold border ${qAutoUpload ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-300' : 'bg-rose-600/20 border-rose-500/50 text-rose-300'}`}>
+                    <span className={`w-2.5 h-2.5 rounded-full ${qAutoUpload ? 'bg-emerald-400' : 'bg-rose-400'}`}></span>
+                    Auto-upload: {qAutoUpload == null ? '…' : qAutoUpload ? 'ON' : 'OFF'}
+                  </button>
                 </div>
-                {list(reviewed[queueReviewedView] || reviewed.ready)}
-              </div>
-              <div>
-                <div className="text-sm font-bold text-slate-300 mb-2">Contract Signed <span className="text-slate-500 font-normal">· profit × (75% − lean% at contract) · needs a human review + offer</span></div>
-                <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-3">
-                  {card('Ready to send', contracts.ready, queueContractView === 'ready', () => setQueueContractView('ready'), 'border-emerald-500/50 bg-emerald-500/15 text-emerald-200')}
-                  {card('Needs review', contracts.needsReview, queueContractView === 'needsReview', () => setQueueContractView('needsReview'), 'border-rose-500/50 bg-rose-500/15 text-rose-200')}
-                  {card('Needs offer', contracts.needsOffer, queueContractView === 'needsOffer', () => setQueueContractView('needsOffer'), 'border-amber-500/50 bg-amber-500/15 text-amber-200')}
-                  {card('Already sent', contracts.sent, queueContractView === 'sent', () => setQueueContractView('sent'), 'border-sky-500/50 bg-sky-500/15 text-sky-200')}
-                  {card('No gclid / PII', contracts.unmatchable, queueContractView === 'unmatchable', () => setQueueContractView('unmatchable'), 'border-slate-500/50 bg-slate-600/20 text-slate-300')}
-                  {card('> 90 days', contracts.outside, queueContractView === 'outside', () => setQueueContractView('outside'), 'border-slate-500/50 bg-slate-600/20 text-slate-300')}
+                <div className="grid sm:grid-cols-3 gap-3 mt-4 text-sm">
+                  <div className="bg-slate-900/50 rounded-lg px-3 py-2.5">
+                    <div className="text-[10px] uppercase tracking-wide text-slate-500">Next upload</div>
+                    <div className="text-white font-semibold mt-0.5">{qAutoUpload ? `in ${minsToTop} min` : 'paused'}</div>
+                    <div className="text-slate-400 text-xs">{ready.length} ready · {fmt(readyTotal)}</div>
+                  </div>
+                  <button type="button" onClick={() => setQView('history')} className="text-left bg-slate-900/50 rounded-lg px-3 py-2.5 hover:bg-slate-900/80">
+                    <div className="text-[10px] uppercase tracking-wide text-slate-500">Last upload</div>
+                    <div className="text-white font-semibold mt-0.5">{lastRun ? fmtDT(lastRun.ran_at) : 'none yet'}</div>
+                    <div className="text-slate-400 text-xs">{lastRun ? `${lastRun.sent_count || 0} sent · ${lastRun.ok ? '0 errors' : 'see history'}` : 'click for history'}</div>
+                  </button>
+                  <div className="bg-slate-900/50 rounded-lg px-3 py-2.5 flex items-center">
+                    <button type="button" onClick={() => runUploadNow()} disabled={qBusy} className="w-full px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold text-sm">{qBusy ? 'Running…' : 'Run upload now'}</button>
+                  </div>
                 </div>
-                {list(contracts[queueContractView] || contracts.ready)}
               </div>
-              <div>
-                <div className="text-sm font-bold text-slate-300 mb-2">Closed Deal <span className="text-slate-500 font-normal">· profit × 25% · needs a human review + offer</span></div>
-                <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-3">
-                  {card('Ready to send', closed.ready, queueClosedView === 'ready', () => setQueueClosedView('ready'), 'border-emerald-500/50 bg-emerald-500/15 text-emerald-200')}
-                  {card('Needs review', closed.needsReview, queueClosedView === 'needsReview', () => setQueueClosedView('needsReview'), 'border-rose-500/50 bg-rose-500/15 text-rose-200')}
-                  {card('Needs offer', closed.needsOffer, queueClosedView === 'needsOffer', () => setQueueClosedView('needsOffer'), 'border-amber-500/50 bg-amber-500/15 text-amber-200')}
-                  {card('Already sent', closed.sent, queueClosedView === 'sent', () => setQueueClosedView('sent'), 'border-sky-500/50 bg-sky-500/15 text-sky-200')}
-                  {card('No gclid / PII', closed.unmatchable, queueClosedView === 'unmatchable', () => setQueueClosedView('unmatchable'), 'border-slate-500/50 bg-slate-600/20 text-slate-300')}
-                  {card('> 90 days', closed.outside, queueClosedView === 'outside', () => setQueueClosedView('outside'), 'border-slate-500/50 bg-slate-600/20 text-slate-300')}
+
+              {/* Sub-tabs */}
+              <div className="flex gap-2">
+                {['queue', 'history'].map((v) => (
+                  <button key={v} type="button" onClick={() => setQView(v)} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${qView === v ? 'bg-slate-700 text-white' : 'bg-slate-800/50 text-slate-400 hover:text-slate-200'}`}>{v === 'queue' ? 'Queue' : 'History'}</button>
+                ))}
+              </div>
+
+              {qView === 'history' ? (
+                <div className="bg-slate-800/50 border border-slate-700 rounded-xl overflow-x-auto">
+                  <table className="w-full text-sm min-w-[520px]">
+                    <thead><tr className="border-b border-slate-700"><th className={th}>When</th><th className={th}>Sent</th><th className={th}>To send</th><th className={th}>Status</th><th className={th}>Note</th></tr></thead>
+                    <tbody>
+                      {qRuns.length ? qRuns.map((run) => (
+                        <tr key={run.id || run.ran_at} className="border-b border-slate-700/40">
+                          <td className={`${td} text-slate-300 whitespace-nowrap`}>{fmtDT(run.ran_at)}{run.dry ? ' · dry' : ''}</td>
+                          <td className={`${td} font-semibold text-emerald-300`}>{run.sent_count || 0}</td>
+                          <td className={`${td} text-slate-400`}>{run.to_send ?? '—'}</td>
+                          <td className={td}>{run.ok ? <span className="text-emerald-400">✓ ok</span> : <span className="text-rose-400">✗ failed</span>}</td>
+                          <td className={`${td} text-slate-400 text-xs`}>{run.note || '—'}</td>
+                        </tr>
+                      )) : <tr><td className="px-3 py-4 text-slate-500" colSpan={5}>No runs logged yet.</td></tr>}
+                    </tbody>
+                  </table>
                 </div>
-                {list(closed[queueClosedView] || closed.ready)}
-              </div>
+              ) : (
+                <>
+                  {/* Needs your attention */}
+                  {attention.length > 0 && (
+                    <div className="bg-rose-950/20 border border-rose-800/40 rounded-xl p-4">
+                      <div className="text-sm font-bold text-rose-200 mb-2">⚠ Needs your attention · {attention.length}</div>
+                      <div className="space-y-1.5">
+                        {attention.slice(0, 12).map((r) => (
+                          <div key={r.key} className="flex items-center justify-between gap-3 bg-slate-900/40 rounded-lg px-3 py-2">
+                            <div className="min-w-0 flex-1">
+                              <span className="text-sm text-white truncate">{nameOf(r.lead)}</span>
+                              <span className="text-[11px] text-slate-400 ml-2">{r.stage} · {ST[r.status].label}</span>
+                            </div>
+                            {dBadge(r.dleft)}
+                            <button type="button" onClick={() => navigateToLeadCard(r.lead)} className="text-[11px] font-semibold px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white flex-shrink-0">Review now</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Filters */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input value={qSearch} onChange={(e) => setQSearch(e.target.value)} placeholder="Search name…" className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white w-40" />
+                    <select value={qStage} onChange={(e) => setQStage(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"><option value="all">All stages</option><option>Reviewed</option><option>Contract</option><option>Closed</option></select>
+                    <select value={qStatus} onChange={(e) => setQStatus(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"><option value="all">All statuses</option>{Object.keys(ST).map((k) => <option key={k} value={k}>{ST[k].label}</option>)}</select>
+                    {reps.length > 0 && <select value={qRep} onChange={(e) => setQRep(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"><option value="all">All reps</option>{reps.map((rp) => <option key={rp} value={rp}>{rp}</option>)}</select>}
+                    <select value={qSort} onChange={(e) => setQSort(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"><option value="daysLeft">Sort: days left</option><option value="value">Sort: value</option><option value="date">Sort: click date</option></select>
+                    <span className="text-xs text-slate-500 ml-auto">{table.length} rows</span>
+                  </div>
+
+                  {/* Table */}
+                  <div className="bg-slate-800/50 border border-slate-700 rounded-xl overflow-x-auto">
+                    <table className="w-full text-sm min-w-[760px]">
+                      <thead><tr className="border-b border-slate-700">
+                        <th className={th}>Lead</th><th className={th}>Stage</th><th className={th}>Value</th><th className={th}>Status</th><th className={th}>Match</th><th className={th}>Window</th><th className={th}>Reviewed by</th><th className={`${th} text-right`}>Actions</th>
+                      </tr></thead>
+                      <tbody>
+                        {table.length ? table.slice(0, 300).map((r) => (
+                          <tr key={r.key} className="border-b border-slate-700/40 hover:bg-slate-700/20 cursor-pointer" onClick={() => navigateToLeadCard(r.lead)}>
+                            <td className={`${td} text-white max-w-[180px] truncate`}>{nameOf(r.lead)}</td>
+                            <td className={`${td} text-slate-300`}>{r.stage}</td>
+                            <td className={`${td} font-bold text-emerald-300 whitespace-nowrap`} title={r.tip}>{r.value != null ? fmt(r.value) : '—'}</td>
+                            <td className={td}><span className={`text-[10px] px-2 py-0.5 rounded font-semibold whitespace-nowrap ${ST[r.status].cls}`}>{r.status === 'held30' && r.heldUntil ? `Held → ${new Date(r.heldUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ST[r.status].label}</span></td>
+                            <td className={`${td} text-slate-400 text-xs whitespace-nowrap`}>{r.match}</td>
+                            <td className={`${td} whitespace-nowrap`}>{dBadge(r.dleft)}</td>
+                            <td className={`${td} text-slate-400 text-xs truncate max-w-[120px]`}>{r.reviewedBy || '—'}</td>
+                            <td className={`${td} text-right`}>{rowActions(r)}</td>
+                          </tr>
+                        )) : <tr><td className="px-3 py-4 text-slate-500" colSpan={8}>No conversions match these filters.</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Totals */}
+                  <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-slate-400 px-1">
+                    <span>Queued now: <b className="text-white">{fmt(readyTotal)}</b> ({ready.length})</span>
+                    <span>Sent last 7 days: <b className="text-white">{fmt(sumSince(7))}</b></span>
+                    <span>Sent last 30 days: <b className="text-white">{fmt(sumSince(30))}</b></span>
+                    <span className="text-slate-500">Hover a value to see the math.</span>
+                  </div>
+                </>
+              )}
             </div>
           );
         })()}
