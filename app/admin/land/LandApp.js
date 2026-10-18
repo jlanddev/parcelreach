@@ -75,10 +75,10 @@ function ReviewPanel({ lead, onSave }) {
   const revProfit = hasWorth ? (offer > 0 ? Math.max(0, worth - offer) : Math.round(worth * 0.5)) : 0;
   const dealProfit = hasWorth ? cappedProfit({ worth, offer }) : 0; // needs a real offer
   const reviewedVal = deadLost ? 0 : (rev?.override != null ? Math.round(Number(rev.override)) : Math.round(Math.min(revProfit, VBB_PROFIT_CAP) * leanPct));
-  const contractVal = deadLost ? 0 : Math.round(dealProfit * Math.max(0, CONTRACT_TOTAL - leanPct));
-  const closedVal = deadLost ? 0 : Math.round(dealProfit * CLOSED_SHARE);
+  const contractVal = deadLost ? 0 : Math.round(dealProfit * Math.max(0, CONTRACT_TOTAL - leanPct)); // the win = 100% − lean%
   const cu = lead.form_data?.contract_upload || {};
-  const du = lead.form_data?.closed_upload || {};
+  const won = rank >= VBB_CONTRACT_RANK && !deadLost; // Agreement Sent / Signed Contract = won
+  const wonTotal = reviewedVal + contractVal; // = full profit when won
 
   // Per-step status badge.
   const B = { sent: 'bg-sky-500/20 text-sky-300', queued: 'bg-emerald-500/20 text-emerald-300', hold: 'bg-amber-500/15 text-amber-200', pending: 'bg-slate-600/30 text-slate-400', adjust: 'bg-indigo-500/20 text-indigo-300', need: 'bg-rose-500/20 text-rose-300' };
@@ -101,18 +101,18 @@ function ReviewPanel({ lead, onSave }) {
   };
   const steps = [
     { label: 'Reviewed Lead', val: reviewedVal, st: reviewedStep() },
-    { label: 'Contract Signed', val: contractVal, st: dealStep(VBB_CONTRACT_RANK, cu, contractVal, 'Agreement/Contract') },
-    { label: 'Closed Deal', val: closedVal, st: dealStep(VBB_CLOSED_RANK, du, closedVal, 'Closed') },
+    { label: 'Contract Signed', val: contractVal, st: dealStep(VBB_CONTRACT_RANK, cu, contractVal, 'Agreement/Signed') },
   ];
 
-  // LOCKED view: the 3-step ladder mirroring the lead's actual stage.
+  // LOCKED view: the 2-step ladder mirroring the lead's actual stage.
   if (hasWorth && !editing) {
     return (
       <div className="mb-4 rounded-lg border border-emerald-600/40 bg-emerald-500/5 px-3 py-2.5">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-[10px] font-bold uppercase tracking-wide text-emerald-300/80">Deal Value · {stageLabel}</span>
+          <span className="text-[10px] font-bold uppercase tracking-wide text-emerald-300/80">Deal Value · {won ? 'Won' : stageLabel}</span>
           <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-slate-600/50 text-slate-200">{leanBadge}{deadLost ? '' : ` · ${pctLabel(leanPct)}`}</span>
         </div>
+        {won && <div className="text-base font-bold text-emerald-300 mb-1.5">Won ✓ {fmt(wonTotal)} total</div>}
         <div className="space-y-1">
           {steps.map((s) => (
             <div key={s.label} className="flex items-center justify-between gap-2">
@@ -6165,24 +6165,9 @@ export default function LandLeadsAdminPage() {
               else if (Number(cu.sent_value) !== cv.value) st = 'adjust';
               else st = 'sent';
               rows.push({ key: `${l.id}:con`, lead: l, stage: 'Contract', stageKey: 'contract_upload', value: cv.value, status: st, match, dleft,
-                tip: cv.value != null ? `${fmt(prof)} profit × (75% − ${pctStr(leanAtContract)} ${leanName(leanAtContract)}) = ${fmt(cv.value)}` : 'needs a reviewed worth + an offer', reviewedBy: r?.reviewed_by || null, sentAt: cu.sent_at, heldUntil: null });
+                tip: cv.value != null ? `the win: ${fmt(prof)} profit × (100% − ${pctStr(leanAtContract)} ${leanName(leanAtContract)}) = ${fmt(cv.value)}` : 'needs a reviewed worth + an offer', reviewedBy: r?.reviewed_by || null, sentAt: cu.sent_at, heldUntil: null });
             }
-            if (status === 'CLOSED') {
-              const dv = closedValue(reviewForDeal);
-              const du = l.form_data?.closed_upload || {};
-              let st;
-              if (du.hold) st = 'held';
-              else if (du.retract && du.sent_at) st = 'retract';
-              else if (expired) st = 'outside';
-              else if (dv.reason === 'needs_review') st = 'needs_review';
-              else if (dv.reason === 'needs_offer') st = 'needs_offer';
-              else if (match === 'None') st = 'unmatchable';
-              else if (!du.sent_at) st = 'ready';
-              else if (Number(du.sent_value) !== dv.value) st = 'adjust';
-              else st = 'sent';
-              rows.push({ key: `${l.id}:clo`, lead: l, stage: 'Closed', stageKey: 'closed_upload', value: dv.value, status: st, match, dleft,
-                tip: dv.value != null ? `${fmt(prof)} profit × 25% = ${fmt(dv.value)}` : 'needs a reviewed worth + an offer', reviewedBy: r?.reviewed_by || null, sentAt: du.sent_at, heldUntil: null });
-            }
+            // Closed Deal conversion retired — Signed Contract is the win; no Closed rows.
           }
 
           const ST = {
@@ -6343,7 +6328,7 @@ export default function LandLeadsAdminPage() {
                   {/* Filters */}
                   <div className="flex flex-wrap items-center gap-2">
                     <input value={qSearch} onChange={(e) => setQSearch(e.target.value)} placeholder="Search name…" className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white w-40" />
-                    <select value={qStage} onChange={(e) => setQStage(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"><option value="all">All stages</option><option>Reviewed</option><option>Contract</option><option>Closed</option></select>
+                    <select value={qStage} onChange={(e) => setQStage(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"><option value="all">All stages</option><option>Reviewed</option><option>Contract</option></select>
                     <select value={qStatus} onChange={(e) => setQStatus(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"><option value="all">All statuses</option><option value="sending">Ready + Adjustments</option><option value="attention">Needs attention</option>{Object.keys(ST).map((k) => <option key={k} value={k}>{ST[k].label}</option>)}</select>
                     {reps.length > 0 && <select value={qRep} onChange={(e) => setQRep(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"><option value="all">All reps</option>{reps.map((rp) => <option key={rp} value={rp}>{rp}</option>)}</select>}
                     <select value={qSort} onChange={(e) => setQSort(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"><option value="daysLeft">Sort: days left</option><option value="value">Sort: value</option><option value="date">Sort: click date</option></select>

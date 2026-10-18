@@ -304,11 +304,12 @@ async function handle(req) {
       queueDeal(contract, { action: 'Contract Signed', orderSuffix: '-contract', upKey: 'contract_upload', value: cv.value, reason: cv.reason }, l, when, l.form_data?.contract_upload || {});
     }
 
-    // Closed Deal — the final profit × 25%. Needs review + offer.
-    if (status === 'CLOSED') {
-      const when = new Date(o.CLOSED?.at || l.last_activity_at || l.updated_at || l.created_at || 0).getTime();
-      const dv = closedValue(reviewForDeal);
-      queueDeal(closed, { action: 'Closed Deal', orderSuffix: '-closed', upKey: 'closed_upload', value: dv.value, reason: dv.reason }, l, when, l.form_data?.closed_upload || {});
+    // Closed Deal conversion RETIRED (Signed Contract is the win). Void any closed
+    // conversion we previously sent by restating it to $0 (one-time; sent_at then clears
+    // so it won't re-queue). No new Closed conversions are ever created.
+    const closedUp = l.form_data?.closed_upload || {};
+    if (closedUp.sent_at && Number(closedUp.sent_value) !== 0) {
+      closed.retract.push({ action: 'Closed Deal', transaction_id: `${l.id}-closed`, lead_id: l.id, ...ids(l), ...hashed(l) });
     }
   }
 
