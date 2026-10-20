@@ -59,8 +59,13 @@ async function run(request) {
   const MAX_PER_RUN = Math.max(1, Number(process.env.CAMPAIGN_MAX_PER_RUN) || 8);
 
   const now = new Date().toISOString();
+  // Drip only for ACTIVE campaigns. Pausing a campaign must stop its queued texts
+  // (they stay pending and resume if it's reactivated). Appointment reminders are
+  // handled separately below and are NOT affected by this.
+  const { data: activeCamps } = await supabase.from('campaigns').select('id').eq('active', true);
+  const activeCampIds = new Set((activeCamps || []).map((c) => c.id));
   const { data: due } = await supabase.from('campaign_queue')
-    .select('id, lead_id, enrollment_id, message, type')
+    .select('id, lead_id, enrollment_id, message, type, campaign_id')
     .eq('status', 'pending').eq('type', 'text').lte('due_at', now)
     .order('due_at', { ascending: true }).limit(100);
 
@@ -71,6 +76,8 @@ async function run(request) {
     try {
       // Throttle: once we've fired the per-run cap, stop; the rest wait for the next tick.
       if ((dryRun ? preview.length : sent) >= MAX_PER_RUN) break;
+      // Campaign paused -> skip (leave pending; resumes when the campaign is reactivated).
+      if (item.campaign_id && !activeCampIds.has(item.campaign_id)) { skipped++; continue; }
       // One message per person per run. In dry mode nothing is really sent, so
       // only dedup the preview (perLeadSent must reflect REAL sends only, so it
       // doesn't wrongly block this lead's appointment reminder below).
