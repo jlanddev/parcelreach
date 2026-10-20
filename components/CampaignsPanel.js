@@ -200,6 +200,22 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
     } catch (e) { say('Enroll failed: ' + e.message, 'error'); }
     setBusy(false);
   };
+  // Remove one or more leads from the OPEN campaign: stops their drip, cancels
+  // queued texts, and clears their follow-up calls. Used by the Remove buttons.
+  const doRemove = async (leadIds) => {
+    if (!openCampaign || !leadIds?.length) return;
+    const who = leadIds.length === 1 ? 'this lead' : `${leadIds.length} leads`;
+    if (!window.confirm(`Remove ${who} from "${openCampaign.name}"? This stops their drip and clears their follow-up calls.`)) return;
+    setBusy(true);
+    try {
+      const res = await fetch('/api/campaigns/enroll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ campaignId: openCampaign.id, leadIds, remove: true }) });
+      const j = await res.json();
+      if (!j.ok) throw new Error(j.error || 'failed');
+      say(`Removed ${j.removed} from ${openCampaign.name}`);
+      load();
+    } catch (e) { say('Remove failed: ' + e.message, 'error'); }
+    setBusy(false);
+  };
   // Append a {{token}} to a step's message so nobody has to type brackets.
   const insertToken = (i, token) => setEditing(prev => {
     const st = [...prev.steps];
@@ -374,13 +390,16 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
           </div>
           <div className="max-h-56 overflow-y-auto divide-y divide-slate-700/50">
             {detailItems.map((it, i) => (
-              <button key={i} onClick={() => onOpenLead && onOpenLead(it.lead)} className="w-full text-left px-4 py-2.5 hover:bg-slate-700/40 flex items-center gap-3">
-                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${it.kind === 'call' ? 'bg-amber-400' : 'bg-cyan-400'}`} />
-                <span className={`text-xs font-semibold uppercase tracking-wide flex-shrink-0 ${it.kind === 'call' ? 'text-amber-300' : 'text-cyan-300'}`}>{it.kind === 'call' ? 'Call' : 'New message'}</span>
-                <span className="text-sm text-white truncate">{it.lead.full_name || it.lead.name || 'Lead'}</span>
-                {it.kind === 'message' && it.text && <span className="text-xs text-slate-400 truncate hidden md:inline">“{it.text}”</span>}
-                <span className="ml-auto text-xs text-slate-500 flex-shrink-0">{it.kind === 'call' ? (it.overdue ? 'Overdue' : 'Due') + ' ' + fmtWhen(it.ts) : (it.ts ? fmtWhen(it.ts) : '')}</span>
-              </button>
+              <div key={i} className="px-4 py-2.5 hover:bg-slate-700/40 flex items-center gap-3">
+                <button onClick={() => onOpenLead && onOpenLead(it.lead)} className="flex-1 min-w-0 text-left flex items-center gap-3">
+                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${it.kind === 'call' ? 'bg-amber-400' : 'bg-cyan-400'}`} />
+                  <span className={`text-xs font-semibold uppercase tracking-wide flex-shrink-0 ${it.kind === 'call' ? 'text-amber-300' : 'text-cyan-300'}`}>{it.kind === 'call' ? 'Call' : 'New message'}</span>
+                  <span className="text-sm text-white truncate">{it.lead.full_name || it.lead.name || 'Lead'}</span>
+                  {it.kind === 'message' && it.text && <span className="text-xs text-slate-400 truncate hidden md:inline">“{it.text}”</span>}
+                </button>
+                <span className="text-xs text-slate-500 flex-shrink-0">{it.kind === 'call' ? (it.overdue ? 'Overdue' : 'Due') + ' ' + fmtWhen(it.ts) : (it.ts ? fmtWhen(it.ts) : '')}</span>
+                <button onClick={() => doRemove([it.lead.id])} disabled={busy} title="Remove from this campaign" className="flex-shrink-0 text-xs font-semibold px-2.5 py-1 rounded-lg bg-slate-700/60 text-slate-300 hover:bg-rose-600/30 hover:text-rose-200 disabled:opacity-50">Remove</button>
+              </div>
             ))}
           </div>
         </div>
@@ -506,13 +525,21 @@ export default function CampaignsPanel({ leads = [], currentUserId, renderLeadCa
         ) : shown.length === 0 ? (
           <div className="text-center py-12 text-slate-500 border border-dashed border-slate-700 rounded-xl">No enrolled leads match those filters.</div>
         ) : renderLeadCard ? (
-          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">{shown.map(l => <div key={l.id}>{renderLeadCard(l)}</div>)}</div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">{shown.map(l => (
+            <div key={l.id}>
+              {renderLeadCard(l)}
+              <button onClick={() => doRemove([l.id])} disabled={busy} title="Remove from this campaign" className="mt-1.5 w-full text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-300 hover:bg-rose-600/20 hover:text-rose-200 hover:border-rose-600/40 disabled:opacity-50">Remove from campaign</button>
+            </div>
+          ))}</div>
         ) : (
           <div className="space-y-2">{shown.map(l => (
-            <button key={l.id} onClick={() => onOpenLead && onOpenLead(l)} className="w-full text-left bg-slate-800/60 border border-slate-700/50 rounded-lg px-3 py-2 hover:bg-slate-700/60">
-              <div className="text-sm text-white">{l.full_name || l.name}</div>
-              <div className="text-xs text-slate-400">{l.phone}{repliedAfterEnroll(l, enrolledAtById[l.id]) ? ' · replied, owe a response' : ''}</div>
-            </button>
+            <div key={l.id} className="bg-slate-800/60 border border-slate-700/50 rounded-lg px-3 py-2 flex items-center gap-3">
+              <button onClick={() => onOpenLead && onOpenLead(l)} className="flex-1 min-w-0 text-left">
+                <div className="text-sm text-white truncate">{l.full_name || l.name}</div>
+                <div className="text-xs text-slate-400 truncate">{l.phone}{repliedAfterEnroll(l, enrolledAtById[l.id]) ? ' · replied, owe a response' : ''}</div>
+              </button>
+              <button onClick={() => doRemove([l.id])} disabled={busy} title="Remove from this campaign" className="flex-shrink-0 text-xs font-semibold px-2.5 py-1 rounded-lg bg-slate-700/60 text-slate-300 hover:bg-rose-600/30 hover:text-rose-200 disabled:opacity-50">Remove</button>
+            </div>
           ))}</div>
         )}
       </div>

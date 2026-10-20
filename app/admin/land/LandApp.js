@@ -5337,12 +5337,10 @@ export default function LandLeadsAdminPage() {
             };
             // New-activity count per tab (shares the same event engine as the panel).
             // Campaigns bubbles on due campaign CALLS so they get made.
-            const dueCampaignCalls = (scheduledTasks || []).filter(t => t.status === 'pending' && (t.source === 'campaign' || /^campaign:/i.test(t.description || '')) && new Date(t.due_at) <= new Date()).length;
-            // Campaigns bubble = due campaign calls + replies from enrolled leads
-            // (their notifications route here via notifTab), so campaign responses
-            // show up under Follow-Up Campaigns, not PPC Inflow.
+            // No notification bubble on Follow-Up Campaigns: once a lead responds it
+            // returns to its own pipeline tab, so a campaigns badge is just clutter.
             const newCountFor = (tab) => tab === 'campaigns'
-              ? dueCampaignCalls + tabEventsFor('campaigns').length
+              ? 0
               : tab === 'appointment-set'
                 ? tabEventsFor('appointment-set').length + imminentAppts.length // + imminent appointments (within 30 min)
                 : tabEventsFor(tab).length;

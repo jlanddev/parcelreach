@@ -25,6 +25,33 @@ export async function POST(request) {
     if (cErr || !campaign) return NextResponse.json({ ok: false, error: 'Campaign not found' }, { status: 404 });
     const steps = Array.isArray(campaign.steps) ? campaign.steps : [];
 
+    // REMOVE: pull specific leads OUT of this campaign. Stops their enrollment,
+    // cancels any queued drip texts, and clears this campaign's pending call
+    // tasks so they drop out of the Follow-up calls tray. Body: { campaignId,
+    // leadIds, remove: true }.
+    if (body.remove) {
+      const ids = Array.isArray(body.leadIds) ? body.leadIds.filter(Boolean) : [];
+      if (!ids.length) return NextResponse.json({ ok: false, error: 'leadIds required to remove' }, { status: 400 });
+      const nowIso = new Date().toISOString();
+      const { data: stopped } = await sb.from('campaign_enrollments')
+        .update({ status: 'stopped', stopped_reason: 'manual' })
+        .eq('campaign_id', campaignId).in('lead_id', ids).eq('status', 'active').select('id');
+      const enrIds = (stopped || []).map((e) => e.id);
+      if (enrIds.length) {
+        await sb.from('campaign_queue').update({ status: 'cancelled', processed_at: nowIso })
+          .in('enrollment_id', enrIds).eq('status', 'pending').then(() => {}, () => {});
+      }
+      // Clear this campaign's pending call tasks for these leads. Try 'cancelled';
+      // fall back to 'completed' if the status CHECK doesn't allow it.
+      const clearCalls = (status) => sb.from('scheduled_tasks')
+        .update({ status, completed_at: nowIso })
+        .in('lead_id', ids).eq('status', 'pending').eq('source', 'campaign')
+        .ilike('description', `Campaign: ${campaign.name}%`);
+      const { error: tErr } = await clearCalls('cancelled');
+      if (tErr) await clearCalls('completed').then(() => {}, () => {});
+      return NextResponse.json({ ok: true, removed: enrIds.length });
+    }
+
     // Resolve the lead set.
     let leads = [];
     if (Array.isArray(body.leadIds) && body.leadIds.length) {
