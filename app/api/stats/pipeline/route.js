@@ -31,7 +31,8 @@ export async function GET(request) {
 
     // Appointments = scheduled meeting tasks (matches the CRM's "Mapped & Appointment
     // Set" tab, which counts meetings, not lead status). Year filters by due_at.
-    let mq = sb.from('scheduled_tasks').select('id', { count: 'exact', head: true }).eq('task_type', 'meeting');
+    let mq = sb.from('scheduled_tasks').select('id', { count: 'exact', head: true })
+      .eq('task_type', 'meeting').eq('status', 'pending').not('title', 'ilike', 'BLOCKED%');
     if (year) mq = mq.gte('due_at', `${year}-01-01T00:00:00Z`).lt('due_at', `${year + 1}-01-01T00:00:00Z`);
     const { count: apptCount } = await mq;
 
