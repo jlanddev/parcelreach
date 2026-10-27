@@ -104,15 +104,6 @@ function LoginContent() {
           </div>
         )}
 
-        <div className="flex mb-6 bg-slate-900 rounded-lg p-1">
-          <button
-            type="button"
-            className="flex-1 py-2 px-4 rounded-md text-sm font-semibold transition-all bg-blue-500 text-white"
-          >
-            Sign In
-          </button>
-        </div>
-
         {error && (
           <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-center">
             <p className="text-red-400 text-sm">{error}</p>
