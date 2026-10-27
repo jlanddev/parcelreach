@@ -54,6 +54,8 @@ export default function OmSearch({ partner = false }) {
   const [countyList, setCountyList] = useState([]);      // [{fips,name,stateFips,abbr,label}]
   const [activeState, setActiveState] = useState('');    // state FIPS prefix chosen in the cascade
   const [countyQuery, setCountyQuery] = useState('');
+  const [countyOpen, setCountyOpen] = useState(false);
+  const countyRef = useRef(null);
   const [selected, setSelected] = useState([]); // start clean for everyone — no auto-selected counties
   const [mode, setMode] = useState('listings');          // 'listings' | 'deals'
   const [soldDays, setSoldDays] = useState(730);          // deal finder: sold comps window
@@ -158,6 +160,15 @@ export default function OmSearch({ partner = false }) {
   const addCounty = (c) => setSelected((s) => (s.some((x) => x.fips === c.fips) ? s : [...s, { fips: c.fips, label: c.label }]));
   const removeCounty = (fips) => setSelected((s) => s.filter((x) => x.fips !== fips));
   const addAllInState = () => setSelected((s) => { const have = new Set(s.map((x) => x.fips)); return [...s, ...countiesInState.filter((c) => !have.has(c.fips)).map((c) => ({ fips: c.fips, label: c.label }))]; });
+  // Close the county list on click-outside or Escape, so counties aren't added by accident.
+  useEffect(() => {
+    if (!countyOpen) return;
+    const onDown = (e) => { if (countyRef.current && !countyRef.current.contains(e.target)) setCountyOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setCountyOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [countyOpen]);
   const loadPreset = (preset) => setSelected(preset.counties);
 
   const buildParams = () => {
@@ -358,16 +369,19 @@ export default function OmSearch({ partner = false }) {
               {presentStates.map((s) => <option key={s.fips} value={s.fips}>{s.name}</option>)}
             </select>
           </div>
-          <div>
+          <div ref={countyRef}>
             <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">County {activeState && <span className="text-slate-500 normal-case">in {stateByFips[activeState]?.name}</span>}</label>
-            <input value={countyQuery} onChange={(e) => setCountyQuery(e.target.value)} disabled={!activeState}
-              placeholder={activeState ? 'Filter counties' : 'Pick a state first'}
+            <input value={countyQuery} onChange={(e) => setCountyQuery(e.target.value)} onFocus={() => setCountyOpen(true)} disabled={!activeState}
+              placeholder={activeState ? (countyOpen ? 'Filter counties' : 'Click to add counties') : 'Pick a state first'}
               className="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm placeholder-slate-500 focus:outline-none focus:border-indigo-500 disabled:opacity-50" />
-            {activeState && (
+            {activeState && countyOpen && (
               <div className="mt-1 border border-slate-600 rounded-md bg-slate-800/70 max-h-48 overflow-y-auto divide-y divide-slate-700/50">
-                <button type="button" onClick={addAllInState} className="w-full text-left px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-600/20 sticky top-0 bg-slate-800">
-                  + Add all {countiesInState.length} in {stateByFips[activeState]?.name}
-                </button>
+                <div className="sticky top-0 bg-slate-800 flex items-center justify-between border-b border-slate-700/60">
+                  <button type="button" onClick={addAllInState} className="text-left px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-600/20">
+                    + Add all {countiesInState.length} in {stateByFips[activeState]?.name}
+                  </button>
+                  <button type="button" onClick={() => setCountyOpen(false)} className="px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600/70 hover:bg-indigo-600 rounded-l">Done</button>
+                </div>
                 {countiesInState.map((c) => {
                   const on = selSet.has(c.fips);
                   return (
