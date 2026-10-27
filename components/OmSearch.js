@@ -58,6 +58,8 @@ export default function OmSearch({ partner = false }) {
   const [mode, setMode] = useState('listings');          // 'listings' | 'deals'
   const [soldDays, setSoldDays] = useState(730);          // deal finder: sold comps window
   const [ratio, setRatio] = useState(0.5);               // deal finder: buy at this fraction of sold PPA
+  const [exitMin, setExitMin] = useState('');            // deal finder: proposed exit (end-product) lot band
+  const [exitMax, setExitMax] = useState('');
   const [status, setStatus] = useState('for_sale');
   const [daysWindow, setDaysWindow] = useState('');
   const [vacantOnly, setVacantOnly] = useState(true);           // default ON: land, no structures
@@ -220,7 +222,7 @@ export default function OmSearch({ partner = false }) {
           try {
             const res = await fetch('/api/landportal/deal-finder', {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ fips: [fips], parentMin: num(acresMin), parentMax: num(acresMax), soldDays: num(soldDays), ratio: Number(ratio), frontageMin: num(frontageMin) }),
+              body: JSON.stringify({ fips: [fips], parentMin: num(acresMin), parentMax: num(acresMax), soldDays: num(soldDays), ratio: Number(ratio), frontageMin: num(frontageMin), childMin: num(exitMin), childMax: num(exitMax) }),
               signal: ctrl.signal,
             });
             const d = JSON.parse(await res.text());
@@ -459,7 +461,24 @@ export default function OmSearch({ partner = false }) {
                 <div className="flex justify-between text-[10px] text-slate-500"><span>30%</span><span>50%</span><span>65%</span><span>100%</span></div>
               </div>
             </div>
-            <p className="text-xs text-slate-400 max-w-2xl">Exit lots <span className="text-slate-200">{exitBand[0]}-{exitBand[1]} ac</span> (auto from parent size). Finds active vacant parents priced at or under <span className="text-slate-200">{Math.round(Number(ratio) * 100)}%</span> of each county&rsquo;s median sold PPA for that lot band.</p>
+            {/* Propose the END PRODUCT (exit lot) size — comps value THIS lot band. */}
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Exit lot size <span className="text-slate-500 normal-case font-medium">(your end product, acres)</span></label>
+              <div className="flex items-center gap-1.5">
+                <input type="number" value={exitMin} onChange={(e) => setExitMin(e.target.value)} placeholder="min" className="w-24 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
+                <span className="text-slate-500">to</span>
+                <input type="number" value={exitMax} onChange={(e) => setExitMax(e.target.value)} placeholder="max" className="w-24 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
+                {(exitMin !== '' || exitMax !== '') && <button type="button" onClick={() => { setExitMin(''); setExitMax(''); }} className="text-[11px] text-slate-400 hover:text-white ml-1">auto</button>}
+              </div>
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {[[0.5, 1], [1, 2], [1, 3], [2, 5], [5, 10], [10, 20]].map(([a, b]) => {
+                  const on = num(exitMin) === a && num(exitMax) === b;
+                  return (<button key={`${a}-${b}`} type="button" onClick={() => { setExitMin(a); setExitMax(b); }}
+                    className={`px-2.5 py-0.5 rounded-full text-[11px] border ${on ? 'border-emerald-500 bg-emerald-600/20 text-emerald-200' : 'border-slate-600 text-slate-300 hover:bg-slate-700 hover:border-slate-500'}`}>{a}&ndash;{b} ac</button>);
+                })}
+              </div>
+            </div>
+            <p className="text-xs text-slate-400 max-w-2xl">Comps the end product at <span className="text-slate-200">{(num(exitMin) && num(exitMax)) ? `${num(exitMin)}-${num(exitMax)} ac (your pick)` : `${exitBand[0]}-${exitBand[1]} ac (auto from parent size)`}</span>. Finds active vacant parents priced at or under <span className="text-slate-200">{Math.round(Number(ratio) * 100)}%</span> of each county&rsquo;s median sold PPA for that lot band.</p>
           </div>
         )}
 
