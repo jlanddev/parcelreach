@@ -316,7 +316,6 @@ export default function OmSearch({ partner = false }) {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold">OM Search</h2>
-          <p className="text-xs text-slate-400">Find on-market land listings in your hot markets.{partner ? '' : ' Run detailed adds boundaries and valuation.'}</p>
         </div>
         <div className="text-right text-xs text-slate-400 space-y-0.5">
           {quota != null && <div>{quota.toLocaleString()} searches left today</div>}
@@ -433,13 +432,6 @@ export default function OmSearch({ partner = false }) {
               <input type="number" value={acresMin} onChange={(e) => setAcresMin(e.target.value)} placeholder="min" className="w-24 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
               <span className="text-slate-500">to</span>
               <input type="number" value={acresMax} onChange={(e) => setAcresMax(e.target.value)} placeholder="max" className="w-24 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
-            </div>
-            {/* Quick acreage bands — pick the exit-lot / parent-parcel size fast. */}
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {[[0.5, 1], [1, 2], [1, 3], [2, 5], [5, 10], [10, 20], [20, 50], [50, 100]].map(([a, b]) => (
-                <button key={`${a}-${b}`} type="button" onClick={() => { setAcresMin(a); setAcresMax(b); }}
-                  className="px-2.5 py-0.5 rounded-full text-[11px] border border-slate-600 text-slate-300 hover:bg-slate-700 hover:border-slate-500">{a}&ndash;{b} ac</button>
-              ))}
             </div>
           </div>
           {mode === 'listings' && (

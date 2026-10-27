@@ -62,7 +62,10 @@ export async function GET(request) {
       appt_set: apptCount || 0,
       offer_curated: rows.filter((l) => hasOffer(l) && [...EARLY, 'APPT_SET_FOR_JORDAN'].includes(up(l)) && notArch(l)).length,
       offer_made: rows.filter((l) => ['OFFER_SENT', 'NEGOTIATING'].includes(up(l))).length,
-      signed_contracts: rows.filter((l) => ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED', 'ASSIGNED'].includes(up(l))).length,
+      // Signed = each discrete signed/assigned DEAL (count every record, not deduped
+      // by phone), and includes ASSIGNED (wholesale-assigned contracts). The flow
+      // stages above are deduped so a person who advanced isn't counted twice.
+      signed_contracts: (leads || []).filter((l) => ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED', 'ASSIGNED'].includes(up(l)) && (!year || (l.created_at >= `${year}-01-01T00:00:00Z` && l.created_at < `${year + 1}-01-01T00:00:00Z`))).length,
     };
     return NextResponse.json({ ok: true, year: year || 'all', counts });
   } catch (err) {
