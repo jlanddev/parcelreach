@@ -54,15 +54,15 @@ export default function OmSearch({ partner = false }) {
   const [countyList, setCountyList] = useState([]);      // [{fips,name,stateFips,abbr,label}]
   const [activeState, setActiveState] = useState('');    // state FIPS prefix chosen in the cascade
   const [countyQuery, setCountyQuery] = useState('');
-  const [selected, setSelected] = useState(partner ? [] : PRESETS[0].counties); // partners start clean; others default to 1 yr STR
+  const [selected, setSelected] = useState([]); // start clean for everyone — no auto-selected counties
   const [mode, setMode] = useState('listings');          // 'listings' | 'deals'
   const [soldDays, setSoldDays] = useState(730);          // deal finder: sold comps window
   const [ratio, setRatio] = useState(0.5);               // deal finder: buy at this fraction of sold PPA
   const [status, setStatus] = useState('for_sale');
   const [daysWindow, setDaysWindow] = useState('');
   const [vacantOnly, setVacantOnly] = useState(true);           // default ON: land, no structures
-  const [acresMin, setAcresMin] = useState(30);
-  const [acresMax, setAcresMax] = useState(60);
+  const [acresMin, setAcresMin] = useState('');
+  const [acresMax, setAcresMax] = useState('');
   const [frontageMin, setFrontageMin] = useState('');
   const [priceMin, setPriceMin] = useState('');
   const [priceMax, setPriceMax] = useState('');
@@ -110,7 +110,7 @@ export default function OmSearch({ partner = false }) {
   // Persist the selected counties so a reload / remount never loses them.
   const persistReady = useRef(false);
   useEffect(() => {
-    try { const s = sessionStorage.getItem('om_selected'); if (s) { const p = JSON.parse(s); if (Array.isArray(p) && p.length) setSelected(p); } } catch { /* ignore */ }
+    // Start clean every load — no auto-selected counties (removed the preset/restore).
     persistReady.current = true;
   }, []);
   useEffect(() => {
@@ -433,6 +433,13 @@ export default function OmSearch({ partner = false }) {
               <input type="number" value={acresMin} onChange={(e) => setAcresMin(e.target.value)} placeholder="min" className="w-24 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
               <span className="text-slate-500">to</span>
               <input type="number" value={acresMax} onChange={(e) => setAcresMax(e.target.value)} placeholder="max" className="w-24 bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm" />
+            </div>
+            {/* Quick acreage bands — pick the exit-lot / parent-parcel size fast. */}
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {[[0.5, 1], [1, 2], [1, 3], [2, 5], [5, 10], [10, 20], [20, 50], [50, 100]].map(([a, b]) => (
+                <button key={`${a}-${b}`} type="button" onClick={() => { setAcresMin(a); setAcresMax(b); }}
+                  className="px-2.5 py-0.5 rounded-full text-[11px] border border-slate-600 text-slate-300 hover:bg-slate-700 hover:border-slate-500">{a}&ndash;{b} ac</button>
+              ))}
             </div>
           </div>
           {mode === 'listings' && (

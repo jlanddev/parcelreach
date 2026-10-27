@@ -62,7 +62,7 @@ export async function GET(request) {
       appt_set: apptCount || 0,
       offer_curated: rows.filter((l) => hasOffer(l) && [...EARLY, 'APPT_SET_FOR_JORDAN'].includes(up(l)) && notArch(l)).length,
       offer_made: rows.filter((l) => ['OFFER_SENT', 'NEGOTIATING'].includes(up(l))).length,
-      signed_contracts: rows.filter((l) => ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(up(l))).length,
+      signed_contracts: rows.filter((l) => ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED', 'ASSIGNED'].includes(up(l))).length,
     };
     return NextResponse.json({ ok: true, year: year || 'all', counts });
   } catch (err) {
