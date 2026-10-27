@@ -29,6 +29,12 @@ export async function GET(request) {
       .limit(20000);
     if (error) throw error;
 
+    // Appointments = scheduled meeting tasks (matches the CRM's "Mapped & Appointment
+    // Set" tab, which counts meetings, not lead status). Year filters by due_at.
+    let mq = sb.from('scheduled_tasks').select('id', { count: 'exact', head: true }).eq('task_type', 'meeting');
+    if (year) mq = mq.gte('due_at', `${year}-01-01T00:00:00Z`).lt('due_at', `${year + 1}-01-01T00:00:00Z`);
+    const { count: apptCount } = await mq;
+
     // Leads currently in an active campaign drip (excluded from PPC Inflow), matching the CRM.
     const { data: enr } = await sb.from('campaign_enrollments').select('lead_id').eq('status', 'active').limit(50000);
     const enrolled = new Set((enr || []).map((e) => e.lead_id));
@@ -52,7 +58,7 @@ export async function GET(request) {
 
     const counts = {
       ppc_inflow: rows.filter((l) => EARLY.includes(up(l)) && notArch(l) && !inCampaign(l)).length,
-      appt_set: rows.filter((l) => up(l) === 'APPT_SET_FOR_JORDAN').length,
+      appt_set: apptCount || 0,
       offer_curated: rows.filter((l) => hasOffer(l) && [...EARLY, 'APPT_SET_FOR_JORDAN'].includes(up(l)) && notArch(l)).length,
       offer_made: rows.filter((l) => ['OFFER_SENT', 'NEGOTIATING'].includes(up(l))).length,
       signed_contracts: rows.filter((l) => ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'].includes(up(l))).length,
