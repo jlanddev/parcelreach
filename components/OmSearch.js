@@ -49,7 +49,7 @@ function acreageFlag(d) {
   return diff > 0.15 ? { assessed: a, calc: c, pct: Math.round(diff * 100) } : null;
 }
 
-export default function OmSearch() {
+export default function OmSearch({ partner = false }) {
   const [countyDict, setCountyDict] = useState({});      // fips -> "Name, AB"
   const [countyList, setCountyList] = useState([]);      // [{fips,name,stateFips,abbr,label}]
   const [activeState, setActiveState] = useState('');    // state FIPS prefix chosen in the cascade
@@ -320,7 +320,7 @@ export default function OmSearch() {
         </div>
         <div className="text-right text-xs text-slate-400 space-y-0.5">
           {quota != null && <div>{quota.toLocaleString()} searches left today</div>}
-          {daily && <div className="text-slate-500">Detail pool {daily.poolLeft}/8 left today{daily.spentCents ? ` · spent ${money(daily.spentCents)}` : ''}</div>}
+          {!partner && daily && <div className="text-slate-500">Detail pool {daily.poolLeft}/8 left today{daily.spentCents ? ` · spent ${money(daily.spentCents)}` : ''}</div>}
         </div>
       </div>
 
@@ -539,7 +539,7 @@ export default function OmSearch() {
             )}
           </div>
 
-          {rows.length > 0 && (
+          {!partner && rows.length > 0 && (
             <div className="flex flex-wrap items-center gap-3">
               <button type="button" onClick={askQuote} disabled={quoting || runningDetailed || nUnhydrated === 0}
                 className="px-4 py-2 rounded-lg bg-emerald-600/90 hover:bg-emerald-600 disabled:opacity-40 text-white text-sm font-semibold">
@@ -626,7 +626,7 @@ export default function OmSearch() {
                               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
                               {pushed[String(p.property_id)].existing ? 'Already in pipeline' : 'In Subdivision Inflow'}{pushed[String(p.property_id)].mapped ? ', mapped' : ''}
                             </span>
-                          ) : (
+                          ) : partner ? null : (
                             <button type="button" onClick={() => pushToInflow(p)} disabled={pushingId === String(p.property_id)}
                               className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-teal-600/90 hover:bg-teal-600 disabled:opacity-50 text-white">
                               {pushingId === String(p.property_id) ? 'Pushing...' : 'Push to Inflow'}

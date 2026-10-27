@@ -16,6 +16,7 @@ import DealStrip from '@/components/DealStrip';
 import MondayPushButton from '@/components/MondayPushButton';
 import OfferModal from '@/components/OfferModal';
 import OmSearch from '@/components/OmSearch';
+import OmSearchPartnerView from '@/components/OmSearchPartnerView';
 import CampaignsPanel from '@/components/CampaignsPanel';
 import { timeAgo, channelLabel } from '@/lib/format';
 import { playDing } from '@/lib/sound';
@@ -266,6 +267,8 @@ export default function LandLeadsAdminPage() {
   const [acquisitionManagerId, setAcquisitionManagerId] = useState(null); // Anthony's user id, used to push leads to his queue
   const isAdmin = currentUserRole === 'admin';
   const isAcquisitionManager = currentUserRole === 'acquisition_manager';
+  // Restricted partner role: sees ONLY the OM Search tool (no pipeline, no lead data).
+  const isOmSearchOnly = currentUserRole === 'om_search';
 
   // ---- Clean View ---------------------------------------------------------
   // A curated focus mode: hides everything except leads explicitly pushed into
@@ -401,7 +404,7 @@ export default function LandLeadsAdminPage() {
   const cleanViewActiveRef = useRef(cleanViewActive);
   useEffect(() => { cleanViewActiveRef.current = cleanViewActive; }, [cleanViewActive]);
   useEffect(() => {
-    if (!currentUserRole) return;
+    if (!currentUserRole || isOmSearchOnly) return; // partner role never loads lead data
     const ch = supabase
       .channel('leads-live')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, (payload) => {
@@ -2313,7 +2316,7 @@ export default function LandLeadsAdminPage() {
       }
 
       const role = profile?.role || (adminEmails.includes(user.email) ? 'admin' : null);
-      if (!role || !['admin', 'acquisition_manager'].includes(role)) {
+      if (!role || !['admin', 'acquisition_manager', 'om_search'].includes(role)) {
         console.log('❌ Access denied - role:', role);
         router.push('/dashboard');
         return;
@@ -5046,6 +5049,9 @@ export default function LandLeadsAdminPage() {
 
   // Client-only: skip server render entirely to avoid SSR/prerender crashes.
   if (!hasMounted) return <div className="min-h-screen bg-slate-900" />;
+
+  // Restricted partner role: render ONLY the OM Search tool (no pipeline/lead UI).
+  if (isOmSearchOnly) return <OmSearchPartnerView userName={currentUserName} />;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
