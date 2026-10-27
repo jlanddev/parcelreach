@@ -47,7 +47,11 @@ function LoginContent() {
         }]);
       }
 
-      router.push('/dashboard');
+      // OM-Search-only partner accounts go straight to the CRM (which renders just
+      // the OM Search tool for them); everyone else to the normal dashboard.
+      const OM_SEARCH_EMAILS = ['trevor@gowestlands.com', 'larry@landexitsolutions.com', 'daniel@landsisters.com'];
+      const isPartner = OM_SEARCH_EMAILS.includes(String(data.user?.email || '').trim().toLowerCase());
+      router.push(isPartner ? '/admin/land' : '/dashboard');
     } catch (err) {
       setError(err.message);
     } finally {

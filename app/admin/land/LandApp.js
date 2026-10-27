@@ -17,6 +17,11 @@ import MondayPushButton from '@/components/MondayPushButton';
 import OfferModal from '@/components/OfferModal';
 import OmSearch from '@/components/OmSearch';
 import OmSearchPartnerView from '@/components/OmSearchPartnerView';
+
+// Partner accounts restricted to ONLY the OM Search tool. Gated by email so no
+// special DB role is needed. Add an address here to grant OM-Search-only access.
+const OM_SEARCH_EMAILS = ['trevor@gowestlands.com', 'larry@landexitsolutions.com', 'daniel@landsisters.com'];
+const isOmSearchEmail = (e) => OM_SEARCH_EMAILS.includes(String(e || '').trim().toLowerCase());
 import CampaignsPanel from '@/components/CampaignsPanel';
 import { timeAgo, channelLabel } from '@/lib/format';
 import { playDing } from '@/lib/sound';
@@ -262,13 +267,15 @@ export default function LandLeadsAdminPage() {
   });
   const [currentUserId, setCurrentUserId] = useState(null);
   const [currentUserRole, setCurrentUserRole] = useState(null);
+  const [currentUserEmail, setCurrentUserEmail] = useState(null);
   const [currentUserName, setCurrentUserName] = useState('');
   const [adminUserId, setAdminUserId] = useState(null); // Jordan's user id, used to route APPT_SET_FOR_JORDAN tasks
   const [acquisitionManagerId, setAcquisitionManagerId] = useState(null); // Anthony's user id, used to push leads to his queue
   const isAdmin = currentUserRole === 'admin';
   const isAcquisitionManager = currentUserRole === 'acquisition_manager';
-  // Restricted partner role: sees ONLY the OM Search tool (no pipeline, no lead data).
-  const isOmSearchOnly = currentUserRole === 'om_search';
+  // Restricted partner: sees ONLY the OM Search tool (no pipeline, no lead data).
+  // Gated by email allowlist (or the optional 'om_search' role).
+  const isOmSearchOnly = currentUserRole === 'om_search' || isOmSearchEmail(currentUserEmail);
 
   // ---- Clean View ---------------------------------------------------------
   // A curated focus mode: hides everything except leads explicitly pushed into
@@ -2316,7 +2323,8 @@ export default function LandLeadsAdminPage() {
       }
 
       const role = profile?.role || (adminEmails.includes(user.email) ? 'admin' : null);
-      if (!role || !['admin', 'acquisition_manager', 'om_search'].includes(role)) {
+      const partnerAllowed = isOmSearchEmail(user.email);
+      if (!partnerAllowed && (!role || !['admin', 'acquisition_manager', 'om_search'].includes(role))) {
         console.log('❌ Access denied - role:', role);
         router.push('/dashboard');
         return;
@@ -2324,6 +2332,7 @@ export default function LandLeadsAdminPage() {
 
       setCurrentUserId(user.id);
       setCurrentUserRole(role);
+      setCurrentUserEmail(user.email);
       setCurrentUserName(profile?.full_name || user.email);
 
       // Find Jordan's user id (the admin) so APPT_SET_FOR_JORDAN can route to him
