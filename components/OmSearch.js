@@ -54,7 +54,7 @@ export default function OmSearch({ partner = false }) {
   const [countyList, setCountyList] = useState([]);      // [{fips,name,stateFips,abbr,label}]
   const [activeState, setActiveState] = useState('');    // state FIPS prefix chosen in the cascade
   const [countyQuery, setCountyQuery] = useState('');
-  const [selected, setSelected] = useState(PRESETS[0].counties); // default: 1 yr STR preset
+  const [selected, setSelected] = useState(partner ? [] : PRESETS[0].counties); // partners start clean; others default to 1 yr STR
   const [mode, setMode] = useState('listings');          // 'listings' | 'deals'
   const [soldDays, setSoldDays] = useState(730);          // deal finder: sold comps window
   const [ratio, setRatio] = useState(0.5);               // deal finder: buy at this fraction of sold PPA
@@ -316,7 +316,7 @@ export default function OmSearch({ partner = false }) {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold">OM Search</h2>
-          <p className="text-xs text-slate-400">Find on-market land listings in your hot markets. Search is free. Run detailed adds boundaries and valuation.</p>
+          <p className="text-xs text-slate-400">Find on-market land listings in your hot markets.{partner ? '' : ' Run detailed adds boundaries and valuation.'}</p>
         </div>
         <div className="text-right text-xs text-slate-400 space-y-0.5">
           {quota != null && <div>{quota.toLocaleString()} searches left today</div>}
@@ -334,7 +334,8 @@ export default function OmSearch({ partner = false }) {
           ))}
         </div>
 
-        {/* Saved-search presets */}
+        {/* Saved-search presets (hidden for partner accounts) */}
+        {!partner && (
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Saved</span>
           {PRESETS.map((preset) => (
@@ -344,6 +345,7 @@ export default function OmSearch({ partner = false }) {
             </button>
           ))}
         </div>
+        )}
 
         {/* State -> County cascade. Pick a state, add its counties, switch states and add more. */}
         <div className="grid sm:grid-cols-2 gap-3 items-start">
@@ -489,14 +491,14 @@ export default function OmSearch({ partner = false }) {
             {running ? (mode === 'deals' ? 'Finding deals...' : 'Searching...') : (mode === 'deals' ? 'Find deals' : 'Run search')}
           </button>
           <button type="button" onClick={clearAll} className="px-3 py-2 rounded-lg border border-slate-600 text-slate-300 text-sm hover:bg-slate-800">Clear</button>
-          <span className="text-xs text-slate-500">{mode === 'deals' ? 'Sold comps from Land Portal, filter-pool only, free.' : 'Search is free. Price and PPA apply to on-market listings only.'}</span>
+          <span className="text-xs text-slate-500">{mode === 'deals' ? 'Sold comps, filter-pool only.' : 'Price and PPA apply to on-market listings only.'}</span>
         </div>
       </div>
 
       {error && (
         <div className={`rounded-lg border px-4 py-3 text-sm ${error.code === 'mls_access_denied' ? 'border-amber-500/50 bg-amber-500/10 text-amber-200' : 'border-red-500/50 bg-red-500/10 text-red-200'}`}>
           {error.code === 'mls_access_denied'
-            ? 'This account does not have MLS data access. On-market search will not return listings until MLS data is enabled on the Land Portal account.'
+            ? 'This account does not have MLS data access. On-market search will not return listings until MLS data is enabled on the account.'
             : error.msg}
         </div>
       )}
@@ -545,7 +547,7 @@ export default function OmSearch({ partner = false }) {
                 className="px-4 py-2 rounded-lg bg-emerald-600/90 hover:bg-emerald-600 disabled:opacity-40 text-white text-sm font-semibold">
                 {quoting ? 'Checking cost...' : nUnhydrated === 0 ? 'All rows detailed' : `Run detailed (${nUnhydrated})`}
               </button>
-              <span className="text-xs text-slate-500">Adds parcel boundary + Land Portal valuation. Quotes cost before spending.</span>
+              <span className="text-xs text-slate-500">Adds parcel boundary + valuation. Quotes cost before spending.</span>
             </div>
           )}
 
@@ -583,7 +585,7 @@ export default function OmSearch({ partner = false }) {
               Fetched {receipt.fetched} {'·'} spent {money(receipt.spentCents)} {'·'} pool {receipt.poolLeft}/8 left today
               {receipt.stoppedShort && (
                 <div className="mt-1 text-amber-200">
-                  Stopped early: {receipt.stopReason || 'daily pool and tokens reached'}. Load export tokens in Land Portal to fetch more today, or try tomorrow (the free pool resets).
+                  Stopped early: {receipt.stopReason || 'daily pool and tokens reached'}. Load export tokens to fetch more today, or try tomorrow (the free pool resets).
                 </div>
               )}
             </div>
@@ -626,7 +628,7 @@ export default function OmSearch({ partner = false }) {
                               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
                               {pushed[String(p.property_id)].existing ? 'Already in pipeline' : 'In Subdivision Inflow'}{pushed[String(p.property_id)].mapped ? ', mapped' : ''}
                             </span>
-                          ) : partner ? null : (
+                          ) : (
                             <button type="button" onClick={() => pushToInflow(p)} disabled={pushingId === String(p.property_id)}
                               className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-teal-600/90 hover:bg-teal-600 disabled:opacity-50 text-white">
                               {pushingId === String(p.property_id) ? 'Pushing...' : 'Push to Inflow'}
@@ -639,8 +641,8 @@ export default function OmSearch({ partner = false }) {
                         <span><span className="text-slate-500 text-xs">Acres </span>{p.lot_size_acres != null ? Number(p.lot_size_acres).toLocaleString() : '-'}{d?.calc_acres != null && <span className="text-slate-500"> (calc {Number(d.calc_acres).toLocaleString()})</span>}</span>
                         <span className="text-slate-400"><span className="text-slate-500 text-xs">APN </span>{p.apn || '-'}</span>
                         {d && d.road_frontage != null && <span><span className="text-slate-500 text-xs">Frontage </span>{Number(d.road_frontage).toLocaleString()} ft</span>}
-                        {d && d.tlp_ppa != null && <span><span className="text-slate-500 text-xs">LP est PPA </span>{usd(d.tlp_ppa)}/ac</span>}
-                        {d && d.tlp_estimate != null && <span><span className="text-slate-500 text-xs">LP est value </span>{usd(d.tlp_estimate)}</span>}
+                        {d && d.tlp_ppa != null && <span><span className="text-slate-500 text-xs">Est. PPA </span>{usd(d.tlp_ppa)}/ac</span>}
+                        {d && d.tlp_estimate != null && <span><span className="text-slate-500 text-xs">Est. value </span>{usd(d.tlp_estimate)}</span>}
                       </div>
                       {flag && (
                         <div className="mt-1.5 inline-block text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded px-2 py-0.5">
@@ -653,7 +655,7 @@ export default function OmSearch({ partner = false }) {
               })}
             </div>
           )}
-          <p className="text-[11px] text-slate-500">LP est values are Land Portal&rsquo;s own estimate, not the MLS list price (the API does not return list price or agent). Push to pipeline + review queue are the next step.</p>
+          <p className="text-[11px] text-slate-500">Est. values are a modeled estimate, not the MLS list price (list price and agent aren&rsquo;t returned). Push to pipeline + review queue are the next step.</p>
         </div>
       )}
     </div>

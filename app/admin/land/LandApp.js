@@ -5059,7 +5059,11 @@ export default function LandLeadsAdminPage() {
   // Client-only: skip server render entirely to avoid SSR/prerender crashes.
   if (!hasMounted) return <div className="min-h-screen bg-slate-900" />;
 
-  // Restricted partner role: render ONLY the OM Search tool (no pipeline/lead UI).
+  // Wait for the auth/role check to resolve before rendering anything, so a partner
+  // never briefly sees the real CRM (PPC inflow) before the gate kicks in.
+  if (!currentUserId) return <div className="min-h-screen bg-slate-900" />;
+
+  // Restricted partner: render ONLY the OM Search tool (no pipeline/lead UI).
   if (isOmSearchOnly) return <OmSearchPartnerView userName={currentUserName} />;
 
   return (
