@@ -10,7 +10,7 @@ import { useNotifications } from '@/hooks/useNotifications';
  * @param {string} userId - Current user's ID
  */
 export default function NotificationBell({ userId, onOpen }) {
-  const { notifications, unreadCount, markAsRead, markAllAsRead } = useNotifications(userId);
+  const { notifications, unreadCount, markAsRead, markAllAsRead, deleteNotificationEverywhere } = useNotifications(userId);
   const [isOpen, setIsOpen] = useState(false);
 
   const handleNotificationClick = (notification) => {
@@ -89,43 +89,43 @@ export default function NotificationBell({ userId, onOpen }) {
                 </div>
               ) : (
                 recentNotifications.map(notification => (
-                  <button
+                  <div
                     key={notification.id}
-                    type="button"
-                    onClick={() => {
-                      markAsRead(notification.id);
-                      setIsOpen(false);
-                      if (onOpen) onOpen(notification);
-                      else if (notification.link) window.location.href = notification.link;
-                    }}
-                    className={`block w-full text-left px-4 py-3 hover:bg-slate-700 border-b border-slate-700 transition-colors ${
+                    className={`relative border-b border-slate-700 transition-colors hover:bg-slate-700 ${
                       !notification.read ? 'bg-slate-700/50' : ''
                     }`}
                   >
-                    <div className="flex items-start">
-                      <div className="flex-1 min-w-0">
-                        <p className={`text-sm ${!notification.read ? 'font-semibold text-white' : 'text-slate-300'}`}>
-                          {notification.title}
-                        </p>
-                        <p className="text-sm text-slate-400 mt-1 line-clamp-2">
-                          {notification.message}
-                        </p>
-                        <p className="text-xs text-slate-500 mt-1">
-                          {new Date(notification.created_at).toLocaleDateString('en-US', {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: 'numeric',
-                            minute: '2-digit'
-                          })}
-                        </p>
-                      </div>
-                      {!notification.read && (
-                        <div className="ml-2 mt-1">
-                          <div className="w-2 h-2 bg-blue-500 rounded-full" />
-                        </div>
-                      )}
-                    </div>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        markAsRead(notification.id);
+                        setIsOpen(false);
+                        if (onOpen) onOpen(notification);
+                        else if (notification.link) window.location.href = notification.link;
+                      }}
+                      className="block w-full text-left px-4 py-3 pr-9"
+                    >
+                      <p className={`text-sm ${!notification.read ? 'font-semibold text-white' : 'text-slate-300'}`}>
+                        {notification.title}
+                      </p>
+                      <p className="text-sm text-slate-400 mt-1 line-clamp-2">
+                        {notification.message}
+                      </p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        {new Date(notification.created_at).toLocaleDateString('en-US', {
+                          month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+                        })}
+                      </p>
+                    </button>
+                    <button
+                      type="button"
+                      title="Remove for the whole team"
+                      onClick={(e) => { e.stopPropagation(); if (window.confirm('Remove this notification for the whole team? This deletes it from everyone’s bell.')) deleteNotificationEverywhere(notification); }}
+                      className="absolute top-2 right-2 w-6 h-6 flex items-center justify-center rounded-md text-slate-500 hover:text-white hover:bg-red-600/50 text-lg leading-none"
+                    >
+                      &times;
+                    </button>
+                  </div>
                 ))
               )}
             </div>

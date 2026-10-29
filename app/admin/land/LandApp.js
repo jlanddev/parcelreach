@@ -3169,10 +3169,28 @@ export default function LandLeadsAdminPage() {
     try {
       const lead = allLeads.find(l => l.id === leadId);
       const leadName = lead?.full_name || lead?.name || 'Lead';
-      // Delete related scheduled tasks first
+      // Wipe everything tied to the lead so nothing (esp. abusive messages) is
+      // left behind for the team to see.
       await supabase.from('scheduled_tasks').delete().eq('lead_id', leadId);
-      // Delete lead assignments
       await supabase.from('lead_assignments').delete().eq('lead_id', leadId);
+      await supabase.from('activities').delete().eq('lead_id', leadId).then(() => {}, () => {});
+      await supabase.from('campaign_enrollments').delete().eq('lead_id', leadId).then(() => {}, () => {});
+      await supabase.from('campaign_queue').delete().eq('lead_id', leadId).then(() => {}, () => {});
+      // Notifications (per-user rows) — by lead_id when set, and by the ?lead=<id> link.
+      await supabase.from('notifications').delete().eq('lead_id', leadId).then(() => {}, () => {});
+      await supabase.from('notifications').delete().ilike('link', `%lead=${leadId}%`).then(() => {}, () => {});
+      // Session tracking has its own FK chain (sessions -> step/click events) that
+      // would otherwise block the lead delete; clear it first.
+      try {
+        const { data: sess } = await supabase.from('tracking_sessions').select('id, session_id').eq('lead_id', leadId);
+        const sids = [...new Set([].concat((sess || []).map(s => s.session_id), (sess || []).map(s => s.id)).filter(Boolean))];
+        if (sids.length) {
+          for (const tbl of ['tracking_step_events', 'tracking_click_events']) {
+            await supabase.from(tbl).delete().in('session_id', sids).then(() => {}, () => {});
+          }
+        }
+        await supabase.from('tracking_sessions').delete().eq('lead_id', leadId).then(() => {}, () => {});
+      } catch { /* tracking tables optional */ }
       // Delete the lead
       const { error } = await supabase.from('leads').delete().eq('id', leadId);
       if (error) throw error;

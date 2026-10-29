@@ -94,6 +94,22 @@ export function useNotifications(userId) {
     }
   };
 
+  // Remove a notification for EVERYONE on the team (all users), e.g. an abusive
+  // message the whole team sees in their bell. Notifications are per-user rows,
+  // so this matches every row for the same lead (they share a ?lead=<id> link)
+  // and deletes them all; falls back to the single row if there's no lead link.
+  const deleteNotificationEverywhere = async (notification) => {
+    try {
+      let leadId = null;
+      try { leadId = new URL(notification.link, 'http://x').searchParams.get('lead'); } catch {}
+      if (leadId) await supabase.from('notifications').delete().ilike('link', `%lead=${leadId}%`);
+      else await supabase.from('notifications').delete().eq('id', notification.id);
+      await fetchNotifications();
+    } catch (error) {
+      console.error('Error removing notification for everyone:', error);
+    }
+  };
+
   // Request notification permission on mount
   useEffect(() => {
     if ('Notification' in window && Notification.permission === 'default') {
@@ -184,6 +200,7 @@ export function useNotifications(userId) {
     markAsRead,
     markAllAsRead,
     deleteNotification,
+    deleteNotificationEverywhere,
     refresh: fetchNotifications
   };
 }
