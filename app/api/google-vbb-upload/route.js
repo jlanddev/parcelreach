@@ -213,6 +213,30 @@ async function fetchLeads(sb) {
   return leads;
 }
 
+// Build a phone/email -> click-ID map from EVERY lead that carries one, so a
+// conversion whose own record has no click ID can inherit it from a duplicate
+// record of the same person (e.g. they also submitted the real form via an ad).
+async function buildClickMap(sb) {
+  const byPhone = new Map(), byEmail = new Map();
+  for (let f = 0; ; f += 1000) {
+    const { data } = await sb.from('leads')
+      .select('email, phone, gclid, gbraid, wbraid, form_data')
+      .or('gclid.not.is.null,gbraid.not.is.null,wbraid.not.is.null')
+      .range(f, f + 999);
+    if (!data || !data.length) break;
+    for (const l of data) {
+      const c = { gclid: l.gclid || l.form_data?.gclid || null, gbraid: l.gbraid || l.form_data?.gbraid || null, wbraid: l.wbraid || l.form_data?.wbraid || null };
+      if (!(c.gclid || c.gbraid || c.wbraid)) continue;
+      const ph = (l.phone || '').replace(/\D/g, '').slice(-10);
+      const em = (l.email || '').trim().toLowerCase();
+      if (ph && !byPhone.has(ph)) byPhone.set(ph, c);
+      if (em && !byEmail.has(em)) byEmail.set(em, c);
+    }
+    if (data.length < 1000) break;
+  }
+  return { byPhone, byEmail };
+}
+
 // Mark a single lead's conversion for retraction, then let the next run send it.
 async function handleRetract(req, sb) {
   const u = new URL(req.url);
@@ -247,7 +271,20 @@ async function handle(req) {
   let leads = await fetchLeads(sb);
   if (only) leads = leads.filter((l) => l.id === only);
 
-  const ids = (l) => ({ gclid: l.form_data?.gclid || l.gclid || null, gbraid: l.form_data?.gbraid || l.gbraid || null, wbraid: l.form_data?.wbraid || l.wbraid || null });
+  const clickMap = await buildClickMap(sb);
+  const ids = (l) => {
+    let gclid = l.form_data?.gclid || l.gclid || null;
+    let gbraid = l.form_data?.gbraid || l.gbraid || null;
+    let wbraid = l.form_data?.wbraid || l.wbraid || null;
+    // Inherit a click ID from a duplicate record (same phone/email) when this one has none.
+    if (!gclid && !gbraid && !wbraid) {
+      const ph = (l.phone || '').replace(/\D/g, '').slice(-10);
+      const em = (l.email || '').trim().toLowerCase();
+      const found = (ph && clickMap.byPhone.get(ph)) || (em && clickMap.byEmail.get(em)) || null;
+      if (found) { gclid = found.gclid; gbraid = found.gbraid; wbraid = found.wbraid; }
+    }
+    return { gclid, gbraid, wbraid };
+  };
   const hashed = (l) => ({ email_sha256: l.email ? sha256(normEmail(l.email)) : null, phone_sha256: normPhone(l.phone) ? sha256(normPhone(l.phone)) : null });
   const matchable = (c) => !!(c.gclid || c.gbraid || c.wbraid || c.email_sha256 || c.phone_sha256);
   // Window is measured from the CLICK (≈ lead creation): Google won't match a

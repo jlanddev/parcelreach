@@ -692,6 +692,7 @@ export default function LandLeadsAdminPage() {
   const [qView, setQView] = useState('queue');       // queue | history
   const [qAutoUpload, setQAutoUpload] = useState(null); // null=loading, true/false
   const [qRuns, setQRuns] = useState([]);             // vbb_upload_runs rows
+  const [qCoverage, setQCoverage] = useState(null);   // click-ID capture coverage %
   const [qBusy, setQBusy] = useState(false);          // a run/send is in flight
   const [qStatus, setQStatus] = useState('all');      // status filter
   const [qStage, setQStage] = useState('all');        // Reviewed|Contract|Closed|all
@@ -710,6 +711,10 @@ export default function LandLeadsAdminPage() {
       const { data: r } = await supabase.from('vbb_upload_runs').select('*').order('ran_at', { ascending: false }).limit(50);
       setQRuns(r || []);
     } catch { setQRuns([]); }
+    try {
+      const j = await fetch('/api/stats/click-coverage').then((res) => res.json());
+      setQCoverage(j?.ok ? j : null);
+    } catch { setQCoverage(null); }
   };
   useEffect(() => { if (activeTab === 'vbb-queue') loadVbbMeta(); }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -6399,6 +6404,12 @@ export default function LandLeadsAdminPage() {
                     <button type="button" onClick={() => drill('sending')} className="hover:text-white">Queued now: <b className="text-white">{fmt(readyTotal)}</b> ({ready.length})</button>
                     <button type="button" onClick={() => drill('sent')} className="hover:text-white">Sent last 7 days: <b className="text-white">{fmt(sumSince(7))}</b></button>
                     <button type="button" onClick={() => drill('sent')} className="hover:text-white">Sent last 30 days: <b className="text-white">{fmt(sumSince(30))}</b></button>
+                    {qCoverage && (
+                      <span title={`Real form: ${qCoverage.real.withClick}/${qCoverage.real.total} leads carry a Google click ID since ${qCoverage.since}. "haven-ground" path: ${qCoverage.havenGround.withClick}/${qCoverage.havenGround.total}. Low coverage = ad clicks not being captured = conversions can't be matched.`}>
+                        Click-ID coverage (since {qCoverage.since}): <b className={qCoverage.real.pct >= 90 ? 'text-emerald-300' : qCoverage.real.pct >= 70 ? 'text-amber-300' : 'text-red-400'}>{qCoverage.real.pct}%</b> of form leads ({qCoverage.real.withClick}/{qCoverage.real.total})
+                        {qCoverage.havenGround.total > 0 && <span className="text-red-400"> · other path {qCoverage.havenGround.pct}% ({qCoverage.havenGround.withClick}/{qCoverage.havenGround.total})</span>}
+                      </span>
+                    )}
                     <span className="text-slate-500">Hover a value to see the math.</span>
                   </div>
                 </>
