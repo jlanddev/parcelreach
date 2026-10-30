@@ -31,6 +31,7 @@ const REVIEW_DELAY_MS = 30 * 60 * 1000;  // hold 30 min after review before send
 const CONTRACT_STATUSES = ['AGREEMENT_SENT', 'UNDER_CONTRACT', 'CLOSED'];
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000; // Google click/match window
 const SPIKE_FACTOR = 2;                  // >2× the recent average = hold + alert
+const SPIKE_MIN = 20;                    // ...but never hold fewer than this (small normal batches always flow)
 const DM_INGEST_URL = 'https://datamanager.googleapis.com/v1/events:ingest';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
@@ -344,10 +345,18 @@ async function handle(req) {
   // Skipped for validateOnly (nothing is recorded in that mode).
   if (!validate) {
     const avg = await recentAvgSent(sb);
-    if (!force && avg > 0 && toSendCount > avg * SPIKE_FACTOR) {
-      await alertAdmins(sb, 'VBB upload HELD — volume spike', `Run wanted to send ${toSendCount} conversions vs a recent avg of ${Math.round(avg)}. Held for review. Re-run with ?force=1 to send.`);
+    // Only hold a GENUINE spike: above an absolute floor AND more than 2x the recent
+    // average. Small normal batches (a few conversions) always flow through.
+    const spikeThreshold = Math.max(SPIKE_MIN, Math.round(avg * SPIKE_FACTOR));
+    if (!force && toSendCount > spikeThreshold) {
+      // Don't spam the bell on a persistent hold — alert at most once per 6 hours.
+      try {
+        const since = new Date(Date.now() - 6 * 3600 * 1000).toISOString();
+        const { data: recent } = await sb.from('notifications').select('id').eq('title', 'VBB upload HELD — volume spike').gte('created_at', since).limit(1);
+        if (!recent || !recent.length) await alertAdmins(sb, 'VBB upload HELD — volume spike', `Run wanted to send ${toSendCount} conversions vs a recent avg of ${Math.round(avg)} (hold floor ${SPIKE_MIN}). Held for review. Re-run with ?force=1 to send.`);
+      } catch { /* non-fatal */ }
       await logRun(sb, { ran_at: ranAt, dry: false, ok: false, sent_count: 0, to_send: toSendCount, summary, note: 'held: volume spike' });
-      return NextResponse.json({ ok: false, held: true, reason: 'volume_spike', toSend: toSendCount, recentAvg: Math.round(avg), hint: 'add ?force=1 to send anyway' });
+      return NextResponse.json({ ok: false, held: true, reason: 'volume_spike', toSend: toSendCount, recentAvg: Math.round(avg), threshold: spikeThreshold, hint: 'add ?force=1 to send anyway' });
     }
   }
 
