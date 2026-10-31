@@ -7,6 +7,13 @@ Format per entry: **What · Why · Tested/proof · Undo · Google Ads touched?**
 
 ## 2026-10-31
 
+### 09:15 — Theme-level rank analysis + recommended first action (read-only)
+- **What:** Grouped the 307 keywords into 6 themes; pulled real keyword-level impression share + rank-loss (API supports it) and spend-weighted QS-component weakness. Wrote `docs/gads-themes-and-rank-action-2026-10-31.md`.
+- **Key findings:** we-buy/land-buyers (~33,200 impr/mo lost to rank) + sell-general (~23,600) = **~91% of all lost rank**. Costliest below-average component = **ad relevance** ($2,704, 23% of spend), concentrated in sell-general (53% below) + state (38% below). we-buy is QS 8 / 0% below-relevance — its loss is **expected-CTR-gated** (the over-pinned ad), not relevance. Landing page = ceiling ("avg" on 81% of spend) but UI frozen. State/location is bloat (186 kw, 12% of impr, worst $133/lead).
+- **Recommendation:** run a **new unpinned RSA (Good/Excellent) in the existing ad group first** — attacks the biggest (CTR-gated) pool additively, zero risk to the ~113 leads/mo. Themed ad groups second (higher relevance ceiling, medium risk). Full 15-headline / 4-description draft in honest-expert voice included.
+- **Undo:** N/A (read-only).
+- **Google Ads touched?** No — read-only; draft only, nothing applied.
+
 ### 08:30 — Read-only review of "Haven Search/Conv  Trial 220" + test proposals (nothing changed)
 - **What:** Full Google Ads API v23 read of campaign 22464770148 — QS per keyword + 3 parts, ads/pinning/strength, assets + image policy, impression share, bid strategy. Wrote `docs/gads-review-proposals-2026-10-31.md`.
 - **Key findings:** 30d = 1,144 clicks / $11,843.83 / 112.9 conv / **$113 value**. **IS 19.9%, lost to Ad Rank 80.1%, lost to budget 0.0%** — rank is the constraint, not budget. One ad group holds 307 keywords (~250 with 0 impressions). Best ad strength = Average (every headline pinned → no combination learning). No sitelinks, no call asset, snippets paused, images not serving (square-only + logo 32×32 + low rank). Landing-page experience "avg" across the board.
