@@ -7,6 +7,16 @@ Format per entry: **What · Why · Tested/proof · Undo · Google Ads touched?**
 
 ## 2026-10-31
 
+### 10:30 — Manual Google Ads conversion backup + hand-upload files + on-lead Google Ads box (parcelreach a8e0b07)
+- **What:** Built the same-day manual fallback for when the automatic uploader is off/broken.
+  - `lib/googleConversions.js` + `/api/google-export` (admin-gated): **raw backup CSV** (every website lead — created date, name, phone, email, gclid/gbraid/wbraid, landing URL, lean, worth, reviewed/contract value + sent status) and **two classic "Upload conversions" CSVs** (Reviewed Lead, Contract Signed) with Google Click ID, Conversion Name, Conversion Time (+`Parameters:TimeZone=America/Chicago`), Value, Currency, and SHA-256 Email/Phone for enhanced conversions. Reuses the uploader's exact value + hashing.
+  - **Daily snapshot** (`netlify/functions/lead-export-snapshot.mjs`, 07:30 UTC) writes all three to a **PRIVATE `lead-backups` Supabase bucket** (RLS, not public). Nothing in the repo or `/public`; no phone/email in any repo file.
+  - **CRM:** "Download lead backup / Google file: Reviewed Lead / Contract Signed" buttons in the Google Upload Queue (with a "only hand-upload when Auto-upload is OFF — else double-count" warning), an **"Export for Google"** button on the leads toolbar, and a **"Google Ads" box on every lead** (click ID + red "⚠️ No click ID" warning, landing page, and what/when/how-much was sent to Google).
+  - **Permanence verified (no code change needed):** dedupe is display-only, merges spread-merge `form_data`, and the lead-detail Save doesn't touch `form_data`/`gclid` — so click IDs/values are never overwritten on edit/merge/dup.
+- **Proof:** backup rows **1,203 = 1,203** Supabase website leads (`match: true`). Google **validateOnly preview accepted 28/28 Reviewed + 15/15 Contract, 0 rejected** (request IDs returned; nothing recorded). Sample reviewed+sent lead retains gclid+gbraid+lean+worth ($70k)+review value ($175)+sent date — box screenshot sent. Build passed.
+- **Undo:** `git revert a8e0b07`.
+- **Google Ads touched?** No — validateOnly records nothing; the manual files are a **standby only** (do not hand-upload while the auto-uploader is ON, or Google double-counts).
+
 ### 09:45 — Themed landing pages plan + copy drafts (read-only, nothing built)
 - **What:** Plan to match search themes to dedicated landing pages (we-buy, sell-general, inherited, optional state template), all reusing the identical submit flow + tagging `form_data.landing_page` to compare pages. Wrote `docs/themed-landing-pages-plan-2026-10-31.md`.
 - **Key points:** Current /sell-your-land measured = 223KB transfer / 222KB JS / 50 req / FCP ~0.68s / load ~1.16s; FB Pixel alone is 219KB. Themed pages planned in an isolated route group with lean layout (GTM+GA4 only) → target <120KB JS, FCP <0.5s. Form is inline (1,711 lines) → extract flow into `components/SellLandForm.js` (copied logic, lean markup); original page untouched. Test = combined themed-ad-groups + pages campaign Experiment (50/50), or Final-URL-only 50/50 to isolate page effect. UI freeze = designer's in-flight visual redesign; new isolated routes don't touch it.
