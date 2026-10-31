@@ -7,6 +7,20 @@ Format per entry: **What · Why · Tested/proof · Undo · Google Ads touched?**
 
 ## 2026-10-31
 
+### 06:12 — Merged Killian McElroy's duplicate + re-sent his contract with the click ID (Step 2)
+- **What:** His contract work ($60k offer / $36k value) sat on the GHL echo record (no gclid); the gclid was on his website twin. Merged the contract/review onto the website record (which has the gclid), cleared `sent_at`, re-ran the uploader; archived the echo.
+- **Why:** The matched conversion needs the record that both (a) is a website lead and (b) carries the click ID.
+- **Tested/proof:** Website record `40c80569` now UNDER_CONTRACT, gclid SET, `contract_upload.sent_at = 2026-10-31T06:12:48`, value $36,000, match = Click ID. Echo `d00e7be4` archived with `archived_reason`.
+- **Undo:** Un-archive the echo; null the website record's `contract_upload.sent_at` and revert its status to CONTACTING. Google: retract via `?retract=40c80569&kind=contract`.
+- **Google Ads touched?** Yes — 1 contract conversion ($36k) uploaded with gclid (Contract Signed 7851058931). The echo's earlier email/phone upload was unmatched (harmless).
+
+### 05:xx — Step 1: full landing URL captured site-wide + stored on every lead (haven-ground 8f13682)
+- **What:** `ClickIdCapture` now stores the first-touch full landing URL in a 90-day `hg_landing` cookie; the sell-your-land form and `/api/submit-lead` write `form_data.landing_url` on the lead.
+- **Why:** So a lead can always be traced to its exact ad click even if the gclid wasn't individually parsed.
+- **Tested/proof:** Build passed; deployed (Netlify ready). End-to-end verification with `?gclid=TEST123` pending (Step 5).
+- **Undo:** `git revert 8f13682` in haven-ground.
+- **Google Ads touched?** No.
+
 ### 03:xx — Exclude non-website (manually-added) leads from Google uploads
 - **What:** Uploader (`google-vbb-upload`) now filters to `source = 'Haven Ground - Sell Your Land Form'` only. Manual leads (LeadBid, on-market/subdivision, referral, admin-upload, GHL "haven-ground" echoes) are never sent to Google.
 - **Why:** Only website-form leads come from an ad click; manual leads aren't Google Ads leads and were polluting uploads (found 4 admin-upload + 2 echoes in the upload set).
