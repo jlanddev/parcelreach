@@ -729,6 +729,24 @@ export default function LandLeadsAdminPage() {
     } catch (e) { setQAutoUpload(!next); showToast('Could not change the setting', 'error'); }
   };
 
+  // Download a backup / Google manual-upload file from the admin-only export route
+  // (seller PII never leaves the logged-in session — no repo, no /public).
+  const downloadExport = async (file, label) => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      const res = await fetch(`/api/google-export?file=${file}`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+      if (!res.ok) { showToast(`Export failed (${res.status})`, 'error'); return; }
+      const blob = await res.blob();
+      const cd = res.headers.get('content-disposition') || '';
+      const m = cd.match(/filename="?([^"]+)"?/);
+      const name = m ? m[1] : `${file}-${new Date().toISOString().slice(0, 10)}.csv`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url);
+      showToast(`${label} downloaded`, 'success');
+    } catch (e) { showToast('Export failed', 'error'); }
+  };
+
   // Trigger a real run (whole ready queue, or one lead via leadId) using the admin's
   // session token so the uploader authorizes it.
   const runUploadNow = async (leadId) => {
@@ -6298,6 +6316,16 @@ export default function LandLeadsAdminPage() {
                     <button type="button" onClick={() => runUploadNow()} disabled={qBusy} className="w-full px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold text-sm">{qBusy ? 'Running…' : 'Run upload now'}</button>
                   </div>
                 </div>
+                {/* Manual backup + hand-upload files (standby for when auto-upload is off/broken) */}
+                <div className="mt-4 pt-4 border-t border-slate-700/50">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-slate-500 mr-1">Backup &amp; manual upload:</span>
+                    <button type="button" onClick={() => downloadExport('backup', 'Lead backup')} className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold">Download lead backup</button>
+                    <button type="button" onClick={() => downloadExport('reviewed', 'Reviewed Lead file')} className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold">Google file: Reviewed Lead</button>
+                    <button type="button" onClick={() => downloadExport('contract', 'Contract Signed file')} className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold">Google file: Contract Signed</button>
+                  </div>
+                  <p className="text-[11px] text-amber-400/80 mt-2">Only hand-upload these to Google when Auto-upload is OFF above — otherwise Google counts the lead twice.</p>
+                </div>
               </div>
 
               {/* Sub-tabs */}
@@ -7196,6 +7224,15 @@ export default function LandLeadsAdminPage() {
                 >
                   {pipelineMapped ? '✓ ' : ''}Mapped only
                 </button>
+                {isAdmin && (
+                  <button
+                    onClick={() => { downloadExport('reviewed', 'Reviewed Lead file'); setTimeout(() => downloadExport('contract', 'Contract Signed file'), 600); }}
+                    title="Download the Google Ads manual-upload files (Reviewed Lead + Contract Signed) for hand upload if the auto-uploader is off"
+                    className="px-3 py-2 rounded-lg text-sm font-medium border bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800"
+                  >
+                    Export for Google
+                  </button>
+                )}
                 <select
                   value={pipelineSort}
                   onChange={(e) => setPipelineSort(e.target.value)}
@@ -9114,6 +9151,55 @@ export default function LandLeadsAdminPage() {
                   </div>
                 </div>
               )}
+
+              {/* Google Ads — click ID, landing page, what we sent to Google */}
+              {(() => {
+                const fd = selectedLead.form_data || {};
+                const gclid = selectedLead.gclid || fd.gclid;
+                const gbraid = selectedLead.gbraid || fd.gbraid;
+                const wbraid = selectedLead.wbraid || fd.wbraid;
+                const clickId = gclid || gbraid || wbraid;
+                const clickKind = gclid ? 'gclid' : gbraid ? 'gbraid' : wbraid ? 'wbraid' : null;
+                const isWebLead = /haven[ -]?ground/i.test(selectedLead.source || '') || /sell your land/i.test(selectedLead.source || '');
+                const rv = fd.review || {};
+                const cu = fd.contract_upload || {};
+                const fmtD = (d) => { try { return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); } catch { return d; } };
+                return (
+                  <div className="bg-slate-900/50 border border-slate-700 rounded-lg p-4 mt-4">
+                    <h4 className="text-sm font-semibold text-slate-400 mb-3 uppercase tracking-wide">Google Ads</h4>
+                    <div className="space-y-2 text-sm">
+                      <div>
+                        <span className="text-slate-500">Click ID:</span>{' '}
+                        {clickId
+                          ? <span className="text-white font-mono text-xs break-all">{clickId} <span className="text-slate-500">({clickKind})</span></span>
+                          : isWebLead
+                            ? <span className="text-red-400 font-semibold">⚠️ No click ID</span>
+                            : <span className="text-slate-500">— (not a website lead)</span>}
+                      </div>
+                      <div>
+                        <span className="text-slate-500">Landing page:</span>{' '}
+                        {fd.landing_url
+                          ? <a href={fd.landing_url} target="_blank" rel="noreferrer" className="text-cyan-400 break-all underline">{fd.landing_url}</a>
+                          : <span className="text-slate-500">—</span>}
+                      </div>
+                      <div className="pt-2 border-t border-slate-700/50">
+                        <span className="text-slate-500">Sent to Google:</span>
+                        <div className="mt-1 space-y-1">
+                          {rv.sent_at
+                            ? <div className="text-green-400">Reviewed Lead ${Number(rv.sent_value || 0).toLocaleString()} · sent {fmtD(rv.sent_at)}</div>
+                            : (rv.value != null ? <div className="text-yellow-400">Reviewed Lead ${Number(rv.value).toLocaleString()} · not sent yet</div> : null)}
+                          {cu.sent_at
+                            ? <div className="text-green-400">Contract Signed ${Number(cu.sent_value || 0).toLocaleString()} · sent {fmtD(cu.sent_at)}</div>
+                            : null}
+                          {!rv.sent_at && rv.value == null && !cu.sent_at && (
+                            <div className="text-slate-500">Nothing sent yet</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Activity Log & Calendar */}
