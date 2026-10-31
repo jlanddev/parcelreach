@@ -199,11 +199,17 @@ async function recentAvgSent(sb) {
   } catch (e) { return 0; }
 }
 
+// Only WEBSITE-form leads are Google Ads leads. Everything else (LeadBid,
+// on-market/subdivision, referral, admin uploads, GHL echoes) is manually added
+// and must NEVER be uploaded to Google — it didn't come from an ad click.
+const WEBSITE_SOURCE = 'Haven Ground - Sell Your Land Form';
+
 async function fetchLeads(sb) {
   let leads = [];
   for (let f = 0; ; f += 1000) {
     const { data } = await sb.from('leads')
-      .select('id, full_name, name, email, phone, gclid, gbraid, wbraid, pipeline_status, status, offer_amount, last_activity_at, updated_at, created_at, form_data')
+      .select('id, full_name, name, email, phone, gclid, gbraid, wbraid, pipeline_status, status, offer_amount, last_activity_at, updated_at, created_at, form_data, source')
+      .eq('source', WEBSITE_SOURCE)
       .or('form_data->review.not.is.null,pipeline_status.in.(AGREEMENT_SENT,UNDER_CONTRACT,CLOSED)')
       .range(f, f + 999);
     if (!data || !data.length) break;

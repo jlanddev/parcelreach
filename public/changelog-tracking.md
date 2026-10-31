@@ -7,6 +7,13 @@ Format per entry: **What · Why · Tested/proof · Undo · Google Ads touched?**
 
 ## 2026-10-31
 
+### 03:xx — Exclude non-website (manually-added) leads from Google uploads
+- **What:** Uploader (`google-vbb-upload`) now filters to `source = 'Haven Ground - Sell Your Land Form'` only. Manual leads (LeadBid, on-market/subdivision, referral, admin-upload, GHL "haven-ground" echoes) are never sent to Google.
+- **Why:** Only website-form leads come from an ad click; manual leads aren't Google Ads leads and were polluting uploads (found 4 admin-upload + 2 echoes in the upload set).
+- **Tested/proof:** Source audit — upload set was 66 website + 6 non-website; after filter, only the 66 website leads qualify. Build passed.
+- **Undo:** Remove the `.eq('source', WEBSITE_SOURCE)` filter in `fetchLeads`.
+- **Google Ads touched?** Yes going forward — 6 non-website conversions will no longer be uploaded. Already-sent ones can be retracted with `?retract=<leadId>`.
+
 ### 02:xx — Google Ads API read-only access established (v23)
 - **What:** Confirmed the OAuth refresh token (scopes: adwords + datamanager) can call the Google Ads API at **v23** with **no developer-token header** (dev tokens sunset Sep 2026). Account **2875216984 "Haven Ground"** is the live ad account.
 - **Why:** To audit auto-tagging, conversion actions, campaign templates, and clicks/conversions directly from Google.
