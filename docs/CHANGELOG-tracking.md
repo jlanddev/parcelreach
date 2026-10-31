@@ -7,6 +7,24 @@ Format per entry: **What · Why · Tested/proof · Undo · Google Ads touched?**
 
 ## 2026-10-31
 
+### 06:31 — INCIDENT + FIX: reverted designer's unfinished homepage that a `git add -A` pushed live (haven-ground 7490b0e)
+- **What:** The Step 3 commit below (8582fc3) was supposed to be the thank-you page only, but it was committed with `git add -A`, which also swept in the designer's in-progress homepage redesign and pushed it live. Reverted every non-mine file back to its pre-redesign state.
+  - **Reverted (not mine):** `app/page.js` (homepage hero), `app/globals.css`, `app/properties/page.js`, deleted new `public/images/haven-logo-2026.png`, plus ~174 local agent-tooling files (`.agents/…`, `.claude/…`, `.codex/hooks.json`, `skills-lock.json`).
+  - **Kept (mine):** `app/thank-you/page.js` (the actual Step 3 change).
+  - Designer's WIP preserved in git tag `swept-wip-8582fc3` — nothing lost.
+- **Why:** The homepage changed publicly without approval; UI is off-limits (designer incoming). Leads were NOT affected (ads point at /sell-your-land).
+- **Tested/proof:** Live homepage re-screenshotted — back to "Our Land is Your Haven / built on / Integrity, Honor, and Heart", old logo, sketch landscape, no empty-grid redesign. New logo URL now 404s; old logo 200s. `/sell-your-land` loads clean ("Ready to Sell Your Land? … CLICK FOR MY OFFER"). Thank-you re-verified (see Step 3).
+- **Undo:** `git revert 7490b0e`, or `git checkout swept-wip-8582fc3 -- <file>` to restore any designer file.
+- **Google Ads touched?** No.
+- **New standing rule:** never `git add -A`/`git add .` — stage named files only; show the file list and confirm each is mine before commit; never deploy others' WIP; after every deploy verify homepage + /sell-your-land + thank-you + Qualified_Lead; log exact files here.
+
+### 06:18 — Step 3: normalized enhanced-conversion email/phone on thank-you + removed dead AW stub (haven-ground, in 7490b0e)
+- **What:** On `app/thank-you/page.js`, the seller's email is now trimmed + lowercased and the phone forced to E.164 before `gtag('set','user_data', …)`, per Google's enhanced-conversions-for-leads spec. Removed the misleading `// TODO: Add Google Ads conversion (AW-…)` stub — Google Ads receives the conversion via the GA4 **import** of Qualified_Lead, not a separate AW tag.
+- **Why:** Un-normalized contact data hashes to the wrong value and won't match; the AW stub implied a tag that never existed and confused the picture.
+- **Tested/proof (live, Playwright network capture):** Stashed a deliberately messy email `"  TestSeller@EXAMPLE.Com  "`; on /thank-you it reached gtag as `testseller@example.com` (normalized). Network hits fired: GA4 `g/collect en=Qualified_Lead tid=G-KRZH94TT88` (204); Google Ads `measurement/conversion en=Qualified_Lead` → AW-16958771650 (302); `measurement/1p-conversion en=Qualified_Lead` carrying the hashed `crd=…` enhanced-conversion payload (200). Changing the email/phone changed the `crd` blob — proof the contact data is encoded and transmitted. Re-verified identical after the 06:31 revert.
+- **Undo:** `git checkout 8f13682 -- app/thank-you/page.js` (restores the prior thank-you with the AW TODO stub).
+- **Google Ads touched?** No new conversion action created. The existing Qualified_Lead conversion now carries hashed email/phone from the site.
+
 ### 06:12 — Merged Killian McElroy's duplicate + re-sent his contract with the click ID (Step 2)
 - **What:** His contract work ($60k offer / $36k value) sat on the GHL echo record (no gclid); the gclid was on his website twin. Merged the contract/review onto the website record (which has the gclid), cleared `sent_at`, re-ran the uploader; archived the echo.
 - **Why:** The matched conversion needs the record that both (a) is a website lead and (b) carries the click ID.
