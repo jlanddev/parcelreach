@@ -59,12 +59,7 @@ clicks   cost     conv  term                               matched keyword
 
 ### Tier 1 — RECOMMENDED (relevance-based, safe to apply now)
 
-**A. Out-of-geography (you buy in TX, CO, MS, TN, MO per your site).** Add as **negative broad / phrase** — but first confirm your actual buy-box states:
-- `florida` · `florida land buyers` · `land buyers in florida` · `sell land in florida`
-- `arizona` · `sell my land arizona`
-- `alaska` · `sell land in alaska`
-- `oklahoma` · `selling land in oklahoma`
-- *(Recommend adding every U.S. state you don't buy in as a campaign-level negative list, not just the ones that showed up this window.)*
+**A. ~~Out-of-geography~~ — RETRACTED (2026-10-31).** Jordan confirmed Haven Ground buys in **OK, AZ, FL** (and runs 50-state keywords) — the buy box is broad/national, not just TX/CO/MS/TN/MO. **Do NOT add state negatives.** Ignore any geo entries below.
 
 **B. Wrong intent — people wanting to BUY/develop, not sell to you:**
 - `land developers near me` ($138.50, 0 conv)

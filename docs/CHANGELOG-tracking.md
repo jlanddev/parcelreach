@@ -7,6 +7,14 @@ Format per entry: **What · Why · Tested/proof · Undo · Google Ads touched?**
 
 ## 2026-10-31
 
+### 08:30 — Read-only review of "Haven Search/Conv  Trial 220" + test proposals (nothing changed)
+- **What:** Full Google Ads API v23 read of campaign 22464770148 — QS per keyword + 3 parts, ads/pinning/strength, assets + image policy, impression share, bid strategy. Wrote `docs/gads-review-proposals-2026-10-31.md`.
+- **Key findings:** 30d = 1,144 clicks / $11,843.83 / 112.9 conv / **$113 value**. **IS 19.9%, lost to Ad Rank 80.1%, lost to budget 0.0%** — rank is the constraint, not budget. One ad group holds 307 keywords (~250 with 0 impressions). Best ad strength = Average (every headline pinned → no combination learning). No sitelinks, no call asset, snippets paused, images not serving (square-only + logo 32×32 + low rank). Landing-page experience "avg" across the board.
+- **CORRECTION to the 07:05 finding:** Google Ads is **NOT doubled**. Conversion-action breakdown: Qualified_Lead = 112.9; CRM website-form leads same 30d = **124**. 112.9 ≈ 91% of real leads, so Ads counts one per click (count="One"). The GA4 double-fire inflates **GA4 reports only**, not the Ads bidding signal — so the GA4 fix is hygiene, not a bidding emergency. (The 07:05 "~2× corrupts bidding" was wrong; verified against the account.)
+- **Proposals (drafts, not applied):** 1) full asset set (direct-in), 2) new RSA ≤1 pin in honest-expert voice, 3) themed ad groups as a 50/50 experiment, 4) text customization experiment; then switch to Max Conversion Value once real deal values flow. Negatives revised: **no geo negatives** (buys in OK/AZ/FL) — only wrong-intent/competitor terms.
+- **Undo:** N/A (read-only).
+- **Google Ads touched?** No — read-only queries only.
+
 ### 07:20 — Step 6: pulled search terms (last 60 days) + drafted negative keywords (NOT applied)
 - **What:** Read-only Google Ads API v23 query of `search_term_view` for 2026-09-01→10-31 on account 2875216984. Wrote `docs/search-terms-negatives-2026-10-31.md` with totals, top-25-by-spend, and a tiered draft negative list.
 - **Why:** Step 6 of the Google plan — cut wasted spend, but carefully.
