@@ -7,6 +7,34 @@ Format per entry: **What · Why · Tested/proof · Undo · Google Ads touched?**
 
 ## 2026-10-31
 
+### 07:20 — Step 6: pulled search terms (last 60 days) + drafted negative keywords (NOT applied)
+- **What:** Read-only Google Ads API v23 query of `search_term_view` for 2026-09-01→10-31 on account 2875216984. Wrote `docs/search-terms-negatives-2026-10-31.md` with totals, top-25-by-spend, and a tiered draft negative list.
+- **Why:** Step 6 of the Google plan — cut wasted spend, but carefully.
+- **Tested/proof:** 1,663 terms, 625 clicks, **$7,438.81** spend, 65.9 conversions, **$66** conversion value. 190 terms (54% of spend, $4,006) had 0 recorded conversions. Draft negatives split into Tier 1 (relevance-safe: out-of-geo FL/AZ/AK/OK + buyer-intent + competitor) vs Tier 2 (performance-based — held, because 0-conv is unreliable while tracking is under-counting).
+- **Undo:** N/A (read-only; nothing applied to Google).
+- **Google Ads touched?** No — read-only query; no negatives applied.
+
+### 07:12 — Step 5: end-to-end test with ?gclid=TEST123 (PASS; nothing sent to Google)
+- **What:** Full chain. (1) Browser: landed on `/sell-your-land?gclid=TEST123&utm_...`; confirmed `hg_gclid=TEST123`, `hg_landing`=full ad URL, `_gcl_aw`=TEST123. (2) Inserted a website-form test lead carrying gclid=TEST123 (service role). (3) Ran the uploader in `dry=1` (no Google call) against only that lead. (4) Deleted the test lead; verified 0 lingering.
+- **Why:** Prove ad click → CRM → upload end to end.
+- **Tested/proof:** Dry-run built **Contract Signed $14,550 + Reviewed Lead** with `hasClickId:true`, `hasHashedPII:true`, `unmatchable:0` → match = Click ID. Test lead `54c357da…` deleted (ok); cleanup query returned 0 E2E leads.
+- **Undo:** N/A (test lead already deleted; dry-run sent nothing).
+- **Google Ads touched?** No — `dry=1` returns before any upload; nothing reached Google.
+
+### 07:05 — FINDING (NOT fixed — needs your GA4 change): Qualified_Lead fires ~2× per thank-you load
+- **What:** On a single `/thank-you` load, Qualified_Lead fires **twice** — once on `page_view` (`_s=2`) and again on `gtm.scrollDepth` (`_s=4`) — to both GA4 (G-KRZH94TT88) and Google Ads (AW-16958771650). `page_view` itself fires once, so it's not double GA4 tagging. No Qualified_Lead is pushed to the dataLayer, so it's a **GA4 "Create event" rule scoped to all events on `/thank-you`** instead of only `page_view`.
+- **Why it matters:** ~2× conversion inflation → corrupts bidding and the conversion counts.
+- **Fix (for you, in GA4 Admin — I won't touch GA4 without your OK):** On the Qualified_Lead create-event / key-event rule, add the condition **`event_name` equals `page_view`** alongside the `page_location` contains `/thank-you` condition, so exactly one Qualified_Lead is created per visit.
+- **Tested/proof:** Clean single-load Playwright capture: GA4 `en=Qualified_Lead` ×2, Google Ads `measurement/conversion en=Qualified_Lead` ×2, `page_view` ×1. dataLayer Qualified_Lead pushes: 0.
+- **Google Ads touched?** No.
+
+### 07:00 — Stash hg_ec BEFORE the GHL webhook (haven-ground 9a5234f)
+- **What:** Moved the `sessionStorage.setItem('hg_ec', …)` in `app/sell-your-land/page.js` to run **before** the GHL webhook fetch (was after a successful webhook).
+- **Why:** If the webhook threw, the catch block still redirected to `/thank-you` but hg_ec was never set, dropping the enhanced-conversion email/phone. Now it survives a webhook failure.
+- **Tested/proof:** Build passed; deployed. Live chunk confirms the stash now precedes "Sending webhook to GHL". File changed: only `app/sell-your-land/page.js`.
+- **Undo:** `git revert 9a5234f` in haven-ground.
+- **Google Ads touched?** No.
+
 ### 06:31 — INCIDENT + FIX: reverted designer's unfinished homepage that a `git add -A` pushed live (haven-ground 7490b0e)
 - **What:** The Step 3 commit below (8582fc3) was supposed to be the thank-you page only, but it was committed with `git add -A`, which also swept in the designer's in-progress homepage redesign and pushed it live. Reverted every non-mine file back to its pre-redesign state.
   - **Reverted (not mine):** `app/page.js` (homepage hero), `app/globals.css`, `app/properties/page.js`, deleted new `public/images/haven-logo-2026.png`, plus ~174 local agent-tooling files (`.agents/…`, `.claude/…`, `.codex/hooks.json`, `skills-lock.json`).
