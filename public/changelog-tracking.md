@@ -7,6 +7,12 @@ Format per entry: **What · Why · Tested/proof · Undo · Google Ads touched?**
 
 ## 2026-10-31
 
+### 09:45 — Themed landing pages plan + copy drafts (read-only, nothing built)
+- **What:** Plan to match search themes to dedicated landing pages (we-buy, sell-general, inherited, optional state template), all reusing the identical submit flow + tagging `form_data.landing_page` to compare pages. Wrote `docs/themed-landing-pages-plan-2026-10-31.md`.
+- **Key points:** Current /sell-your-land measured = 223KB transfer / 222KB JS / 50 req / FCP ~0.68s / load ~1.16s; FB Pixel alone is 219KB. Themed pages planned in an isolated route group with lean layout (GTM+GA4 only) → target <120KB JS, FCP <0.5s. Form is inline (1,711 lines) → extract flow into `components/SellLandForm.js` (copied logic, lean markup); original page untouched. Test = combined themed-ad-groups + pages campaign Experiment (50/50), or Final-URL-only 50/50 to isolate page effect. UI freeze = designer's in-flight visual redesign; new isolated routes don't touch it.
+- **Undo:** N/A (read-only; nothing built).
+- **Google Ads touched?** No.
+
 ### 09:15 — Theme-level rank analysis + recommended first action (read-only)
 - **What:** Grouped the 307 keywords into 6 themes; pulled real keyword-level impression share + rank-loss (API supports it) and spend-weighted QS-component weakness. Wrote `docs/gads-themes-and-rank-action-2026-10-31.md`.
 - **Key findings:** we-buy/land-buyers (~33,200 impr/mo lost to rank) + sell-general (~23,600) = **~91% of all lost rank**. Costliest below-average component = **ad relevance** ($2,704, 23% of spend), concentrated in sell-general (53% below) + state (38% below). we-buy is QS 8 / 0% below-relevance — its loss is **expected-CTR-gated** (the over-pinned ad), not relevance. Landing page = ceiling ("avg" on 81% of spend) but UI frozen. State/location is bloat (186 kw, 12% of impr, worst $133/lead).
