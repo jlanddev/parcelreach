@@ -693,6 +693,7 @@ export default function LandLeadsAdminPage() {
   const [qAutoUpload, setQAutoUpload] = useState(null); // null=loading, true/false
   const [qRuns, setQRuns] = useState([]);             // vbb_upload_runs rows
   const [qCoverage, setQCoverage] = useState(null);   // click-ID capture coverage %
+  const [changelogText, setChangelogText] = useState('');
   const [qBusy, setQBusy] = useState(false);          // a run/send is in flight
   const [qStatus, setQStatus] = useState('all');      // status filter
   const [qStage, setQStage] = useState('all');        // Reviewed|Contract|Closed|all
@@ -717,6 +718,7 @@ export default function LandLeadsAdminPage() {
     } catch { setQCoverage(null); }
   };
   useEffect(() => { if (activeTab === 'vbb-queue') loadVbbMeta(); }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (activeTab === 'changelog' && !changelogText) fetch('/changelog-tracking.md').then((r) => r.text()).then(setChangelogText).catch(() => setChangelogText('Could not load the change log.')); }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleAutoUpload = async () => {
     const next = !qAutoUpload;
@@ -5358,10 +5360,10 @@ export default function LandLeadsAdminPage() {
             const MAIN_TABS = ['ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent', 'campaigns'];
             const hasOffer = (l) => l.offer_amount != null && Number(l.offer_amount) !== 0;
             const overflow = isAdmin
-              ? ['vbb-queue', 'shared-calendar', 'follow-up', 'lost', 'activity-log', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search', 'investors']
+              ? ['vbb-queue', 'shared-calendar', 'follow-up', 'lost', 'activity-log', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search', 'investors', 'changelog']
               : ['shared-calendar', 'follow-up', 'lost', 'subdivision-inflow', 'all-leads', 'investors'];
             const up = (l) => (l.pipeline_status || l.status || '').toUpperCase();
-            const labelFor = (tab) => tab === 'vbb-queue' ? 'Google Upload Queue' : tab === 'needs-touch' ? 'Needs a Touch' : tab === 'ppc-inflow' ? 'PPC Inflow' : tab === 'appointment-set' ? 'Mapped & Appointment Set' : tab === 'offer-curated' ? 'Offer Curated' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Signed Contracts' : tab === 'om-search' ? 'OM Search' : tab === 'campaigns' ? 'Follow-Up Campaigns' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab === 'investors' ? 'Investors' : tab === 'organizations' ? 'Organizations' : tab === 'unassigned' ? 'Unassigned' : tab === 'create-lead' ? 'Create Lead' : tab === 'all-leads' ? 'All Leads' : tab.replace('-', ' ');
+            const labelFor = (tab) => tab === 'vbb-queue' ? 'Google Upload Queue' : tab === 'needs-touch' ? 'Needs a Touch' : tab === 'ppc-inflow' ? 'PPC Inflow' : tab === 'appointment-set' ? 'Mapped & Appointment Set' : tab === 'offer-curated' ? 'Offer Curated' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Signed Contracts' : tab === 'om-search' ? 'OM Search' : tab === 'changelog' ? 'Change Log' : tab === 'campaigns' ? 'Follow-Up Campaigns' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab === 'investors' ? 'Investors' : tab === 'organizations' ? 'Organizations' : tab === 'unassigned' ? 'Unassigned' : tab === 'create-lead' ? 'Create Lead' : tab === 'all-leads' ? 'All Leads' : tab.replace('-', ' ');
             const countFor = (tab) => {
               if (tab === 'needs-touch') { const n = needsTouchLeads().length; return n ? ` (${n})` : ''; }
               if (tab === 'unassigned') return ` (${unassignedLeads.length})`;
@@ -8287,6 +8289,16 @@ export default function LandLeadsAdminPage() {
 
         {/* EXPORT CSV TAB */}
         {activeTab === 'om-search' && <OmSearch />}
+
+        {activeTab === 'changelog' && isAdmin && (
+          <div className="max-w-4xl">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-xl font-bold text-white">Change Log — Tracking &amp; Google Ads</h2>
+              <button type="button" onClick={() => { try { navigator.clipboard.writeText(changelogText); showToast('Change log copied', 'success'); } catch {} }} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white">Copy all</button>
+            </div>
+            <pre className="whitespace-pre-wrap break-words text-sm text-slate-200 bg-slate-900/70 border border-slate-700 rounded-xl p-4 leading-relaxed font-mono max-h-[75vh] overflow-y-auto">{changelogText || 'Loading…'}</pre>
+          </div>
+        )}
 
         {activeTab === 'export' && (
           <div className="max-w-2xl mx-auto space-y-6">
