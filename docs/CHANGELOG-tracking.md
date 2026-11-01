@@ -7,6 +7,15 @@ Format per entry: **What · Why · Tested/proof · Undo · Google Ads touched?**
 
 ## 2026-10-31
 
+### 13:45 — ADDED to Google Ads: new unpinned RSA + 8 callouts + 1 snippet (approved, additions only)
+- **What:** Created in campaign "Haven Search/Conv  Trial 220" (22464770148), ad group "Ad group 1" (177053741734):
+  - **New RSA, ad id `830246324765`** — ENABLED, **unpinned** (0 pinned), 15 headlines (with the 3 approved swaps: "Haven Ground Land Buyers", "Sell Your Land the Simple Way", "Cash Offer for Your Land"; kept "Inherited Land Out of State?", "Sell Without Listing Your Land", "We Buy Land Nationwide"), 4 descriptions, final URL `/sell-your-land`, paths Sell-Your-Land/Fair-Offer.
+  - **8 callouts + 1 structured snippet** (Service catalog) linked at the campaign level, all ENABLED.
+- **Method/proof:** validateOnly:true passed first (nothing created), then real create. Read-back confirms: new ad ENABLED + unpinned + correct text, review_status=REVIEW_IN_PROGRESS; 9 campaign_assets ENABLED; the **4 existing ads untouched** (747782993514 PAUSED, 779406220487 ENABLED, 802511265243 ENABLED, 802628739962 PAUSED). No edits/pauses/removals of anything existing.
+- **Pending:** ad is under Google review (strength=PENDING until it computes). If Google disapproves anything for "Realtor," swap to "Agent" (RSA text is immutable → create replacement, remove this one).
+- **Undo:** set ad `830246324765` to PAUSED or REMOVED; remove the 9 campaign_assets (8 CALLOUT + 1 STRUCTURED_SNIPPET) from campaign 22464770148. Nothing else changes.
+- **Google Ads touched?** YES — first additive change. Additions only; no bids/budget/goals/existing ads touched.
+
 ### 13:00 — Ad handoff drafts: revised RSA + themed page copy + 180-day market data (review only, nothing added/deployed)
 - **What:** Revised RSA leading with the real pitch (skip 6–12 months on market / no listing / no realtor / sure closing) + 2+ acre qualifier + out-of-state-owner headlines; 15 headlines, 4 descriptions, 8 callouts, snippet — all verified within Google char limits. Themed page copy for inherited land, back taxes, how we price land (same form + /thank-you, FB pixel + Google tags only, 2+ acres + owner-anywhere). `docs/ad-handoff-rsa-pages-market-2026-10-31.md`.
 - **180-day market data (CRM):** 793 website leads; proven deal value concentrates in **TX $400k, CA $340k, AL $290k, OK $200k, WA $200k, MI $180k**; AZ (49 leads/$0) + Costilla/Mohave counties = cheap-land volume with no proven value. Deal value = reviewed worth on contracts (a floor). Ads spend-by-state not included (geographic_view API field errors — use UI Locations report).
