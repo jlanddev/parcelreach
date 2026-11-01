@@ -7,6 +7,13 @@ Format per entry: **What · Why · Tested/proof · Undo · Google Ads touched?**
 
 ## 2026-10-31
 
+### 18:30 — Em-dash/copy rules applied: themed pages + RSA replacement
+- **New standing copy rules:** NO em dashes anywhere (periods/commas; hyphens like 6-12 ok); never "live anywhere"/"owners anywhere" — say "we work with out-of-state owners."
+- **Themed pages (haven-ground ee62ee1):** removed all em dashes from the 3 page subheads + the shared SellLandForm body copy; applied the approved inherited paragraph; replaced "owners anywhere" with "We buy parcels 2 acres and up and work with out-of-state owners every day." **Headline overflow fixed** — h1 now text-3xl→5xl + break-words + text-wrap:balance so long headlines wrap instead of clipping. Verified all 3 pages desktop + mobile.
+- **New RSA replacement (Google Ads):** old 830246324765 was APPROVED (Realtor fine), so created dash-fixed replacement **830173261108** (ENABLED, unpinned, 15 headlines: "Skip 6-12 Months on Market"; D1 hyphen; D2 "We buy 2+ acre parcels and work with out-of-state and inherited owners every day.") then **removed 830246324765**. validateOnly passed first; read-back confirms. Other ads untouched (779406220487 ENABLED; 802511265243 now PAUSED — Jordan paused it himself; 747/802628 PAUSED).
+- **Undo:** `git revert ee62ee1`; re-enable 830246324765 / remove 830173261108.
+- **Google Ads touched?** Yes — RSA replaced (1 created, 1 removed). Additions + the approved replacement only; no other ad touched.
+
 ### 17:30 — ADDED 4 sitelinks to Trial 220 + fixed deleteLead tracking cleanup
 - **Sitelinks (Google Ads, additions only):** created + linked 4 sitelinks to campaign 22464770148, all ENABLED: "Inherited Land" → /lp/inherited-land, "Tired of Land Taxes?" → /lp/back-taxes ("Paying taxes on land you don't use?" / "We can still make a fair offer"), "How We Price Land" → /lp/how-we-price-land, "Sell Your Land" → /sell-your-land. validateOnly passed first; read-back confirms all 4 ENABLED with correct text/URLs. New ad + existing ads untouched.
 - **deleteLead fix (parcelreach e3d33b5):** `app/admin/land/LandApp.js` — tracking_step_events/tracking_click_events reference the STRING `session_id` ("ses_…"), not the integer `tracking_sessions.id`; the cleanup now deletes children by that string key only. Verified: a lead + tracking session + step event deletes cleanly (lead delete SUCCESS, 0 remaining). Build passed.
