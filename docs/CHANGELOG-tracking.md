@@ -7,6 +7,15 @@ Format per entry: **What · Why · Tested/proof · Undo · Google Ads touched?**
 
 ## 2026-10-31
 
+### 14:30 — Read-only ad audit: "#1" ad status, pinning vs performance, auto-apply (no changes)
+- **Change history:** ad 802511265243 ("…Americas #1 Land Buyer", POOR) has **no status change in the last 30 days** — API `change_event` is hard-capped at 30 days (START_DATE_TOO_OLD), and it's served for 90+ days, so the re-enable predates the API window. When/who/tool is only in the **UI Change history**. Last 28 days: all 19 change events were `GOOGLE_ADS_API` (my additions); **no auto-apply (GOOGLE_ADS_RECOMMENDATIONS) or web-client changes**.
+- **Auto-apply:** pending recommendations present (Search Partners opt-in, Display expansion, Performance Max opt-in, broad match, raise tCPA, dynamic image ext.) — the auto-apply ON/OFF toggle isn't API-readable; recommend turning it OFF in UI.
+- **Performance (90d):** inherited 779406220487 = 11.85% conv rate / $99 cost-per-conv; "#1" 802511265243 = **8.63% / $108** (worst enabled). CTR nearly equal (6.7% vs 6.6%).
+- **Pinning finding (corrects my earlier call):** the inherited ad is pinned **by role** (H1 hook / H2 benefit / H3 CTA) with multiple options each — not "every headline jammed in one slot." Equal CTR + far better conversion ⇒ the driver is the **message** (inherited/taxes/too-much-land → motivated sellers), not pinning. Ad Strength (AVERAGE) did not predict performance. **Retracting the blanket "unpin everything"** as a rule for this account.
+- **Accountability:** earlier I listed this ad as ENABLED/POOR but did a "what to add" review, not "what to turn off" — I failed to flag it for pausing, missed the live "#1" claim (also in the inherited ad), and didn't check change history. Owned.
+- **Recommendation (not applied):** pause 802511265243; keep 779406220487 (consider dropping its "#1" H1 option); let the new RSA run, judged on conversion rate vs the inherited ad; turn off auto-apply.
+- **Google Ads touched?** No — read-only.
+
 ### 13:45 — ADDED to Google Ads: new unpinned RSA + 8 callouts + 1 snippet (approved, additions only)
 - **What:** Created in campaign "Haven Search/Conv  Trial 220" (22464770148), ad group "Ad group 1" (177053741734):
   - **New RSA, ad id `830246324765`** — ENABLED, **unpinned** (0 pinned), 15 headlines (with the 3 approved swaps: "Haven Ground Land Buyers", "Sell Your Land the Simple Way", "Cash Offer for Your Land"; kept "Inherited Land Out of State?", "Sell Without Listing Your Land", "We Buy Land Nationwide"), 4 descriptions, final URL `/sell-your-land`, paths Sell-Your-Land/Fair-Offer.
