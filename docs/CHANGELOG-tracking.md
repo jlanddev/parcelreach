@@ -7,6 +7,14 @@ Format per entry: **What · Why · Tested/proof · Undo · Google Ads touched?**
 
 ## 2026-10-31
 
+### 15:30 — DEPLOYED 3 themed landing pages (haven-ground addcc0c) — additions only, verified live
+- **What:** `components/SellLandForm.js` (shared form, exact copy of the /sell-your-land submit flow) + `app/lp/inherited-land`, `app/lp/back-taxes`, `app/lp/how-we-price-land`. Copy leads with the winning message (inherited / too much land / tired of taxes). Staged 4 named files only (no git add -A, no designer WIP); `/sell-your-land` + homepage NOT edited.
+- **Same tag confirmed:** insert writes `source: 'Haven Ground - Sell Your Land Form'` (SellLandForm.js:460) — identical to /sell-your-land, so the uploader sends these leads to Google — plus `form_data.landing_page` (:490) to tag the page.
+- **Verified live:** homepage still "Our Land is Your Haven"; /sell-your-land still "Ready to Sell Your Land" (unchanged, 200); all 3 /lp pages 200. Click-ID capture on /lp/inherited-land: `hg_gclid=TEST123`, `hg_landing` = the themed page URL, `_gcl_aw` set. Save shape: inserted one lead per page (source=website, gclid=TEST123, landing_page set, landing_url set), **uploader-eligible=true**, then deleted (0 lingering).
+- **Open:** (1) `/thank-you` still fires **Qualified_Lead twice** (load + scroll) — the GA4 page_view-only rule hasn't propagated yet; shared behavior, not page-specific. (2) Full click-through test is blocked by the form's real Telnyx OTP (no test bypass) — a true UI submission needs a real phone; code line + representative inserts stand in. 
+- **Not done (held):** no sitelinks added, no ads pointed at these pages.
+- **Google Ads touched?** No.
+
 ### 14:30 — Read-only ad audit: "#1" ad status, pinning vs performance, auto-apply (no changes)
 - **Change history:** ad 802511265243 ("…Americas #1 Land Buyer", POOR) has **no status change in the last 30 days** — API `change_event` is hard-capped at 30 days (START_DATE_TOO_OLD), and it's served for 90+ days, so the re-enable predates the API window. When/who/tool is only in the **UI Change history**. Last 28 days: all 19 change events were `GOOGLE_ADS_API` (my additions); **no auto-apply (GOOGLE_ADS_RECOMMENDATIONS) or web-client changes**.
 - **Auto-apply:** pending recommendations present (Search Partners opt-in, Display expansion, Performance Max opt-in, broad match, raise tCPA, dynamic image ext.) — the auto-apply ON/OFF toggle isn't API-readable; recommend turning it OFF in UI.
