@@ -7,6 +7,12 @@ Format per entry: **What · Why · Tested/proof · Undo · Google Ads touched?**
 
 ## 2026-10-31
 
+### 13:00 — Ad handoff drafts: revised RSA + themed page copy + 180-day market data (review only, nothing added/deployed)
+- **What:** Revised RSA leading with the real pitch (skip 6–12 months on market / no listing / no realtor / sure closing) + 2+ acre qualifier + out-of-state-owner headlines; 15 headlines, 4 descriptions, 8 callouts, snippet — all verified within Google char limits. Themed page copy for inherited land, back taxes, how we price land (same form + /thank-you, FB pixel + Google tags only, 2+ acres + owner-anywhere). `docs/ad-handoff-rsa-pages-market-2026-10-31.md`.
+- **180-day market data (CRM):** 793 website leads; proven deal value concentrates in **TX $400k, CA $340k, AL $290k, OK $200k, WA $200k, MI $180k**; AZ (49 leads/$0) + Costilla/Mohave counties = cheap-land volume with no proven value. Deal value = reviewed worth on contracts (a floor). Ads spend-by-state not included (geographic_view API field errors — use UI Locations report).
+- **Guardrail:** additions only; nothing edits/pauses/removes anything in Trial 220. Sitelinks stay on hold until themed pages are live + verified. "We Buy Land Nationwide" flagged to confirm before use.
+- **Undo:** N/A (drafts only). **Google Ads touched?** No.
+
 ### 12:15 — Ad drafts for review (nothing added to Google)
 - **What:** Drafted the new unpinned RSA (15 headlines + 4 descriptions, honest-expert voice, all within Google char limits) and the full asset set (4 sitelinks → themed pages inherited/back-taxes/how-we-price-land + /sell-your-land; 8 callouts; 1 structured snippet; a held call asset; image/logo recommendations using the real drone/parcel photos + a ≥1200px logo to replace the 32×32). Lead-form asset skipped per request. `docs/ad-rank-ads-and-assets-drafts-2026-10-31.md`.
 - **Guardrail baked in:** sitelinks stay on HOLD until their themed pages are live + verified (form submits, Qualified_Lead fires once, click ID saved); every sitelink lands on a page with the Sell Your Land form + /thank-you, never homepage/info pages.
