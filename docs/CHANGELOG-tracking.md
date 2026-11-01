@@ -7,6 +7,20 @@ Format per entry: **What · Why · Tested/proof · Undo · Google Ads touched?**
 
 ## 2026-10-31
 
+### 16:10 — Stopped publishing the Change Log to the public website
+- **What:** Deleted `public/changelog-tracking.md` (it was served at parcelreach.ai/changelog-tracking.md, exposing customer names + deal values publicly). The CRM "Change Log" tab now reads an **admin-only** route `GET /api/changelog` (Bearer session token; reads `docs/CHANGELOG-tracking.md` via fs, bundled via `outputFileTracingIncludes`). **No more public mirror** — this log lives only in the repo's `docs/` + the admin route.
+- **Why:** The public copy leaked seller names and deal values on the open web.
+- **Tested/proof:** Build passed; `/api/changelog` compiled; public file removed. (Note: `docs/CHANGELOG-tracking.md` still sits in the git repo — if that repo is public, say the word and I'll scrub names / move it out.)
+- **Undo:** restore `public/changelog-tracking.md` and revert the CRM fetch.
+- **Google Ads touched?** No.
+
+### 16:00 — Themed pages post-deploy verification (GATE NOT yet met)
+- **Qualified_Lead still fires TWICE** on /thank-you after the GA4 save (load `_s=2` + scroll `_s=4`). The browser sends `en=Qualified_Lead` directly, which points to the **GTM container (GTM-5VBRW53D)** firing a "Qualified_Lead" GA4 Event tag on **two triggers (page view + scroll depth)** — so the fix likely belongs in **GTM** (remove the scroll trigger), not the GA4 create-event rule. (Or GA4 change needs propagation time.)
+- **Test lead not found:** no website-form lead saved in the last 12h; `landing_page` has never been populated by a real submission; most recent website-form lead was 2026-10-30. The submitted test did not reach the CRM — the lead only saves **after** phone OTP verifies, so the 16-step form wasn't fully completed. **The save path itself works** — verified the exact anon-key insert (source=website + gclid + landing_page) succeeds, then deleted it. Nothing to delete (no lead created).
+- **Gate for sitelinks (still held):** Qualified_Lead firing once + a confirmed click-through lead. Neither met yet.
+- **Google Ads touched?** No.
+
+
 ### 15:30 — DEPLOYED 3 themed landing pages (haven-ground addcc0c) — additions only, verified live
 - **What:** `components/SellLandForm.js` (shared form, exact copy of the /sell-your-land submit flow) + `app/lp/inherited-land`, `app/lp/back-taxes`, `app/lp/how-we-price-land`. Copy leads with the winning message (inherited / too much land / tired of taxes). Staged 4 named files only (no git add -A, no designer WIP); `/sell-your-land` + homepage NOT edited.
 - **Same tag confirmed:** insert writes `source: 'Haven Ground - Sell Your Land Form'` (SellLandForm.js:460) — identical to /sell-your-land, so the uploader sends these leads to Google — plus `form_data.landing_page` (:490) to tag the page.

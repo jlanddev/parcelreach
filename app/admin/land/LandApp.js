@@ -718,7 +718,7 @@ export default function LandLeadsAdminPage() {
     } catch { setQCoverage(null); }
   };
   useEffect(() => { if (activeTab === 'vbb-queue') loadVbbMeta(); }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (activeTab === 'changelog' && !changelogText) fetch('/changelog-tracking.md').then((r) => r.text()).then(setChangelogText).catch(() => setChangelogText('Could not load the change log.')); }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (activeTab === 'changelog' && !changelogText) { (async () => { try { const { data: { session } } = await supabase.auth.getSession(); const token = session?.access_token; const r = await fetch('/api/changelog', { headers: token ? { authorization: `Bearer ${token}` } : {} }); setChangelogText(await r.text()); } catch { setChangelogText('Could not load the change log.'); } })(); } }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleAutoUpload = async () => {
     const next = !qAutoUpload;
