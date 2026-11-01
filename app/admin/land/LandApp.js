@@ -3207,8 +3207,10 @@ export default function LandLeadsAdminPage() {
       // Session tracking has its own FK chain (sessions -> step/click events) that
       // would otherwise block the lead delete; clear it first.
       try {
-        const { data: sess } = await supabase.from('tracking_sessions').select('id, session_id').eq('lead_id', leadId);
-        const sids = [...new Set([].concat((sess || []).map(s => s.session_id), (sess || []).map(s => s.id)).filter(Boolean))];
+        const { data: sess } = await supabase.from('tracking_sessions').select('session_id').eq('lead_id', leadId);
+        // tracking_step_events / tracking_click_events reference the STRING session_id
+        // ("ses_…"), NOT the integer tracking_sessions.id — delete children by that key.
+        const sids = [...new Set((sess || []).map(s => s.session_id).filter(Boolean))];
         if (sids.length) {
           for (const tbl of ['tracking_step_events', 'tracking_click_events']) {
             await supabase.from(tbl).delete().in('session_id', sids).then(() => {}, () => {});
