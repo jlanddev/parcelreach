@@ -7,6 +7,12 @@ Format per entry: **What · Why · Tested/proof · Undo · Google Ads touched?**
 
 ## 2026-10-31
 
+### 17:30 — ADDED 4 sitelinks to Trial 220 + fixed deleteLead tracking cleanup
+- **Sitelinks (Google Ads, additions only):** created + linked 4 sitelinks to campaign 22464770148, all ENABLED: "Inherited Land" → /lp/inherited-land, "Tired of Land Taxes?" → /lp/back-taxes ("Paying taxes on land you don't use?" / "We can still make a fair offer"), "How We Price Land" → /lp/how-we-price-land, "Sell Your Land" → /sell-your-land. validateOnly passed first; read-back confirms all 4 ENABLED with correct text/URLs. New ad + existing ads untouched.
+- **deleteLead fix (parcelreach e3d33b5):** `app/admin/land/LandApp.js` — tracking_step_events/tracking_click_events reference the STRING `session_id` ("ses_…"), not the integer `tracking_sessions.id`; the cleanup now deletes children by that string key only. Verified: a lead + tracking session + step event deletes cleanly (lead delete SUCCESS, 0 remaining). Build passed.
+- **Undo:** remove the 4 sitelink campaign_assets; `git revert e3d33b5`.
+- **Google Ads touched?** Yes — 4 sitelinks added (additions only).
+
 ### 16:10 — Stopped publishing the Change Log to the public website
 - **What:** Deleted `public/changelog-tracking.md` (it was served at parcelreach.ai/changelog-tracking.md, exposing customer names + deal values publicly). The CRM "Change Log" tab now reads an **admin-only** route `GET /api/changelog` (Bearer session token; reads `docs/CHANGELOG-tracking.md` via fs, bundled via `outputFileTracingIncludes`). **No more public mirror** — this log lives only in the repo's `docs/` + the admin route.
 - **Why:** The public copy leaked seller names and deal values on the open web.
