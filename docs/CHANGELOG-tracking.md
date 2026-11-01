@@ -7,6 +7,13 @@ Format per entry: **What · Why · Tested/proof · Undo · Google Ads touched?**
 
 ## 2026-10-31
 
+### 12:15 — Ad drafts for review (nothing added to Google)
+- **What:** Drafted the new unpinned RSA (15 headlines + 4 descriptions, honest-expert voice, all within Google char limits) and the full asset set (4 sitelinks → themed pages inherited/back-taxes/how-we-price-land + /sell-your-land; 8 callouts; 1 structured snippet; a held call asset; image/logo recommendations using the real drone/parcel photos + a ≥1200px logo to replace the 32×32). Lead-form asset skipped per request. `docs/ad-rank-ads-and-assets-drafts-2026-10-31.md`.
+- **Guardrail baked in:** sitelinks stay on HOLD until their themed pages are live + verified (form submits, Qualified_Lead fires once, click ID saved); every sitelink lands on a page with the Sell Your Land form + /thank-you, never homepage/info pages.
+- **"Dispo lead form" answered:** WEBPAGE_CODELESS / SUBMIT_LEAD_FORM, primary_for_goal=true but **include_in_conversions_metric=false** → Google auto-created, NOT in the conversions metric, so it does **not** drive the seller campaign's bidding. Tidy via UI: campaign-specific goals (Qualified_Lead only), then set Dispo to Secondary.
+- **Undo:** N/A (drafts only).
+- **Google Ads touched?** No.
+
 ### 11:30 — Click-ID coverage check + 6-point Google reporting verification (read-only) — 4/6 verified, 2 open
 - **Coverage since Oct 16:** 49 website leads, **43 have a click ID (88%)**, 6 missing — all dated **Oct 16–27** (pre/at the capture fix), all with no landing URL. **Zero missing since Oct 28** → the leak appears plugged for recent leads (site-wide ClickIdCapture deployed 10-29, landing-URL 10-31). Missing: Oct 27 (no name), Oct 24 (no name), Oct 22 Donnell Smith, Oct 21 Benjamin Blanco, Oct 19 (no name), Oct 16 Cody Smith.
 - **1) Named leads in Google — mostly ✓, one correction.** Benny Butler (Reviewed $6,500 + Contract $58,500), Spivey ($11,250 + $90,000), Newton ($7,000 + $63,000), Joe Borden ($4,000 + $36,000) — all uploaded 10-31 **with gclid (Click-ID match)**. **Killian:** only his archived echo (d00e7be4) exists; his $36k contract was uploaded **10-27 via enhanced (email/phone) match, NOT a click ID** — the earlier "re-sent with gclid on 40c80569" could not be confirmed (**that record does not exist in the DB**). No double (single send).
