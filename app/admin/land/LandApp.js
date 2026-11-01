@@ -9166,10 +9166,20 @@ export default function LandLeadsAdminPage() {
                 const rv = fd.review || {};
                 const cu = fd.contract_upload || {};
                 const fmtD = (d) => { try { return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); } catch { return d; } };
+                // Where the lead came from: UTM (e.g. Facebook retargeting) first, then click ID (Google), then the raw source.
+                const utmSrc = fd.utm_source || null;
+                const sourceLabel = utmSrc
+                  ? `${utmSrc}${fd.utm_medium ? ' / ' + fd.utm_medium : ''}${fd.utm_campaign ? ' / ' + fd.utm_campaign : ''}`
+                  : (clickId ? 'Google Ads' : (selectedLead.source || '—'));
+                const sourceColor = /facebook|instagram|meta|fb/i.test(utmSrc || '') ? 'text-blue-400' : (clickId ? 'text-green-400' : 'text-slate-300');
                 return (
                   <div className="bg-slate-900/50 border border-slate-700 rounded-lg p-4 mt-4">
                     <h4 className="text-sm font-semibold text-slate-400 mb-3 uppercase tracking-wide">Google Ads</h4>
                     <div className="space-y-2 text-sm">
+                      <div>
+                        <span className="text-slate-500">Source:</span>{' '}
+                        <span className={`${sourceColor} font-semibold`}>{sourceLabel}</span>
+                      </div>
                       <div>
                         <span className="text-slate-500">Click ID:</span>{' '}
                         {clickId
