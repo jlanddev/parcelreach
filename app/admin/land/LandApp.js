@@ -2441,12 +2441,28 @@ export default function LandLeadsAdminPage() {
       }
     }
 
-    // Fetch scheduled tasks (pending for today and future)
-    const { data: tasksData } = await supabase
-      .from('scheduled_tasks')
-      .select('*')
-      .eq('status', 'pending')
-      .order('due_at', { ascending: true });
+    // Fetch scheduled tasks (all pending). IMPORTANT: Supabase caps a single
+    // .select() at 1000 rows. Pending tasks crossed 1000 (mostly overdue callbacks),
+    // and since this is ordered by due_at ascending, FUTURE appointments sorted past
+    // row 1000 and silently never loaded — so booked appointments vanished from the
+    // calendar even after a hard refresh. Page through in 1000-row chunks so no task
+    // is ever missing, same as the leads load above.
+    let tasksData = [];
+    {
+      const PAGE = 1000;
+      for (let from = 0; ; from += PAGE) {
+        const { data: chunk, error: tErr } = await supabase
+          .from('scheduled_tasks')
+          .select('*')
+          .eq('status', 'pending')
+          .order('due_at', { ascending: true })
+          .range(from, from + PAGE - 1);
+        if (tErr) { console.error('tasks page error', tErr.message); break; }
+        if (!chunk || chunk.length === 0) break;
+        tasksData = tasksData.concat(chunk);
+        if (chunk.length < PAGE) break;
+      }
+    }
 
     // Group assignments by lead_id
     const assignmentsByLead = {};

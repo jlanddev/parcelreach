@@ -5,7 +5,469 @@ Format per entry: **What · Why · Tested/proof · Undo · Google Ads touched?**
 
 ---
 
-## 2026-10-31
+## 2026-11-03
+
+### [FIX 2026-11-03] Appointments not showing live on calendar/board -> scheduled_tasks added to realtime feed
+- **Root cause (plain English):** Setting an appointment saves perfectly (new pending meeting task + lead moved to APPT_SET_FOR_JORDAN, verified on Michael Hall + Lisa Lindsay re-set). But the CRM subscribes to live `scheduled_tasks` changes while that table was NOT in Supabase's `supabase_realtime` publication. So the live feed for appointments was dead: when one person (Darwin) booked an appointment, anyone else's already-open tab (Jordan) never received the event, so it never appeared on the calendar / Mapped & Appointment Set / reminder banner until a full page reload. `leads` WAS on the feed, which is why stage changes seemed live but appointments did not.
+- **Fix (SQL run, additive + reversible):**
+  - `alter publication supabase_realtime add table public.scheduled_tasks;`
+  - `alter table public.scheduled_tasks replica identity full;` (so UPDATE/DELETE events carry the row)
+- **Verify:** scheduled_tasks now in the publication; both current appointments (Michael 52e57c97 due 11/4 18:00Z, Lisa 6a4d5ec7 due 11/4 21:00Z) are pending/assigned to Jordan and match exactly what the calendar load+filter render. A one-time reload shows the two existing ones; every NEW appointment now appears live without reload.
+- **Undo:** `alter publication supabase_realtime drop table public.scheduled_tasks;`
+- **Still open (optional guard):** add a count-mismatch banner on Mapped & Appointment Set so a staged appointment can never silently vanish even if the feed hiccups.
+
+
+### [RESET 2026-11-03] Michael Hall + Lisa Lindsay moved to PPC Inflow, Wed appts cancelled
+- **SQL run (reversible; snapshot above is the restore point):**
+  - `update public.leads set pipeline_status='CONTACTING', status='contacting', updated_at=now() where id in ('3ad3bcbf-...michael','1cdd6495-...lisa');`
+  - `update public.scheduled_tasks set status='cancelled', updated_at=now() where id in ('2c160960-...michael-mtg','126e59c0-...lisa-mtg') and task_type='meeting' and status='pending';`
+- **Result:** both now CONTACTING (PPC Inflow), 0 pending meetings each. Meetings cancelled, NOT deleted (still in table with status=cancelled).
+- **Undo:** set each lead pipeline_status/status back to APPT_SET_FOR_JORDAN and the two task rows back to status=pending (values in the SNAPSHOT block above).
+- **Next:** re-set both appointments (Wed, same times, assigned to Jordan, map kept) and confirm they appear in Mapped & Appointment Set. Compare to snapshot if they still hide.
+
+
+### [SNAPSHOT 2026-11-03] Michael Hall + Lisa Lindsay pre-reset evidence (appt-not-showing bug)
+- **Why:** live test of appointments not appearing in "Mapped & Appointment Set". Full records + tasks captured before resetting, per Jordan.
+- **Duplicate-phone check:** NONE. Michael (p10 6605255649) and Lisa (p10 8043147011) each have exactly one lead record.
+- **Verified before reset:** both pipeline_status=APPT_SET_FOR_JORDAN, map_uploaded=true, no offer, not archived. Replaying the deployed board logic against live data puts Michael as card #2 and Lisa as card #5 of 96 in the appointment-set bucket (both within the visible 60) — i.e. by the code they SHOULD show.
+- **Full snapshot JSON (all fields):**
+```json
+{
+ "captured_at": "2026-11-03",
+ "leads": [
+  {
+   "id": "1cdd6495-23e4-4893-8b2a-6656ffffe2dc",
+   "name": "Lisa Lindsay",
+   "email": "lisa.lindsay@cox.net",
+   "phone": "(804) 314-7011",
+   "address": "parcel 23-1-13",
+   "city": "Scott County",
+   "zip": null,
+   "latitude": null,
+   "longitude": null,
+   "status": "appt_set_for_jordan",
+   "created_at": "2026-11-03 14:25:40.651129+00",
+   "updated_at": "2026-11-03 14:25:40.651129+00",
+   "acreage": "7.13",
+   "dealtype": "flips",
+   "notes": null,
+   "parcelgeometry": null,
+   "team_id": null,
+   "assigned_to": null,
+   "offermade": false,
+   "contractsigned": false,
+   "offerprice": null,
+   "projectedrevenue": null,
+   "pictures": [],
+   "contractfile": null,
+   "parcelid": "23-1-13",
+   "county": "Scott County",
+   "source": "haven-ground",
+   "parcel_id": "23-1-13",
+   "state": "Virginia",
+   "property_county": "Scott County",
+   "property_state": "Virginia",
+   "acres": "7.13",
+   "full_name": "Lisa Lindsay",
+   "names_on_deed": null,
+   "street_address": "parcel 23-1-13",
+   "sms_consent": false,
+   "sms_verified": false,
+   "purchased_by": null,
+   "purchased_at": null,
+   "price_paid": null,
+   "parcel_geometry": null,
+   "ip_address": null,
+   "phone_verified": false,
+   "form_data": {
+    "vbb": {
+     "ppa": 7500,
+     "fips": "51169",
+     "tier": "county_3yr",
+     "comps": 6,
+     "floor": 15000,
+     "value": 46875,
+     "profit": 46875,
+     "reason": "ok",
+     "resale": 93750,
+     "fallback": false,
+     "inherited": false,
+     "computed_at": "2026-11-03T14:25:46.082Z"
+    },
+    "zip": null,
+    "city": null,
+    "acres": "5 - 20",
+    "state": "Virginia",
+    "county": "Scott County",
+    "origin": "screenshot_upload",
+    "acreage": "5 - 20",
+    "acresRange": "5 - 20",
+    "namesOnDeed": "The Kathy H. Collier Living Trust",
+    "streetAddress": "parcel 23-1-13"
+   },
+   "price": null,
+   "temperature": "HOT",
+   "cadence_name": "NEW_LEAD",
+   "cadence_step": 0,
+   "cadence_started_at": "2026-11-03 14:25:40.651129",
+   "next_action_type": null,
+   "next_action_due": null,
+   "next_action_script": null,
+   "last_activity_at": "2026-11-03 15:15:49.694",
+   "last_activity_type": null,
+   "last_activity_outcome": null,
+   "touch_count": 0,
+   "call_count": 0,
+   "text_count": 0,
+   "email_count": 0,
+   "nurture_until": null,
+   "dead_reason": null,
+   "map_uploaded": true,
+   "map_image_url": "https://snfttvopjrpzsypteiby.supabase.co/storage/v1/object/public/lead-maps/1cdd6495-23e4-4893-8b2a-6656ffffe2dc/1793718673626-5321.png",
+   "current_owner_id": "e22c5965-78d7-461e-bdbd-f1af6f415603",
+   "pipeline_status": "APPT_SET_FOR_JORDAN",
+   "sms_opt_out": false,
+   "pb_line_id": null,
+   "offer_amount": null,
+   "offer_confirmed": false,
+   "deal_direction": null,
+   "follow_up_bucket": null,
+   "follow_up_step": 0,
+   "follow_up_started_at": null,
+   "next_follow_up_at": null,
+   "lost_reason": null,
+   "last_contact_at": "2026-11-03 15:15:45.492+00",
+   "last_contact_dir": "outbound",
+   "last_contact_channel": "call",
+   "last_contact_preview": "Call \u00b7 3m 45s",
+   "last_call_at": "2026-11-03 15:15:45.492+00",
+   "last_call_outcome": "spoke",
+   "partner_pushes": [],
+   "last_call_duration": 225,
+   "partner_summary": null,
+   "partner_coordinates": null,
+   "clean_view": false,
+   "clean_view_at": null,
+   "lead_maps": [
+    {
+     "id": "1cdd6495-23e4-4893-8b2a-6656ffffe2dc/1793718673626-5321.png",
+     "url": "https://snfttvopjrpzsypteiby.supabase.co/storage/v1/object/public/lead-maps/1cdd6495-23e4-4893-8b2a-6656ffffe2dc/1793718673626-5321.png",
+     "kind": "upload",
+     "label": "Kathy Collier"
+    }
+   ],
+   "offer_terms": {},
+   "offer_pdf_url": null,
+   "clean_view_2": true,
+   "clean_view_2_at": null,
+   "gclid": null,
+   "gbraid": null,
+   "wbraid": null
+  },
+  {
+   "id": "3ad3bcbf-338c-4384-aecf-c240bc607a76",
+   "name": "Michael Hall ",
+   "email": "addictionink2017@yahoo.com",
+   "phone": "+16605255649",
+   "address": "541731200085, Alamosa, Colorado",
+   "city": null,
+   "zip": null,
+   "latitude": null,
+   "longitude": null,
+   "status": "appt_set_for_jordan",
+   "created_at": "2026-11-03 05:51:50.085652+00",
+   "updated_at": "2026-11-03 05:51:50.085652+00",
+   "acreage": "40",
+   "dealtype": "flips",
+   "notes": "Position: sole-owner\nHome on property: no\nProperty listed: no\nInherited: no\nOwned 4+ years: yes\nWhy selling: Plans have changed and we won't be able to move any time soon due to helping family with my wife's sick grandfather.\nNames on deed: Michael Hall ",
+   "parcelgeometry": null,
+   "team_id": null,
+   "assigned_to": null,
+   "offermade": false,
+   "contractsigned": false,
+   "offerprice": null,
+   "projectedrevenue": null,
+   "pictures": [],
+   "contractfile": null,
+   "parcelid": "541731200085",
+   "county": "Alamosa",
+   "source": "Haven Ground - Sell Your Land Form",
+   "parcel_id": "541731200085",
+   "state": "Colorado",
+   "property_county": "Alamosa",
+   "property_state": "Colorado",
+   "acres": "40",
+   "full_name": "Michael Hall ",
+   "names_on_deed": null,
+   "street_address": "541731200085, Alamosa, Colorado",
+   "sms_consent": false,
+   "sms_verified": false,
+   "purchased_by": null,
+   "purchased_at": null,
+   "price_paid": null,
+   "parcel_geometry": null,
+   "ip_address": "35.144.59.124",
+   "phone_verified": true,
+   "form_data": {
+    "vbb": {
+     "ppa": 5000,
+     "fips": "08003",
+     "tier": "county_2yr",
+     "comps": 39,
+     "floor": 15000,
+     "value": 87500,
+     "profit": 87500,
+     "reason": "ok",
+     "resale": 175000,
+     "fallback": false,
+     "inherited": false,
+     "computed_at": "2026-11-03T05:52:21.892Z"
+    },
+    "acres": "20-50 Acres",
+    "email": "addictionink2017@yahoo.com",
+    "gclid": "CjwKCAiAhqHXBhAXEiwATbksU3_IuOrFSPqm2pD6cP8tvqzq061nK6MDhtSaxDG0t-fshbgcG5c8ihoCuJoQAvD_BwE",
+    "phone": "+16605255649",
+    "gbraid": null,
+    "wbraid": null,
+    "fullName": "Michael Hall ",
+    "position": "sole-owner",
+    "utm_medium": null,
+    "utm_source": null,
+    "whySelling": "Plans have changed and we won't be able to move any time soon due to helping family with my wife's sick grandfather.",
+    "isInherited": "no",
+    "landing_url": "https://havenground.com/lp/how-we-price-land?gad_source=1&gad_campaignid=22464770148&gclid=CjwKCAiAhqHXBhAXEiwATbksU3_IuOrFSPqm2pD6cP8tvqzq061nK6MDhtSaxDG0t-fshbgcG5c8ihoCuJoQAvD_BwE",
+    "namesOnDeed": "Michael Hall ",
+    "landing_page": "how-we-price-land",
+    "utm_campaign": null,
+    "propertyState": "Colorado",
+    "streetAddress": "541731200085",
+    "homeOnProperty": "no",
+    "ownedFourYears": "yes",
+    "propertyCounty": "Alamosa",
+    "propertyListed": "no"
+   },
+   "price": null,
+   "temperature": "HOT",
+   "cadence_name": "NEW_LEAD",
+   "cadence_step": 0,
+   "cadence_started_at": "2026-11-03 05:51:50.085652",
+   "next_action_type": null,
+   "next_action_due": null,
+   "next_action_script": null,
+   "last_activity_at": "2026-11-03 16:18:21.284",
+   "last_activity_type": null,
+   "last_activity_outcome": null,
+   "touch_count": 0,
+   "call_count": 0,
+   "text_count": 0,
+   "email_count": 0,
+   "nurture_until": null,
+   "dead_reason": null,
+   "map_uploaded": true,
+   "map_image_url": "https://snfttvopjrpzsypteiby.supabase.co/storage/v1/object/public/lead-maps/3ad3bcbf-338c-4384-aecf-c240bc607a76/1793719739307-720.png",
+   "current_owner_id": "e22c5965-78d7-461e-bdbd-f1af6f415603",
+   "pipeline_status": "APPT_SET_FOR_JORDAN",
+   "sms_opt_out": false,
+   "pb_line_id": null,
+   "offer_amount": null,
+   "offer_confirmed": false,
+   "deal_direction": null,
+   "follow_up_bucket": null,
+   "follow_up_step": 0,
+   "follow_up_started_at": null,
+   "next_follow_up_at": null,
+   "lost_reason": null,
+   "last_contact_at": "2026-11-03 16:18:17.277+00",
+   "last_contact_dir": "outbound",
+   "last_contact_channel": "call",
+   "last_contact_preview": "Call \u00b7 4m 56s",
+   "last_call_at": "2026-11-03 16:18:17.277+00",
+   "last_call_outcome": "spoke",
+   "partner_pushes": [],
+   "last_call_duration": 296,
+   "partner_summary": null,
+   "partner_coordinates": null,
+   "clean_view": false,
+   "clean_view_at": null,
+   "lead_maps": [
+    {
+     "id": "3ad3bcbf-338c-4384-aecf-c240bc607a76/1793719739307-720.png",
+     "url": "https://snfttvopjrpzsypteiby.supabase.co/storage/v1/object/public/lead-maps/3ad3bcbf-338c-4384-aecf-c240bc607a76/1793719739307-720.png",
+     "kind": "upload",
+     "label": "Michael Hall"
+    }
+   ],
+   "offer_terms": {},
+   "offer_pdf_url": null,
+   "clean_view_2": true,
+   "clean_view_2_at": null,
+   "gclid": "CjwKCAiAhqHXBhAXEiwATbksU3_IuOrFSPqm2pD6cP8tvqzq061nK6MDhtSaxDG0t-fshbgcG5c8ihoCuJoQAvD_BwE",
+   "gbraid": null,
+   "wbraid": null
+  }
+ ],
+ "appointment_tasks": [
+  {
+   "id": "126e59c0-932e-457b-a0ca-43d9d3f8a3b6",
+   "lead_id": "1cdd6495-23e4-4893-8b2a-6656ffffe2dc",
+   "team_id": null,
+   "assigned_to": "e22c5965-78d7-461e-bdbd-f1af6f415603",
+   "created_by": "01bfe313-644a-40c6-847c-ae3a8426e54d",
+   "task_type": "meeting",
+   "title": "Appointment with Lisa Lindsay",
+   "description": "Booked by Anthony \u00b7 ET",
+   "due_at": "2026-11-04 21:00:00+00",
+   "reminder_at": null,
+   "status": "pending",
+   "completed_at": null,
+   "completed_by": null,
+   "priority": "high",
+   "metadata": {},
+   "created_at": "2026-11-03 15:15:50.119341+00",
+   "updated_at": "2026-11-03 15:15:50.119341+00",
+   "source": null
+  },
+  {
+   "id": "88b8b723-82cd-4dc9-a7a7-0f44c8f298ab",
+   "lead_id": "3ad3bcbf-338c-4384-aecf-c240bc607a76",
+   "team_id": null,
+   "assigned_to": "01bfe313-644a-40c6-847c-ae3a8426e54d",
+   "created_by": null,
+   "task_type": "callback",
+   "title": "Call Michael Hall  (no reply to text)",
+   "description": "Texted, no reply yet, call to keep momentum",
+   "due_at": "2026-11-04 15:00:00+00",
+   "reminder_at": null,
+   "status": "completed",
+   "completed_at": "2026-11-03 16:12:15.972+00",
+   "completed_by": null,
+   "priority": "normal",
+   "metadata": {},
+   "created_at": "2026-11-03 15:31:07.897126+00",
+   "updated_at": "2026-11-03 15:31:07.897126+00",
+   "source": null
+  },
+  {
+   "id": "2c160960-f666-4909-99d8-b85696e4b63d",
+   "lead_id": "3ad3bcbf-338c-4384-aecf-c240bc607a76",
+   "team_id": null,
+   "assigned_to": "e22c5965-78d7-461e-bdbd-f1af6f415603",
+   "created_by": "01bfe313-644a-40c6-847c-ae3a8426e54d",
+   "task_type": "meeting",
+   "title": "Appointment with Michael Hall ",
+   "description": "Booked by Anthony \u00b7 CT",
+   "due_at": "2026-11-04 18:00:00+00",
+   "reminder_at": null,
+   "status": "pending",
+   "completed_at": null,
+   "completed_by": null,
+   "priority": "high",
+   "metadata": {},
+   "created_at": "2026-11-03 16:18:21.823727+00",
+   "updated_at": "2026-11-03 16:18:21.823727+00",
+   "source": null
+  }
+ ],
+ "phone_dupe_check": [
+  {
+   "name": "Michael Hall ",
+   "id": "3ad3bcbf-338c-4384-aecf-c240bc607a76",
+   "pipeline_status": "APPT_SET_FOR_JORDAN",
+   "status": "appt_set_for_jordan",
+   "p10": "6605255649",
+   "created_at": "2026-11-03 05:51:50.085652+00"
+  },
+  {
+   "name": "Lisa Lindsay",
+   "id": "1cdd6495-23e4-4893-8b2a-6656ffffe2dc",
+   "pipeline_status": "APPT_SET_FOR_JORDAN",
+   "status": "appt_set_for_jordan",
+   "p10": "8043147011",
+   "created_at": "2026-11-03 14:25:40.651129+00"
+  }
+ ]
+}
+```
+
+
+### Starting price shows band "From the $150s" instead of exact dollar (haven-ground ee74d71)
+- **What:** startingFromLots now returns the band "From the $Ns" (lowest lot price floored to $10k) instead of the exact "From $150,175". Still from the lot table so it auto-updates on repricing; fallback to price-range text when no priced lots. Applies to cards, map popups, detail hero, sticky bar. Files: `app/properties/page.js`, `app/properties/[slug]/page.js`.
+- **Tested/proof:** deployed; live /properties shows Gilbert "From the $150s", Oak Hill "From the $90s", no exact-dollar prices.
+- **Undo:** `git revert ee74d71`. **Google Ads touched?** No.
+
+### Fixed wrong-listing (Mallards Bend) flash on listings not in bundled static data (haven-ground ae27e0b)
+- **What:** Clicking a listing not in the bundled `propertiesData` (e.g. Gilbert Ranch, DB-only) briefly flashed Mallards Bend because initial state fell back to `propertiesData[0]` until the Supabase fetch resolved. Now a non-matching slug uses a neutral slug-keyed placeholder and shows a loading spinner until real data loads; static-matched slugs render instantly as before. File: `app/properties/[slug]/page.js` (makePlaceholderProperty + propertyLoaded guard).
+- **Tested/proof:** build passed; deployed; Gilbert SSR HTML has 0 "Mallards Bend"; live /properties/gilbert-ranch shows Gilbert Ranch / Lovelady TX / Tract 1, no Mallards, no error.
+- **Undo:** `git revert ae27e0b`. **Google Ads touched?** No.
+
+### Listing face cards show auto starting price + map hardened; client-error note (haven-ground e989ff8)
+- **What:** The /properties listing "face cards" and map popups were still showing the stale `priceRange` text ("From the $140s") while the detail page showed the auto "From $97,000". Added displayStartingPrice (lowest lot price from lotTable, fallback to price-range text) and applied it to the card + popup. Also hardened the detail map: lat/lng coerced to Number and map init skipped when not finite, so a coordinate-less listing can't throw on setView. File: `app/properties/page.js`, `app/properties/[slug]/page.js`.
+- **Client-side error reported by Jordan ("error when you click a property"):** Could not reproduce on the live site after the map-fix deploy (9667a72) — every property renders clean (map + form + "From $97,000", no error boundary). Most likely cause was a stale-bundle / chunk-hash mismatch from the rapid broken intermediate deploys (9023cbb blank-map/zoom state): a tab holding old HTML tries to fetch a JS chunk the new deploy replaced -> ChunkLoadError. Resolves on a hard refresh; current deploy is stable. The null-coordinate map guard removes one real uncaught-throw path regardless.
+- **Tested/proof:** build passed; deployed; verified live /properties shows Oak Hill card "From $97,000" (old "$140s" gone); /properties/oak-hill full page renders with no error.
+- **Undo:** `git revert e989ff8`. **Google Ads touched?** No.
+
+## 2026-11-02
+
+### Oak Hill page: banners reworked, Schedule-a-Tour CTAs wired, auto starting price (haven-ground e818566, e625c6f)
+- **What:** Added the two Oak Hill banners (TeraFab growth, Washington County location) before the inquiry form, each with its own short lead-in (no shared title, no extra button). Wired up the 7-step "Schedule Your Visit" scheduler (showCalendar) that previously no button ever opened: the sticky-bar CTA is now "Schedule a Tour" and opens it, the three dead lot-card "Schedule a Tour" buttons open it, and "Request Info" buttons scroll to the inquiry form. Hero + sticky price now derive the starting price from the lot table (startingFromLots -> "From $97,000") with fallback to the price-range field. File: `app/properties/[slug]/page.js`; banners in `public/property-banners/`.
+- **Tested/proof:** build passed; deployed; verified in-browser on /properties/oak-hill: sticky reads "From $97,000" + "Schedule a Tour", clicking opens the scheduler (Step 1 of 7), banner button removed.
+- **Undo:** `git revert e818566 e625c6f`. **Google Ads touched?** No.
+
+## 2026-11-01
+
+### Custom branded feature icons on property detail pages (haven-ground 787e424)
+- **What:** Replaced the generic heroicons for Access / Power / Water / Sewer / Topography on the property detail page with Jordan's custom Oak Hill icon set (green line + tan accent). Icons in `public/property-icons/`, placed in the existing tiles. File: `app/properties/[slug]/page.js`.
+- **Tested/proof:** build passed; deployed; verified in-browser on /properties/mallards-bend: all 5 `property-icons` images load (512x512) and render in the Features tiles.
+- **Undo:** `git revert 787e424`. **Google Ads touched?** No.
+
+### Plat/survey reader + documents (plat, survey, brochure) with show-on-site (haven-ground d21e8e7)
+- **What:** Documents section UNDER the lot/tract table in the listing editor. "Plat / survey" upload stores the file (downloadable) AND reads its lots into the Tracts table via Claude vision (optional price-per-acre computes each lot price); "Brochure" upload stores only. Each doc shows a small preview (not photo-sized), a "Show on site" checkbox, open link, remove. Public property page renders Download links under the description for any doc marked Show on site. Files: `app/api/ai/read-plat/route.js` (new vision/PDF route), `lib/admin-properties.js` (uploadDoc + documents:[] in blankProperty), `app/admin/page.js` (Documents UI + handlers), `app/properties/[slug]/page.js` (public download links).
+- **Why:** Jordan wanted to upload a plat to auto-curate lots/pricing, plus a brochure, with optional downloadable links on the site.
+- **Storage:** reuses the pfbft `property-photos` bucket under `docs/<slug>/` (verified: public, no MIME restriction so PDFs upload, no size cap).
+- **Tested/proof:** build passes, both AI routes registered; vision path returns clean JSON on a generated test image (no invented lots); prior tract-generation live test passed. Deployed (d21e8e7f8 ready): havenground.com/admin 200, /properties/gilbert-ranch 200, /properties 200, /api/ai/read-plat live (empty POST -> 400).
+- **Follow-up (8e1e4f4):** plat read was failing with "Unexpected end of JSON input" (base64 PDF overran the function body limit / timed out). Fixed by sending Claude the file's public URL instead of base64; client parses defensively (file still saved on failure). Verified on the real Gilbert Ranch plat: read 5 tracts with acreages 10.58/10.92/11.19/12.7/21.29. Added a manual "Build / price tracts" box (count + acres each + price per acre -> Fill, or Apply $/acre to existing rows) for the no-plat case. UI: removed Windows-style blue focus outline on buttons/tabs (outline:none), active tab gets a soft brand ring.
+- **Undo:** `git revert d21e8e7` (+ 8e1e4f4).
+- **Follow-ups (d0b3a4a, 237941b):** added a per-document "Read lots" button to re-read an already-uploaded plat without re-uploading (shares readLotsFromUrl). Fixed editor losing state on refresh: the open listing is kept in the URL hash (#edit=<id>) and reopened after load, and the working copy is autosaved to localStorage per listing and restored on mount (cleared on Save/Back) so AI/plat edits survive a reload. "Fill tracts" now requires "Acres each" and points to Read lots for different-sized tracts instead of building empty rows. Verified: deployed, /admin 200; live read-plat endpoint reads the real Gilbert Ranch PDF in ~5s.
+- **Follow-up (e1ea2b6):** price range auto-normalizes to the house convention "From the $Ns" (editor on blur + AI fill, and all public displays format any stored value), so a bare "$70s" shows "From the $70s". Verified live in-browser: ranches-at-forrest now renders "From the $70s" without re-saving.
+- **Follow-ups (f42dcde, 1cf0662):** (a) editor was flashing the wrong listing on click (state reuse) -> now keyed by id for a fresh mount, and a restored draft must match the listing id; (b) public property page hides the "Speak with our agent" box when the agent fields are empty (per "drop anything not filled in"); (c) listings page loads live order first with a brief skeleton instead of flashing the stale static order; (d) lot prices auto-format to currency (editor on blur + public display formats any stored value, so "$387000" shows "$387,000"), ranges/words left untouched. Verified: deployed, /admin + /properties + /properties/gilbert-ranch all 200.
+- **Google Ads touched?** No.
+
+### AI draft box in the listing editor, Phase A (haven-ground b411eb9)
+- **What:** New "Draft with AI" panel on the admin Edit-listing screen. Owner pastes freeform notes; Claude fills Basics/Description/Location fields + writes the description in HG voice, for review before Save. Files: `app/api/ai/listing-draft/route.js` (new server route), `app/admin/page.js` (AI panel + applyDraft merge).
+- **Why:** Jordan wanted one box to fill the whole listing and craft the description from what he tells it. (Phases B = photos-from-link, C = plat upload -> lots/pricing still pending his two decisions.)
+- **Rules enforced:** uses ONLY facts in the notes (never invents acreage/price/county/utilities), status/type picked from the allowed dropdown enums, NO em dashes (model instruction + server-side strip), never "owners anywhere". Nothing saves until the user hits Save. Uses existing ANTHROPIC_API_KEY, model claude-sonnet-4-5-20250929.
+- **Tested/proof:** build passed, route registered; live Claude call on a Gilbert Ranch sample returned parseable JSON (title/location/status=coming-soon/type=single/price/acres/county/features/description), zero em dashes, no invented facts. Deployed (Netlify b411eb903 ready): havenground.com/admin 200, /api/ai/listing-draft live (empty POST -> 400 as designed).
+- **Follow-ups same day:** (ab756c3) fixed empty "complete" message (filled-list was built inside setForm's updater, read before it ran) + added loud status banners (Drafting / green complete / red error), panel open by default. (0472613) AI now also fills the Lots/Tracts table: route returns lotUnit + lotTable when the notes give a lot count (uses given sizes, splits total acreage evenly, or computes price from price-per-acre); applyDraft normalizes blank/numeric lot names and clamps status to Available/Pending/Sold. Live-tested; both deployed (admin 200).
+- **Undo:** `git revert b411eb9` (+ ab756c3, 0472613).
+- **Google Ads touched?** No.
+
+### Fixed properties reorder on havenground.com (haven-ground da2cf30)
+- **What:** The public `/properties` page defaulted to "Featured First", which forced every non-featured listing below the featured ones and overrode the admin drag order (sort_order). Gilbert Ranch (sort_order 0, coming-soon/not featured) could never sit first. Files: `lib/properties-data.js` (keep sort_order on each returned listing), `app/properties/page.js` (new default sort "Recommended" = sort_order ascending; "Featured First" kept as an optional dropdown choice).
+- **Why:** Jordan's admin reorder must be the order on the site. He chose "admin order wins."
+- **Tested/proof:** build passed; CMS query confirms Gilbert Ranch sort_order=0 featured=false (matches admin list). Deployed (Netlify da2cf309d ready); live havenground.com/properties verified in-browser: default sort = "Recommended", order Gilbert Ranch -> Mallards Bend -> Oak Crest Estates (matches admin), 16 found. Smoke test: /, /properties, /sell-your-land, /thank-you, /lp/inherited-land all 200.
+- **Undo:** `git revert da2cf30` (restores Featured First default).
+- **Google Ads touched?** No.
+
+### Dispo Center Phase 1 (DB): created buyer_leads + buyer_activities (snfttv/LandQueue)
+- **What (SQL run via Supabase Management API, saved as `supabase/migrations/2026-11-01_buyer_leads.sql`):**
+  - `create table public.buyer_leads (...)` with generated `phone_norm` (last 10 digits).
+  - `create unique index buyer_leads_phone_norm_uidx on public.buyer_leads(phone_norm) where phone_norm <> ''` (DB-level duplicate-phone block).
+  - `create index buyer_leads_stage_idx` ; `create index buyer_leads_created_idx`.
+  - `create table public.buyer_activities (...)` + `create index buyer_activities_lead_idx`.
+  - `alter table buyer_leads enable row level security` ; `alter table buyer_activities enable row level security`.
+  - `create policy "buyer_leads authenticated all" ... for all` ; `create policy "buyer_activities authenticated all" ... for all`.
+  - `alter policy "buyer_leads authenticated all" on public.buyer_leads to authenticated` ; same for buyer_activities (tightened role from public to authenticated).
+- **Why:** Buyer pipeline fully separate from the seller `leads` table (no shared source). RLS + authenticated-only + service-role endpoint keep the public site key out. Unique index blocks duplicate buyers.
+- **Tested/proof:** tables exist, `relrowsecurity=true` both; policies now `{authenticated}`; anon-key INSERT rejected with `42501 row-level security policy`; dup-phone test returned `dup_blocked=t phone_norm=5551112222` inside a rolled-back txn (table still `rows=0`, no test data left); daily backups confirmed enabled (8 daily physical backups, latest 2026-11-01, COMPLETED) before running.
+- **Undo (needs Jordan's explicit yes):** `drop table public.buyer_activities; drop table public.buyer_leads;` (also in the migration file header).
+- **Google Ads touched?** No.
+
+### FINDING (not changed — needs explicit yes): seller `leads` table has RLS OFF -> anon key can read all leads
+- **What:** `pg_class.relrowsecurity=false` on `public.leads`; a live read with the public anon key returned `content-range: 0-999/1291` (all seller leads, phones included). The anon key ships in the website client JS.
+- **Why it matters:** anyone with the public key can pull every seller lead. Pre-existing; unrelated to the buyer work.
+- **Proposed fix (await yes):** `alter table public.leads enable row level security;` (policies already exist: anon INSERT for the site form, authenticated SELECT/UPDATE for the CRM) after confirming CRM reads use an authenticated session, not the anon key. Undo: `alter table public.leads disable row level security;`
+- **Google Ads touched?** No.
+
 
 ### 18:30 — Em-dash/copy rules applied: themed pages + RSA replacement
 - **New standing copy rules:** NO em dashes anywhere (periods/commas; hyphens like 6-12 ok); never "live anywhere"/"owners anywhere" — say "we work with out-of-state owners."
