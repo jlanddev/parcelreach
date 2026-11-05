@@ -1366,7 +1366,7 @@ export default function LandLeadsAdminPage() {
   const [ppcSearch, setPpcSearch] = useState('');
   const [pipelineSearch, setPipelineSearch] = useState('');
   const [pipelineMapped, setPipelineMapped] = useState(false);
-  const [pipelineSort, setPipelineSort] = useState('activity_desc');
+  const [pipelineSort, setPipelineSort] = useState('created_desc');
   // Overflow ("More") menu for secondary tabs, and appointment-calendar state.
   const [moreOpen, setMoreOpen] = useState(false);
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; });
@@ -1374,9 +1374,10 @@ export default function LandLeadsAdminPage() {
   // Reset the render cap whenever the tab or filters change, so each view starts
   // light and only grows when you ask for more.
   useEffect(() => { setCardLimit(60); }, [activeTab, ppcSearch, pipelineSearch, pipelineMapped, pipelineSort]);
-  // Clean View defaults to "newest pushed first"; exiting restores last-activity.
+  // Clean View defaults to "newest pushed first"; otherwise default to Newest
+  // Inbound so new leads always land at the top of the board.
   useEffect(() => {
-    setPipelineSort(cleanViewActive ? 'cleanview_desc' : 'activity_desc');
+    setPipelineSort(cleanViewActive ? 'cleanview_desc' : 'created_desc');
   }, [cleanViewActive]);
   // Engagement filters shared across PPC Inflow and the pipeline buckets.
   const [needsResponseOnly, setNeedsResponseOnly] = useState(false); // last message was theirs
