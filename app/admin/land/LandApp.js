@@ -2386,9 +2386,18 @@ export default function LandLeadsAdminPage() {
     if (!currentUserRole) return;
     fetchAllData();
 
-    // Auto-refresh every 30 seconds
+    // Auto-refresh every 30 seconds (realtime fallback).
     const interval = setInterval(fetchAllData, 30000);
-    return () => clearInterval(interval);
+    // Instant refresh when you come back to the tab, so you never have to hit
+    // reload to see what changed while you were away.
+    const onVisible = () => { if (!document.hidden) fetchAllData(); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
   }, [currentUserRole]);
 
   const fetchAllData = async () => {
@@ -6814,8 +6823,7 @@ export default function LandLeadsAdminPage() {
 
             {/* PPC Leads Grid */}
             {(() => {
-              const ordered = stableOrder(
-                boardLeads
+              const ppcFiltered = boardLeads
                   /* PPC Inflow is the unified working tab: it now includes subdivision /
                      OM-Search inflow-stage leads too (they also remain in the Subdivision
                      Inflow tab as a filtered view). */
@@ -6829,16 +6837,21 @@ export default function LandLeadsAdminPage() {
                   .filter(l => ppcSearch.trim() || inflowDays <= 0 || (l.created_at && new Date(l.created_at).getTime() >= Date.now() - inflowDays * 86400000))
                   .filter(l => leadMatchesSearch(l, ppcSearch))
                   .filter(l => !pipelineMapped || l.map_uploaded)
-                  .filter(passesEngagement),
-                (a, b) => {
+                  .filter(passesEngagement);
+              const ppcComparator = (a, b) => {
                   if (pipelineSort === 'cleanview_desc') return new Date(b.clean_view_at || 0) - new Date(a.clean_view_at || 0);
                   const useCreated = pipelineSort.startsWith('created');
                   const av = new Date(useCreated ? a.created_at : (a.last_activity_at || a.created_at));
                   const bv = new Date(useCreated ? b.created_at : (b.last_activity_at || b.created_at));
                   return pipelineSort.endsWith('asc') ? av - bv : bv - av;
-                },
-                `ppc:${pipelineSort}:${pipelineMapped}:${ppcSearch.trim()}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`
-              );
+                };
+              // Only the activity sort needs stableOrder's anti-jump freeze (last_activity
+              // changes when you text a lead). "Newest Inbound" and the oldest-first sorts
+              // run on immutable created_at, so sort them raw — new leads appear at the top
+              // live instead of being parked at the bottom until a page refresh.
+              const ordered = pipelineSort === 'activity_desc'
+                ? stableOrder(ppcFiltered, ppcComparator, `ppc:${pipelineSort}:${pipelineMapped}:${ppcSearch.trim()}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`)
+                : [...ppcFiltered].sort(ppcComparator);
               return (
                 <>
                   <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -7198,14 +7211,21 @@ export default function LandLeadsAdminPage() {
           // lead (just completed, notes added, moved here) jumps to the TOP, instead
           // of the stable order that parked newcomers at the bottom.
           const recencySort = (a, b) => new Date(b.last_activity_at || b.updated_at || b.created_at) - new Date(a.last_activity_at || a.updated_at || a.created_at);
-          // On the deal tabs, BOTH "newest" sorts ("Last activity" and "Newest
-          // Inbound") float the most recently worked deal to the top — so a deal you
-          // just completed/moved here today sits up top even if the lead itself came
-          // in months ago. Only the explicit "oldest first" sorts keep stable order.
+          // On the deal tabs, "Last activity: newest first" floats the most recently
+          // worked deal to the top. But "Newest Inbound" must mean exactly that —
+          // sort by created_at (when the lead came in), NOT last activity.
           const dealTab = ['offer-curated', 'offer-made', 'agreement-sent', 'signed-contract', 'closed-deal'].includes(activeTab);
-          const leadsInBucket = dealTab && (pipelineSort === 'activity_desc' || pipelineSort === 'created_desc')
-            ? [...bucketFiltered].sort(recencySort)
-            : stableOrder(bucketFiltered, bucketComparator, `bucket:${activeTab}:${pipelineSort}:${pipelineMapped}:${q}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`);
+          // stableOrder freezes the order and parks new arrivals at the BOTTOM so cards
+          // don't jump when a text updates last_activity. That freeze is only needed for
+          // the activity sort. created_at is immutable, so "Newest Inbound" (and the
+          // oldest-first sorts) are already jump-proof AND must surface new leads live at
+          // the top — so sort those raw instead of freezing them below the fold.
+          const leadsInBucket =
+            pipelineSort === 'activity_desc'
+              ? (dealTab
+                  ? [...bucketFiltered].sort(recencySort)
+                  : stableOrder(bucketFiltered, bucketComparator, `bucket:${activeTab}:${pipelineSort}:${pipelineMapped}:${q}:${needsResponseOnly}:${uncontactedOnly}:${offerSetOnly}:${untouchedDays}`))
+              : [...bucketFiltered].sort(bucketComparator);
 
           return (
             <div className="space-y-6">
