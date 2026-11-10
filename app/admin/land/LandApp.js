@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, Component, Fragment } from 'react';
 import { supabase } from '@/lib/supabase';
+import DispoCenter from './DispoCenter';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import mapboxgl from 'mapbox-gl';
@@ -5403,13 +5404,13 @@ export default function LandLeadsAdminPage() {
           {(() => {
             // Four left-to-right pipeline stages up front; everything else lives in
             // the "More" overflow menu so the board stays clean.
-            const MAIN_TABS = ['ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent', 'campaigns'];
+            const MAIN_TABS = ['ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent', 'campaigns', 'dispo-center'];
             const hasOffer = (l) => l.offer_amount != null && Number(l.offer_amount) !== 0;
             const overflow = isAdmin
               ? ['vbb-queue', 'shared-calendar', 'follow-up', 'lost', 'activity-log', 'organizations', 'subdivision-inflow', 'all-leads', 'unassigned', 'archive', 'create-lead', 'export', 'session-analytics', 'partners', 'om-search', 'investors', 'changelog']
               : ['shared-calendar', 'follow-up', 'lost', 'subdivision-inflow', 'all-leads', 'investors'];
             const up = (l) => (l.pipeline_status || l.status || '').toUpperCase();
-            const labelFor = (tab) => tab === 'vbb-queue' ? 'Google Upload Queue' : tab === 'needs-touch' ? 'Needs a Touch' : tab === 'ppc-inflow' ? 'PPC Inflow' : tab === 'appointment-set' ? 'Mapped & Appointment Set' : tab === 'offer-curated' ? 'Offer Curated' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Signed Contracts' : tab === 'om-search' ? 'OM Search' : tab === 'changelog' ? 'Change Log' : tab === 'campaigns' ? 'Follow-Up Campaigns' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab === 'investors' ? 'Investors' : tab === 'organizations' ? 'Organizations' : tab === 'unassigned' ? 'Unassigned' : tab === 'create-lead' ? 'Create Lead' : tab === 'all-leads' ? 'All Leads' : tab.replace('-', ' ');
+            const labelFor = (tab) => tab === 'dispo-center' ? 'Dispo Center' : tab === 'vbb-queue' ? 'Google Upload Queue' : tab === 'needs-touch' ? 'Needs a Touch' : tab === 'ppc-inflow' ? 'PPC Inflow' : tab === 'appointment-set' ? 'Mapped & Appointment Set' : tab === 'offer-curated' ? 'Offer Curated' : tab === 'offer-made' ? 'Offer Made' : tab === 'agreement-sent' ? 'Signed Contracts' : tab === 'om-search' ? 'OM Search' : tab === 'changelog' ? 'Change Log' : tab === 'campaigns' ? 'Follow-Up Campaigns' : tab === 'shared-calendar' ? 'Shared Calendar' : tab === 'activity-log' ? 'Activity Log' : tab === 'session-analytics' ? 'Session Analytics' : tab === 'subdivision-inflow' ? 'Subdivision Inflow' : tab === 'archive' ? 'Archive' : tab === 'export' ? 'Export CSV' : tab === 'follow-up' ? 'Follow-Up' : tab === 'lost' ? 'Lost' : tab === 'partners' ? 'Partners' : tab === 'investors' ? 'Investors' : tab === 'organizations' ? 'Organizations' : tab === 'unassigned' ? 'Unassigned' : tab === 'create-lead' ? 'Create Lead' : tab === 'all-leads' ? 'All Leads' : tab.replace('-', ' ');
             const countFor = (tab) => {
               if (tab === 'needs-touch') { const n = needsTouchLeads().length; return n ? ` (${n})` : ''; }
               if (tab === 'unassigned') return ` (${unassignedLeads.length})`;
@@ -5451,7 +5452,7 @@ export default function LandLeadsAdminPage() {
                 {MAIN_TABS.map((tab, i) => {
                   const PIPELINE = ['ppc-inflow', 'appointment-set', 'offer-curated', 'offer-made', 'agreement-sent'];
                   const chevron = PIPELINE.includes(tab) && PIPELINE.includes(MAIN_TABS[i - 1]);
-                  const divider = tab === 'campaigns';
+                  const divider = tab === 'campaigns' || tab === 'dispo-center';
                   return (
                     <div key={tab} className="flex items-center flex-shrink-0">
                       {divider && <span className="w-px h-6 bg-slate-700 mx-2 flex-shrink-0" />}
@@ -8828,6 +8829,9 @@ export default function LandLeadsAdminPage() {
             )}
           </div>
         )}
+
+        {/* DISPO CENTER TAB (buyer leads, isolated from the seller pipeline) */}
+        {activeTab === 'dispo-center' && <DispoCenter />}
 
         {/* INVESTORS TAB (Go West Lands investor applications) */}
         {activeTab === 'investors' && (() => {
