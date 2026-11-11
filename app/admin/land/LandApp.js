@@ -8831,7 +8831,9 @@ export default function LandLeadsAdminPage() {
         )}
 
         {/* DISPO CENTER TAB (buyer leads, isolated from the seller pipeline) */}
-        {activeTab === 'dispo-center' && <DispoCenter />}
+        {activeTab === 'dispo-center' && (
+          <DispoCenter onText={openConversation} onCall={(l) => setCallLead(l)} />
+        )}
 
         {/* INVESTORS TAB (Go West Lands investor applications) */}
         {activeTab === 'investors' && (() => {

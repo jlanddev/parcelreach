@@ -32,14 +32,23 @@ const fmtAge = (ts) => {
   if (h < 24) return `${h}h ago`;
   return `${Math.round(h / 24)}d ago`;
 };
-const digits = (p) => (p || '').replace(/[^\d+]/g, '');
 
-export default function DispoCenter() {
+// A buyer rendered as the lead-shaped object the real Call/Message modals expect
+// (they key off phone + id, so texting sends via Project Blue by phone exactly
+// like the seller cards).
+const asLead = (b) => ({
+  id: b.id, phone: b.phone, owner_phone: b.phone,
+  full_name: b.full_name, name: b.full_name, email: b.email, source: b.source,
+});
+
+export default function DispoCenter({ onText, onCall }) {
   const [buyers, setBuyers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [activeProp, setActiveProp] = useState('__all__'); // property key or '__all__' / '__none__'
   const [stageFilter, setStageFilter] = useState('All');
+  const [search, setSearch] = useState('');
+  const [sort, setSort] = useState('newest');
   const [adding, setAdding] = useState(false);
   const [expanded, setExpanded] = useState(null);
   const [activities, setActivities] = useState({});
@@ -84,7 +93,22 @@ export default function DispoCenter() {
     if (activeProp === '__none__') return (b.properties || []).length === 0;
     return (b.properties || []).some((p) => propKey(p) === activeProp);
   };
-  const visible = buyers.filter(inProp).filter((b) => stageFilter === 'All' || (b.stage || 'New') === stageFilter);
+  const q = search.trim().toLowerCase();
+  const matchSearch = (b) => {
+    if (!q) return true;
+    const hay = [b.full_name, b.phone, b.email, b.source, b.stage,
+      ...(b.properties || []).map((p) => p.title || p.slug)].join(' ').toLowerCase();
+    return hay.includes(q);
+  };
+  const visible = buyers
+    .filter(inProp)
+    .filter((b) => stageFilter === 'All' || (b.stage || 'New') === stageFilter)
+    .filter(matchSearch)
+    .sort((a, b) => {
+      const ta = new Date(a.last_activity_at || a.created_at || 0).getTime();
+      const tb = new Date(b.last_activity_at || b.created_at || 0).getTime();
+      return sort === 'oldest' ? ta - tb : tb - ta;
+    });
 
   const headerLabel = activeProp === '__all__' ? 'All Buyers'
     : activeProp === '__none__' ? 'No property'
@@ -150,7 +174,15 @@ export default function DispoCenter() {
             {activeProp !== '__all__' && activeProp !== '__none__' ? ' interested in this property' : ''}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <input value={search} onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search name, phone, email…"
+            className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-56 outline-none focus:border-blue-500" />
+          <select value={sort} onChange={(e) => setSort(e.target.value)}
+            className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-sm text-slate-200 outline-none">
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+          </select>
           <button onClick={load} className="px-3 py-2 text-sm font-semibold rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">Refresh</button>
           <button onClick={() => setAdding(true)} className="px-3 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white">+ Add Buyer</button>
         </div>
@@ -184,6 +216,7 @@ export default function DispoCenter() {
             <BuyerCard key={b.id} b={b}
               expanded={expanded === b.id} activities={activities[b.id]}
               noteDraft={noteDraft} setNoteDraft={setNoteDraft}
+              onText={onText} onCall={onCall}
               onToggle={() => toggleExpand(b.id)} onMove={(s) => moveStage(b, s)} onNote={() => addNote(b)} />
           ))}
         </div>
@@ -196,10 +229,9 @@ export default function DispoCenter() {
   );
 }
 
-function BuyerCard({ b, expanded, activities, noteDraft, setNoteDraft, onToggle, onMove, onNote }) {
+function BuyerCard({ b, expanded, activities, noteDraft, setNoteDraft, onText, onCall, onToggle, onMove, onNote }) {
   const props = b.properties || [];
   const isNew = (b.stage || 'New') === 'New';
-  const ph = digits(b.phone);
   return (
     <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl overflow-hidden hover:border-blue-500/50 hover:shadow-xl hover:shadow-blue-500/10 transition-all">
       {/* NEW BUYER banner, mirrors the seller card's NEW LEAD banner */}
@@ -234,11 +266,28 @@ function BuyerCard({ b, expanded, activities, noteDraft, setNoteDraft, onToggle,
           {b.email && <div className="text-slate-400 truncate">{b.email}</div>}
         </div>
 
-        {/* Action buttons, like the lead card */}
-        <div className="flex items-center gap-2 mt-3">
-          {b.phone && <a href={`tel:${ph}`} className="flex-1 text-center text-xs font-semibold px-3 py-2 rounded-lg bg-green-600/20 text-green-300 hover:bg-green-600/40">Call</a>}
-          {b.phone && <a href={`sms:${ph}`} className="flex-1 text-center text-xs font-semibold px-3 py-2 rounded-lg bg-sky-600/20 text-sky-300 hover:bg-sky-600/40">Text</a>}
-          {b.email && <a href={`mailto:${b.email}`} className="flex-1 text-center text-xs font-semibold px-3 py-2 rounded-lg bg-slate-700/60 text-slate-200 hover:bg-slate-600">Email</a>}
+        {/* Real actions: same Call + Messages modals as the seller lead card */}
+        <div className="flex items-center gap-1.5 flex-wrap mt-3">
+          {b.phone && (
+            <button onClick={() => onCall && onCall(asLead(b))} title="Call"
+              className="px-3 py-1.5 rounded-lg bg-green-600/20 hover:bg-green-600/40 text-green-300 text-xs font-medium flex items-center gap-1.5">
+              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" /></svg>
+              Call
+            </button>
+          )}
+          {b.phone && (
+            <button onClick={() => onText && onText(asLead(b))} title="Open conversation"
+              className="px-3 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 text-xs font-medium flex items-center gap-1.5">
+              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" /></svg>
+              Messages
+            </button>
+          )}
+          {b.email && (
+            <a href={`mailto:${b.email}`} title="Email"
+              className="px-3 py-1.5 rounded-lg bg-slate-700/60 hover:bg-slate-600 text-slate-200 text-xs font-medium flex items-center gap-1.5">
+              Email
+            </a>
+          )}
         </div>
 
         {/* Stage control + age */}
