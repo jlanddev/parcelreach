@@ -56,6 +56,7 @@ export async function POST(request) {
     }
 
     const source = (body.source || 'Haven Ground - Property Inquiry').trim();
+    const message = (body.message || '').trim();
     const now = new Date().toISOString();
 
     // The property they're interested in (optional).
@@ -134,14 +135,16 @@ export async function POST(request) {
             updated_at: now,
           }).eq('id', existing.id);
 
-          await sb.from('buyer_activities').insert([{
+          const mergeActs = [{
             buyer_lead_id: existing.id,
             type: 'inquiry',
             body: propertyEntry[0]?.title
               ? `Returning buyer inquired on ${propertyEntry[0].title}`
               : 'Returning buyer inquired again',
             meta: { property: propertyEntry[0] || null, source },
-          }]).then(() => {}, () => {});
+          }];
+          if (message) mergeActs.push({ buyer_lead_id: existing.id, type: 'note', body: message });
+          await sb.from('buyer_activities').insert(mergeActs).then(() => {}, () => {});
 
           return NextResponse.json(
             { ok: true, buyerId: existing.id, merged: true },
@@ -152,15 +155,17 @@ export async function POST(request) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 500, headers: cors });
     }
 
-    // Log the first inquiry as an activity (best-effort).
-    await sb.from('buyer_activities').insert([{
+    // Log the first inquiry as an activity (best-effort), plus their message.
+    const acts = [{
       buyer_lead_id: lead.id,
       type: 'inquiry',
       body: propertyEntry[0]?.title
         ? `New buyer inquired on ${propertyEntry[0].title}`
         : 'New buyer inquiry',
       meta: { property: propertyEntry[0] || null, source },
-    }]).then(() => {}, () => {});
+    }];
+    if (message) acts.push({ buyer_lead_id: lead.id, type: 'note', body: message });
+    await sb.from('buyer_activities').insert(acts).then(() => {}, () => {});
 
     return NextResponse.json({ ok: true, buyerId: lead.id }, { headers: cors });
   } catch (err) {

@@ -42,6 +42,7 @@ export default function DispoCenter() {
   const [expanded, setExpanded] = useState(null); // buyer id whose activity is open
   const [activities, setActivities] = useState({}); // buyerId -> [activity]
   const [noteDraft, setNoteDraft] = useState('');
+  const [propFilter, setPropFilter] = useState(null); // null = all properties, '__none__' = no property
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -100,8 +101,33 @@ export default function DispoCenter() {
     setBuyers((bs) => bs.map((b) => (b.id === buyer.id ? { ...b, last_activity_at: now } : b)));
   };
 
-  const byStage = (stage) => buyers.filter((b) => (b.stage || 'New') === stage);
+  // Group buyers by the property they're interested in (by slug, fallback title).
+  const propKey = (p) => (p.slug || p.title || '').toLowerCase().trim();
+  const propIndex = {};
+  let noProp = 0;
+  buyers.forEach((b) => {
+    const props = b.properties || [];
+    if (props.length === 0) { noProp++; return; }
+    const seen = new Set();
+    props.forEach((p) => {
+      const k = propKey(p);
+      if (!k || seen.has(k)) return;
+      seen.add(k);
+      if (!propIndex[k]) propIndex[k] = { label: p.title || p.slug, count: 0 };
+      propIndex[k].count++;
+    });
+  });
+  const propList = Object.entries(propIndex).sort((a, b) => b[1].count - a[1].count);
+
+  const matchesProp = (b) => {
+    if (!propFilter) return true;
+    if (propFilter === '__none__') return (b.properties || []).length === 0;
+    return (b.properties || []).some((p) => propKey(p) === propFilter);
+  };
+
+  const byStage = (stage) => buyers.filter((b) => (b.stage || 'New') === stage && matchesProp(b));
   const total = buyers.length;
+  const shown = buyers.filter(matchesProp).length;
 
   return (
     <div>
@@ -127,6 +153,32 @@ export default function DispoCenter() {
       </div>
 
       {error && <div className="mb-4 px-4 py-2 rounded-lg bg-red-500/15 border border-red-500/40 text-red-300 text-sm">{error}</div>}
+
+      {/* Property filter bar: click a property to see only its buyers. */}
+      {!loading && propList.length > 0 && (
+        <div className="mb-4">
+          <div className="text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">By Property</div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => setPropFilter(null)}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition ${propFilter === null ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-500'}`}>
+              All Properties <span className="opacity-70">{total}</span>
+            </button>
+            {propList.map(([key, info]) => (
+              <button key={key} onClick={() => setPropFilter(key)}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition ${propFilter === key ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-500'}`}>
+                {info.label} <span className="opacity-70">{info.count}</span>
+              </button>
+            ))}
+            {noProp > 0 && (
+              <button onClick={() => setPropFilter('__none__')}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition ${propFilter === '__none__' ? 'bg-slate-600 border-slate-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}`}>
+                No property <span className="opacity-70">{noProp}</span>
+              </button>
+            )}
+          </div>
+          {propFilter && <div className="text-xs text-slate-500 mt-2">Showing {shown} of {total} buyers.</div>}
+        </div>
+      )}
 
       {loading ? (
         <div className="text-slate-400 text-sm py-10 text-center">Loading buyers…</div>
