@@ -4695,8 +4695,11 @@ export default function LandLeadsAdminPage() {
                       </div>
 
                       {/* DEAL VALUE + REVIEW: engine estimate (auto-scored) + the human
-                          reviewed value that feeds Google. */}
-                      <ReviewPanel lead={lead} onSave={saveReview} />
+                          reviewed value that feeds Google. Sellers only, never dispo
+                          buyers (buyers must never report a value to Google). */}
+                      {!(lead.source === 'dispo-buyer' || lead.form_data?.buyer) && (
+                        <ReviewPanel lead={lead} onSave={saveReview} />
+                      )}
 
                       {/* Send to partner (Partners tab only) */}
                       {activeTab === 'partners' && (
