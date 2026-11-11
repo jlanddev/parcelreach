@@ -61,7 +61,28 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
   const repName = (currentUserName || '').trim().split(/\s+/)[0];
   const intro = repName ? `this is ${repName} with Haven Ground` : `this is the team at Haven Ground`;
   const leadStatus = (lead?.pipeline_status || lead?.status || '').toUpperCase();
-  const suggestions = isOnMarket ? {
+
+  // DISPO BUYERS: outreach is the opposite direction. They want to BUY one of
+  // OUR properties, so the message names the property they came in under (e.g.
+  // "our Gilbert Ranch in Houston County" / "our 12 acres in Houston County"),
+  // never "your property you wanted us to look at."
+  const isBuyer = lead?.source === 'dispo-buyer' || lead?.form_data?.buyer === true;
+  const prop = lead?.form_data?.property || {};
+  const propAcres = prop.acreage || prop.acres;
+  const propCounty = String(prop.county || countyRaw || '').replace(/\s+county$/i, '').trim();
+  const propPhrase = prop.label
+    ? prop.label
+    : (propAcres && propCounty) ? `our ${propAcres} acres in ${propCounty} County`
+      : prop.title ? `our ${prop.title}${propCounty ? ` in ${propCounty} County` : ''}`
+        : propCounty ? `our property in ${propCounty} County`
+          : 'our property';
+  const buyerSuggestions = {
+    first: { label: 'First touch', text: `Hey ${firstName}, ${intro}. You reached out about ${propPhrase}. Still interested? Happy to answer any questions or get you the details.` },
+    checkin: { label: 'Check-in', text: `Hey ${firstName}, following up on ${propPhrase} you were looking at. Still interested, or any questions I can answer for you?` },
+    offer: { label: 'Next steps', text: `Hey ${firstName}, ready whenever you are on ${propPhrase}. Want me to send over the price and the next steps to lock it up?` },
+  };
+
+  const suggestions = isBuyer ? buyerSuggestions : isOnMarket ? {
     first: { label: 'First touch', text: `Hey ${firstName}, ${intro}. I came across the ${sizePhrase}listing in ${countyPhrase}. Do you have time to chat about it? Thanks` },
     checkin: { label: 'Check-in', text: `Hey ${firstName}, following up on the ${sizePhrase}listing in ${countyPhrase}. Is it still available? Would love to connect when you have a minute.` },
     offer: { label: 'Offer follow-up', text: `Hey ${firstName}, following up on the offer we sent over for the ${sizePhrase}listing in ${countyPhrase}. Still very interested, happy to talk through any of it.` },
@@ -86,9 +107,10 @@ export default function ConversationModal({ lead, currentUserId, currentUserName
     rep: repName || 'the team',
     county: countyPhrase,
     size: sizePhrase, // may include a trailing space, e.g. "20-acre "
+    property: propPhrase, // dispo buyers: "our Gilbert Ranch in Houston County"
   };
-  const fillTemplate = (body) => String(body || '').replace(/\{(name|rep|county|size)\}/g, (_, k) => tokenMap[k] ?? '');
-  const templateCat = isOnMarket ? 'on_market' : 'inbound';
+  const fillTemplate = (body) => String(body || '').replace(/\{(name|rep|county|size|property)\}/g, (_, k) => tokenMap[k] ?? '');
+  const templateCat = isBuyer ? 'buyer' : isOnMarket ? 'on_market' : 'inbound';
 
   const [messages, setMessages] = useState([]);
   const [optimistic, setOptimistic] = useState([]); // local-only bubbles

@@ -52,7 +52,11 @@ export async function POST(request) {
     const now = new Date().toISOString();
     const p = body.property || {};
     const property = (p.slug || p.title || p.url)
-      ? { slug: p.slug || null, title: p.title || null, price: p.price ?? null, acreage: p.acreage ?? null, url: p.url || null }
+      ? {
+          slug: p.slug || null, title: p.title || null, price: p.price ?? null,
+          acreage: p.acreage ?? null, county: p.county || null, state: p.state || null,
+          label: p.label || null, url: p.url || null,
+        }
       : null;
     const c = body.consent || {};
     const consent = {
@@ -94,7 +98,12 @@ export async function POST(request) {
           last_activity_at: now,
           form_data: { ...fd, buyer: true, property: property || fd.property || null, properties: props },
         }).eq('id', dup.id);
-        if (message && noteAuthor) await sb.from('lead_notes').insert([{ lead_id: dup.id, user_id: noteAuthor, content: message }]).then(() => {}, () => {});
+        if (message && noteAuthor) {
+          const { data: exists } = await sb.from('lead_notes').select('id').eq('lead_id', dup.id).eq('content', message).limit(1);
+          if (!exists || exists.length === 0) {
+            await sb.from('lead_notes').insert([{ lead_id: dup.id, user_id: noteAuthor, content: message }]).then(() => {}, () => {});
+          }
+        }
         return NextResponse.json({ ok: true, leadId: dup.id, merged: true }, { headers: cors });
       }
     }
