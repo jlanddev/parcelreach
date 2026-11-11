@@ -69,6 +69,13 @@ export async function POST(request) {
 
     const sb = supabaseAdmin();
 
+    // lead_notes.user_id is NOT NULL, so system notes are authored by the admin.
+    let noteAuthor = null;
+    try {
+      const { data: a } = await sb.from('users').select('id').eq('role', 'admin').order('created_at', { ascending: true }).limit(1).maybeSingle();
+      noteAuthor = a?.id || null;
+    } catch { /* non-fatal */ }
+
     // Dedup against an existing BUYER with the same phone (never a seller lead).
     const last10 = phone.replace(/\D/g, '').slice(-10);
     if (last10.length === 10) {
@@ -87,7 +94,7 @@ export async function POST(request) {
           last_activity_at: now,
           form_data: { ...fd, buyer: true, property: property || fd.property || null, properties: props },
         }).eq('id', dup.id);
-        if (message) await sb.from('lead_notes').insert([{ lead_id: dup.id, content: message }]).then(() => {}, () => {});
+        if (message && noteAuthor) await sb.from('lead_notes').insert([{ lead_id: dup.id, user_id: noteAuthor, content: message }]).then(() => {}, () => {});
         return NextResponse.json({ ok: true, leadId: dup.id, merged: true }, { headers: cors });
       }
     }
@@ -117,7 +124,7 @@ export async function POST(request) {
     const { data: lead, error } = await sb.from('leads').insert([row]).select('id').single();
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500, headers: cors });
 
-    if (message) await sb.from('lead_notes').insert([{ lead_id: lead.id, content: message }]).then(() => {}, () => {});
+    if (message && noteAuthor) await sb.from('lead_notes').insert([{ lead_id: lead.id, user_id: noteAuthor, content: message }]).then(() => {}, () => {});
 
     return NextResponse.json({ ok: true, leadId: lead.id }, { headers: cors });
   } catch (err) {
