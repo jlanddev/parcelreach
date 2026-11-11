@@ -469,6 +469,31 @@ export default function LandLeadsAdminPage() {
     </span>
   );
 
+  // Dispo buyers aren't mapped (we're SELLING to them). This badge replaces the
+  // Mapped/Not Mapped pill on buyer cards: click to mark an info packet sent.
+  const InfoPacketBadge = ({ lead }) => {
+    const sent = !!lead?.form_data?.info_packet_sent;
+    const toggle = async (e) => {
+      e.stopPropagation();
+      const now = new Date().toISOString();
+      const nextFd = { ...(lead.form_data || {}), info_packet_sent: !sent, info_packet_sent_at: !sent ? now : null };
+      setDispoBuyers((cur) => cur.map((l) => (l.id === lead.id ? { ...l, form_data: nextFd } : l)));
+      await supabase.from('leads').update({ form_data: nextFd, last_activity_at: now }).eq('id', lead.id);
+    };
+    return sent ? (
+      <button onClick={toggle} title="Info packet sent (click to undo)"
+        className="inline-flex items-center gap-1 ml-2 px-1.5 py-0.5 rounded-full bg-green-900/40 border border-green-700/50 text-green-400 text-[10px] font-semibold uppercase tracking-wide">
+        <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.6l7.3-7.3a1 1 0 011.4 0z" clipRule="evenodd" /></svg>
+        Info Packet Sent
+      </button>
+    ) : (
+      <button onClick={toggle} title="Mark info packet sent"
+        className="inline-flex items-center gap-1 ml-2 px-2 py-0.5 rounded-full bg-slate-700/50 border border-slate-600/60 text-slate-300 text-[10px] font-bold uppercase tracking-wide hover:bg-slate-600/60">
+        Send Info Packet
+      </button>
+    );
+  };
+
   // HAMMERING pill, shown when hammer_mode is on. Click to toggle off.
   const HammerBadge = ({ lead }) => {
     if (!lead?.hammer_mode) return null;
@@ -4662,7 +4687,9 @@ export default function LandLeadsAdminPage() {
                       {/* Tags row (interest/status signals) at the top of the card */}
                       <div className="flex items-center gap-1.5 flex-wrap mb-3">
                         <FreshBadge lead={lead} />
-                        {lead.map_uploaded ? <MappedBadge /> : <NotMappedBadge />}
+                        {(lead.source === 'dispo-buyer' || lead.form_data?.buyer)
+                          ? <InfoPacketBadge lead={lead} />
+                          : (lead.map_uploaded ? <MappedBadge /> : <NotMappedBadge />)}
                         <HammerBadge lead={lead} />
                         <TeammateBadge lead={lead} />
                       </div>
