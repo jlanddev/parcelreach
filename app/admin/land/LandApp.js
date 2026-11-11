@@ -251,6 +251,7 @@ export default function LandLeadsAdminPage() {
   useEffect(() => { setHasMounted(true); }, []);
   const [organizations, setOrganizations] = useState([]);
   const [rawLeads, setRawLeads] = useState([]);
+  const [dispoBuyers, setDispoBuyers] = useState([]); // Dispo Center: buyer leads (source='dispo-buyer'), walled off from the seller board
   const [selectedOrg, setSelectedOrg] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('ppc-inflow');
@@ -418,6 +419,13 @@ export default function LandLeadsAdminPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, (payload) => {
         const row = payload.new;
         if (!row || !row.id) return;
+        // Dispo buyers are walled off from the seller board.
+        if (row.source === 'dispo-buyer') {
+          setDispoBuyers((cur) => cur.some((l) => l.id === row.id)
+            ? cur.map((l) => (l.id === row.id ? { ...l, ...row } : l))
+            : [{ ...row }, ...cur]);
+          return;
+        }
         const prev = (rawLeadsRef.current || []).find((l) => l.id === row.id);
         const name = row.full_name || row.name || 'Lead';
         const statusOfRow = (row.pipeline_status || row.status || '').toUpperCase();
@@ -2426,11 +2434,32 @@ export default function LandLeadsAdminPage() {
         const { data: chunk, error: pageErr } = await supabase
           .from('leads')
           .select('*')
+          .neq('source', 'dispo-buyer') // buyers live in the Dispo Center, never the seller board
           .order('created_at', { ascending: false })
           .range(from, from + PAGE - 1);
         if (pageErr) { console.error('leads page error', pageErr.message); break; }
         if (!chunk || chunk.length === 0) break;
         leadsData = leadsData.concat(chunk);
+        if (chunk.length < PAGE) break;
+      }
+    }
+
+    // Dispo Center buyers: same leads table, source='dispo-buyer', loaded into a
+    // separate array so they get the real lead card + every function but never
+    // appear in the seller pipeline, counts, or Google conversions.
+    let buyersData = [];
+    {
+      const PAGE = 1000;
+      for (let from = 0; ; from += PAGE) {
+        const { data: chunk, error: bErr } = await supabase
+          .from('leads')
+          .select('*')
+          .eq('source', 'dispo-buyer')
+          .order('created_at', { ascending: false })
+          .range(from, from + PAGE - 1);
+        if (bErr) { console.error('buyers page error', bErr.message); break; }
+        if (!chunk || chunk.length === 0) break;
+        buyersData = buyersData.concat(chunk);
         if (chunk.length < PAGE) break;
       }
     }
@@ -2506,6 +2535,7 @@ export default function LandLeadsAdminPage() {
 
     setOrganizations(orgsData || []);
     setRawLeads(leadsWithPushes);
+    setDispoBuyers(buyersData || []);
     setLeadAssignments(assignmentsByLead);
     setScheduledTasks(tasksData || []);
     setLoading(false);
@@ -8832,7 +8862,7 @@ export default function LandLeadsAdminPage() {
 
         {/* DISPO CENTER TAB (buyer leads, isolated from the seller pipeline) */}
         {activeTab === 'dispo-center' && (
-          <DispoCenter onText={openConversation} onCall={(l) => setCallLead(l)} />
+          <DispoCenter buyers={dispoBuyers} renderCard={renderLeadCard} onReload={fetchAllData} />
         )}
 
         {/* INVESTORS TAB (Go West Lands investor applications) */}

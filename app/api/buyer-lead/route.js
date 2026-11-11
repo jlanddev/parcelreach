@@ -3,20 +3,16 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin';
 
 // POST /api/buyer-lead
 // Public intake for BUYER leads (people interested in buying a Haven Ground
-// property / wanting to hear about deals). Writes to the isolated `buyer_leads`
-// table, never the seller `leads` table. Shows up in the CRM Dispo Center.
+// property). Buyers are written to the SAME `leads` table with source
+// 'dispo-buyer', so in the CRM they render with the exact same lead card and
+// every function (text, call, notes, follow-ups, stage) works. They are walled
+// off from the seller board and from Google at the fetch/export layer, so a
+// buyer never pollutes the seller pipeline or Google conversions.
 //
-// Body: {
-//   full_name | name, phone, email,
-//   source,                       // e.g. 'Haven Ground - Property Inquiry'
-//   property: { slug, title, price, acreage, url },  // what they're looking at
-//   consent: { agreed, text, method },               // OTP checkbox consent
-//   tracking: { gclid, gbraid, wbraid, utm_source, utm_medium, utm_campaign,
-//               landing_url, referrer }
-// }
-//
-// Duplicate phone (same buyer inquiring again) is merged into the existing
-// buyer: the new property interest is appended, no second row is created.
+// Body: { full_name|name, phone, email, source, property:{slug,title,price,
+//   acreage,url}, message, consent:{agreed,text,method}, tracking:{...} }
+
+const BUYER_SOURCE = 'dispo-buyer';
 
 const ALLOWED_ORIGINS = [
   'https://havenground.com',
@@ -47,132 +43,85 @@ export async function POST(request) {
     const fullName = (body.full_name || body.name || '').trim();
     const email = (body.email || '').trim();
     const phone = (body.phone || '').trim();
-
     if (!phone && !email) {
-      return NextResponse.json(
-        { ok: false, error: 'A phone or email is required' },
-        { status: 400, headers: cors },
-      );
+      return NextResponse.json({ ok: false, error: 'A phone or email is required' }, { status: 400, headers: cors });
     }
 
-    const source = (body.source || 'Haven Ground - Property Inquiry').trim();
+    const sourceLabel = (body.source || 'Haven Ground - Property Inquiry').trim();
     const message = (body.message || '').trim();
     const now = new Date().toISOString();
-
-    // The property they're interested in (optional).
     const p = body.property || {};
-    const propertyEntry = (p.slug || p.title || p.url)
-      ? [{
-          slug: p.slug || null,
-          title: p.title || null,
-          price: p.price ?? null,
-          acreage: p.acreage ?? null,
-          url: p.url || null,
-          at: now,
-        }]
-      : [];
-
-    // Consent captured at the verification checkbox.
+    const property = (p.slug || p.title || p.url)
+      ? { slug: p.slug || null, title: p.title || null, price: p.price ?? null, acreage: p.acreage ?? null, url: p.url || null }
+      : null;
     const c = body.consent || {};
     const consent = {
       agreed: c.agreed === true || /^y|^t|^1/i.test(String(c.agreed || '')),
-      text: c.text || null,
-      method: c.method || 'otp_checkbox',
-      at: c.at || now,
+      text: c.text || null, method: c.method || 'otp_checkbox', at: c.at || now,
     };
-
-    // Attribution / click IDs so buyers map back to ad spend if needed.
     const t = body.tracking || {};
     const tracking = {
-      gclid: t.gclid || null,
-      gbraid: t.gbraid || null,
-      wbraid: t.wbraid || null,
-      utm_source: t.utm_source || null,
-      utm_medium: t.utm_medium || null,
-      utm_campaign: t.utm_campaign || null,
-      landing_url: t.landing_url || null,
-      referrer: t.referrer || null,
+      gclid: t.gclid || null, gbraid: t.gbraid || null, wbraid: t.wbraid || null,
+      utm_source: t.utm_source || null, utm_medium: t.utm_medium || null, utm_campaign: t.utm_campaign || null,
+      landing_url: t.landing_url || null, referrer: t.referrer || null,
       ip: request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || null,
-      user_agent: request.headers.get('user-agent') || null,
     };
 
     const sb = supabaseAdmin();
 
-    const row = {
-      full_name: fullName || null,
-      phone: phone || null,
-      email: email || null,
-      source,
-      stage: 'New',
-      stage_history: [{ stage: 'New', at: now }],
-      status: 'active',
-      properties: propertyEntry,
-      tracking,
-      consent,
-      last_activity_at: now,
-    };
-
-    const { data: lead, error } = await sb.from('buyer_leads').insert([row]).select().single();
-
-    if (error) {
-      // 23505 = duplicate phone_norm. Merge the new interest into the existing
-      // buyer instead of erroring or creating a second record.
-      if (error.code === '23505' && phone) {
-        const norm = phone.replace(/\D/g, '').slice(-10);
-        const { data: existing } = await sb
-          .from('buyer_leads')
-          .select('id, properties, email, full_name')
-          .eq('phone_norm', norm)
-          .maybeSingle();
-
-        if (existing) {
-          const mergedProps = [...(existing.properties || []), ...propertyEntry];
-          await sb.from('buyer_leads').update({
-            properties: mergedProps,
-            email: existing.email || email || null,
-            full_name: existing.full_name || fullName || null,
-            last_activity_at: now,
-            updated_at: now,
-          }).eq('id', existing.id);
-
-          const mergeActs = [{
-            buyer_lead_id: existing.id,
-            type: 'inquiry',
-            body: propertyEntry[0]?.title
-              ? `Returning buyer inquired on ${propertyEntry[0].title}`
-              : 'Returning buyer inquired again',
-            meta: { property: propertyEntry[0] || null, source },
-          }];
-          if (message) mergeActs.push({ buyer_lead_id: existing.id, type: 'note', body: message });
-          await sb.from('buyer_activities').insert(mergeActs).then(() => {}, () => {});
-
-          return NextResponse.json(
-            { ok: true, buyerId: existing.id, merged: true },
-            { headers: cors },
-          );
-        }
+    // Dedup against an existing BUYER with the same phone (never a seller lead).
+    const last10 = phone.replace(/\D/g, '').slice(-10);
+    if (last10.length === 10) {
+      const { data: existing } = await sb.from('leads')
+        .select('id, phone, form_data, email, full_name')
+        .eq('source', BUYER_SOURCE).ilike('phone', `%${last10.slice(-4)}%`);
+      // Confirm an exact last-10 match (the ilike only prefilters on last 4).
+      const dup = (existing || []).find((l) => (l.phone || '').replace(/\D/g, '').slice(-10) === last10);
+      if (dup) {
+        const fd = dup.form_data || {};
+        const props = Array.isArray(fd.properties) ? fd.properties : (fd.property ? [fd.property] : []);
+        if (property) props.push({ ...property, at: now });
+        await sb.from('leads').update({
+          email: dup.email || email || null,
+          full_name: dup.full_name || fullName || null,
+          last_activity_at: now,
+          form_data: { ...fd, buyer: true, property: property || fd.property || null, properties: props },
+        }).eq('id', dup.id);
+        if (message) await sb.from('lead_notes').insert([{ lead_id: dup.id, content: message }]).then(() => {}, () => {});
+        return NextResponse.json({ ok: true, leadId: dup.id, merged: true }, { headers: cors });
       }
-      return NextResponse.json({ ok: false, error: error.message }, { status: 500, headers: cors });
     }
 
-    // Log the first inquiry as an activity (best-effort), plus their message.
-    const acts = [{
-      buyer_lead_id: lead.id,
-      type: 'inquiry',
-      body: propertyEntry[0]?.title
-        ? `New buyer inquired on ${propertyEntry[0].title}`
-        : 'New buyer inquiry',
-      meta: { property: propertyEntry[0] || null, source },
-    }];
-    if (message) acts.push({ buyer_lead_id: lead.id, type: 'note', body: message });
-    await sb.from('buyer_activities').insert(acts).then(() => {}, () => {});
+    const row = {
+      full_name: fullName || null,
+      name: fullName || null,
+      phone: phone || null,
+      email: email || null,
+      source: BUYER_SOURCE,
+      status: 'new',
+      pipeline_status: 'NEW',
+      address: property?.title ? `Buyer interest: ${property.title}` : 'Buyer inquiry',
+      last_activity_at: now,
+      form_data: {
+        buyer: true,
+        property,
+        properties: property ? [{ ...property, at: now }] : [],
+        buyer_message: message || null,
+        source_label: sourceLabel,
+        consent,
+        tracking,
+        phone_last10: last10 || null,
+      },
+    };
 
-    return NextResponse.json({ ok: true, buyerId: lead.id }, { headers: cors });
+    const { data: lead, error } = await sb.from('leads').insert([row]).select('id').single();
+    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500, headers: cors });
+
+    if (message) await sb.from('lead_notes').insert([{ lead_id: lead.id, content: message }]).then(() => {}, () => {});
+
+    return NextResponse.json({ ok: true, leadId: lead.id }, { headers: cors });
   } catch (err) {
     console.error('[buyer-lead intake]', err);
-    return NextResponse.json(
-      { ok: false, error: err.message || 'Intake failed' },
-      { status: 500, headers: cors },
-    );
+    return NextResponse.json({ ok: false, error: err.message || 'Intake failed' }, { status: 500, headers: cors });
   }
 }
