@@ -50,6 +50,22 @@ export async function POST(request) {
     const apptTz = body.appointment_tz || 'America/Chicago';
     const sourceLabel = body.source || 'Go West Lands Investor VSL';
 
+    // Meta ad attribution for Go West (UTMs + fbclid/_fbc/_fbp). Stored on the
+    // lead so each application carries its ad source into the CRM. This is Go
+    // West's own pixel data; it is never sent to Haven's Google uploader or
+    // Haven's pixel (investor leads use source 'go-west-lands', which both
+    // exclude).
+    const tracking = {
+      utm_source: body.utm_source || null,
+      utm_medium: body.utm_medium || null,
+      utm_campaign: body.utm_campaign || null,
+      utm_content: body.utm_content || null,
+      utm_term: body.utm_term || null,
+      fbclid: body.fbclid || null,
+      fbc: body._fbc || body.fbc || null,
+      fbp: body._fbp || body.fbp || null,
+    };
+
     const sb = supabaseAdmin();
 
     // Route the appointment to Jordan (the admin) so it lands on his calendar.
@@ -83,6 +99,7 @@ export async function POST(request) {
         appointment_label: apptLabel,
         appointment_tz: apptTz,
         source_label: sourceLabel,
+        tracking,
       },
     }]).select().single();
 
@@ -94,7 +111,7 @@ export async function POST(request) {
         source: 'go-west-lands', status: scheduled ? 'appt_set_for_jordan' : 'new',
         form_data: {
           origin: 'go_west_lands', investor: true, has_50k: has50k, why,
-          appointment_at: apptAt, appointment_label: apptLabel, appointment_tz: apptTz, source_label: sourceLabel,
+          appointment_at: apptAt, appointment_label: apptLabel, appointment_tz: apptTz, source_label: sourceLabel, tracking,
         },
       }]).select().single();
       if (err2) return NextResponse.json({ ok: false, error: err2.message }, { status: 500, headers: cors });
