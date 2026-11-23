@@ -20,6 +20,9 @@ const ALLOWED_ORIGINS = [
   'https://haven-ground.netlify.app',
   'https://harmonlandcompany.com',
   'https://www.harmonlandcompany.com',
+  'https://oakhillreserve.land',
+  'https://www.oakhillreserve.land',
+  'https://storied-daifuku-d264c3.netlify.app',
 ];
 
 function corsHeaders(origin) {
