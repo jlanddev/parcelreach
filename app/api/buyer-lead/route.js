@@ -1,5 +1,45 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
+import crypto from 'crypto';
+
+// Conversions API: send a server-side Schedule event to the "Properties" buyer
+// pixel (Oak Hill Reserve + future flips), sharing the browser's event_id so
+// Meta de-duplicates. Email + phone are hashed; raw/hashed contact details are
+// never logged. Uses the pixel-only token HAVEN_PROPERTIES_CAPI_TOKEN. This is
+// the BUYER pixel only; it never touches the seller pixel. Best-effort, never
+// blocks the lead write.
+const PROPERTIES_PIXEL = '1828560981600056';
+async function sendPropertiesCapi(opts) {
+  const token = process.env.HAVEN_PROPERTIES_CAPI_TOKEN;
+  if (!token || !opts.scheduleEventId) return; // not configured, or no browser event to match
+  const sha = (v) => crypto.createHash('sha256').update(String(v)).digest('hex');
+  const email = (opts.email || '').trim().toLowerCase();
+  let digits = (opts.phone || '').replace(/\D/g, '');
+  if (digits.length === 10) digits = '1' + digits; // US country code for matching
+  const user_data = {};
+  if (email && email !== 'n/a') user_data.em = [sha(email)];
+  if (digits) user_data.ph = [sha(digits)];
+  if (opts.fbc) user_data.fbc = opts.fbc;
+  if (opts.fbp) user_data.fbp = opts.fbp;
+  if (opts.ip) user_data.client_ip_address = opts.ip;
+  if (opts.ua) user_data.client_user_agent = opts.ua;
+  const event = {
+    event_name: 'Schedule',
+    event_time: Math.floor(Date.now() / 1000),
+    event_id: opts.scheduleEventId,
+    action_source: 'website',
+    event_source_url: opts.sourceUrl || 'https://oakhillreserve.land',
+    user_data,
+    custom_data: { content_name: opts.contentName || 'Oak Hill Reserve' },
+  };
+  const payload = { data: [event] };
+  if (opts.testEventCode) payload.test_event_code = opts.testEventCode;
+  try {
+    await fetch(`https://graph.facebook.com/v21.0/${PROPERTIES_PIXEL}/events?access_token=${token}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+  } catch { /* best-effort; a failed CAPI send must never break the intake */ }
+}
 
 // POST /api/buyer-lead
 // Public intake for BUYER leads (people interested in buying a Haven Ground
@@ -67,11 +107,26 @@ export async function POST(request) {
       text: c.text || null, method: c.method || 'otp_checkbox', at: c.at || now,
     };
     const t = body.tracking || {};
+    const clientIp = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || null;
+    const clientUa = request.headers.get('user-agent') || null;
+    // Meta click ids may arrive nested (body.tracking) or top-level (Oak Hill site spreads them).
+    const fbc = body._fbc || body.fbc || t.fbc || null;
+    const fbp = body._fbp || body.fbp || t.fbp || null;
     const tracking = {
-      gclid: t.gclid || null, gbraid: t.gbraid || null, wbraid: t.wbraid || null,
-      utm_source: t.utm_source || null, utm_medium: t.utm_medium || null, utm_campaign: t.utm_campaign || null,
-      landing_url: t.landing_url || null, referrer: t.referrer || null,
-      ip: request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || null,
+      gclid: t.gclid || body.gclid || null, gbraid: t.gbraid || null, wbraid: t.wbraid || null,
+      utm_source: t.utm_source || body.utm_source || null, utm_medium: t.utm_medium || body.utm_medium || null,
+      utm_campaign: t.utm_campaign || body.utm_campaign || null,
+      fbclid: body.fbclid || t.fbclid || null, fbc, fbp,
+      landing_url: t.landing_url || body.event_source_url || null, referrer: t.referrer || null,
+      ip: clientIp,
+    };
+    // Args for the server-side Schedule CAPI send (same event_id as the browser pixel).
+    const capiArgs = {
+      email, phone, fbc, fbp, ip: clientIp, ua: clientUa,
+      scheduleEventId: body.schedule_event_id || null,
+      sourceUrl: body.event_source_url || null,
+      contentName: (body.property && body.property.title) || 'Oak Hill Reserve',
+      testEventCode: body.test_event_code || null,
     };
 
     const sb = supabaseAdmin();
@@ -107,6 +162,7 @@ export async function POST(request) {
             await sb.from('lead_notes').insert([{ lead_id: dup.id, user_id: noteAuthor, content: message }]).then(() => {}, () => {});
           }
         }
+        await sendPropertiesCapi(capiArgs);
         return NextResponse.json({ ok: true, leadId: dup.id, merged: true }, { headers: cors });
       }
     }
@@ -138,6 +194,7 @@ export async function POST(request) {
 
     if (message && noteAuthor) await sb.from('lead_notes').insert([{ lead_id: lead.id, user_id: noteAuthor, content: message }]).then(() => {}, () => {});
 
+    await sendPropertiesCapi(capiArgs);
     return NextResponse.json({ ok: true, leadId: lead.id }, { headers: cors });
   } catch (err) {
     console.error('[buyer-lead intake]', err);
