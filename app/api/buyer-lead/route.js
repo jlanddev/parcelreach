@@ -30,7 +30,7 @@ async function sendPropertiesCapi(opts) {
     action_source: 'website',
     event_source_url: opts.sourceUrl || 'https://oakhillreserve.land',
     user_data,
-    custom_data: { content_name: opts.contentName || 'Oak Hill Reserve' },
+    custom_data: { content_name: opts.contentName || 'Oak Hill Reserve', ...(opts.propertyId ? { property_id: opts.propertyId } : {}) },
   };
   const payload = { data: [event] };
   if (opts.testEventCode) payload.test_event_code = opts.testEventCode;
@@ -126,6 +126,7 @@ export async function POST(request) {
       scheduleEventId: body.schedule_event_id || null,
       sourceUrl: body.event_source_url || null,
       contentName: (body.property && body.property.title) || 'Oak Hill Reserve',
+      propertyId: (body.property && body.property.slug) || null,
       testEventCode: body.test_event_code || null,
     };
 
