@@ -9240,7 +9240,7 @@ export default function LandLeadsAdminPage() {
                 const rows = [
                   ['Current work / business', app.work_role],
                   ['Stage in land development', app.land_status],
-                  ['Available capital', app.capital || (fd.has_50k ? ('Has $50k: ' + fd.has_50k) : '')],
+                  ['Capital set aside or access to', app.capital],
                   ['Membership goals', app.goals],
                   ['Why consider them', app.why_you || fd.why],
                 ];
