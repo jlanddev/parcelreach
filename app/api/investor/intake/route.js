@@ -1,5 +1,46 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
+import crypto from 'crypto';
+
+const GOWEST_PIXEL = '2057317551651711';
+
+// Conversions API: send Lead (and Schedule) server-side to the Go West
+// Mastermind pixel, sharing the browser's event_id so Facebook de-duplicates.
+// Email + phone are hashed; hashed and raw contact details are never logged.
+// Uses the Go West token only (GOWEST_META_TOKEN). Best-effort, never blocks.
+async function sendGoWestCapi(opts) {
+  const token = process.env.GOWEST_META_TOKEN;
+  if (!token) return; // not configured; skip silently
+  const sha = (v) => crypto.createHash('sha256').update(String(v)).digest('hex');
+  const email = (opts.email || '').trim().toLowerCase();
+  let digits = (opts.phone || '').replace(/\D/g, '');
+  if (digits.length === 10) digits = '1' + digits; // US country code for matching
+  const user_data = {};
+  if (email && email !== 'n/a') user_data.em = [sha(email)];
+  if (digits) user_data.ph = [sha(digits)];
+  if (opts.fbc) user_data.fbc = opts.fbc;
+  if (opts.fbp) user_data.fbp = opts.fbp;
+  if (opts.ip) user_data.client_ip_address = opts.ip;
+  if (opts.ua) user_data.client_user_agent = opts.ua;
+  const now = Math.floor(Date.now() / 1000);
+  const base = {
+    action_source: 'website',
+    event_source_url: opts.sourceUrl || 'https://gowestcapital.land',
+    user_data,
+    custom_data: { content_name: 'Go West Land Private Network' },
+  };
+  const events = [{ ...base, event_name: 'Lead', event_time: now, event_id: opts.leadEventId }];
+  if (opts.scheduled && opts.scheduleEventId) {
+    events.push({ ...base, event_name: 'Schedule', event_time: now, event_id: opts.scheduleEventId });
+  }
+  const payload = { data: events };
+  if (opts.testEventCode) payload.test_event_code = opts.testEventCode;
+  try {
+    await fetch(`https://graph.facebook.com/v21.0/${GOWEST_PIXEL}/events?access_token=${token}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+  } catch { /* best-effort; a failed CAPI send must never break the application */ }
+}
 
 // POST /api/investor/intake
 // Public intake for Go West Lands investor applications (the gowestcapital.land
@@ -78,6 +119,19 @@ export async function POST(request) {
     // If they scheduled a time, the lead goes straight to the Appt Set stage.
     const scheduled = !!apptAt;
 
+    // Args for the Conversions API send (same event_id as the browser pixel).
+    const capiArgs = {
+      email, phone,
+      fbc: tracking.fbc, fbp: tracking.fbp,
+      ip: request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || null,
+      ua: request.headers.get('user-agent') || null,
+      sourceUrl: body.event_source_url || request.headers.get('referer') || 'https://gowestcapital.land',
+      scheduled,
+      leadEventId: body.lead_event_id || null,
+      scheduleEventId: body.schedule_event_id || null,
+      testEventCode: body.test_event_code || null,
+    };
+
     const { data: lead, error } = await sb.from('leads').insert([{
       name,
       full_name: name,
@@ -118,6 +172,7 @@ export async function POST(request) {
         },
       }]).select().single();
       if (err2) return NextResponse.json({ ok: false, error: err2.message }, { status: 500, headers: cors });
+      await sendGoWestCapi(capiArgs);
       return NextResponse.json({ ok: true, leadId: lead2.id, scheduled }, { headers: cors });
     }
 
@@ -126,6 +181,7 @@ export async function POST(request) {
     // time lives on the investor lead (form_data.appointment_*) and will drive
     // Trevor's notification/calendar invite in a later phase.
 
+    await sendGoWestCapi(capiArgs);
     return NextResponse.json({ ok: true, leadId: lead.id, scheduled }, { headers: cors });
   } catch (err) {
     console.error('[investor intake]', err);
