@@ -86,9 +86,12 @@ export async function POST(request) {
       address: 'Investor inquiry (no property)',
       city: 'N/A',
       source: 'go-west-lands',
-      status: scheduled ? 'appt_set_for_jordan' : 'new',
-      pipeline_status: scheduled ? 'APPT_SET_FOR_JORDAN' : 'NEW',
-      current_owner_id: adminId,
+      // Investor-only stages, never the seller stage APPT_SET_FOR_JORDAN, and not
+      // owned by Jordan. Keeps mastermind applicants out of the seller pipeline
+      // and off Jordan's calendar.
+      status: 'new',
+      pipeline_status: scheduled ? 'INVESTOR_CALL_BOOKED' : 'INVESTOR_APPLIED',
+      current_owner_id: null,
       last_activity_at: new Date().toISOString(),
       form_data: {
         origin: 'go_west_lands',
@@ -108,7 +111,7 @@ export async function POST(request) {
       const { data: lead2, error: err2 } = await sb.from('leads').insert([{
         name, full_name: name, email: email || 'N/A', phone: phone || 'N/A',
         address: 'Investor inquiry (no property)', city: 'N/A',
-        source: 'go-west-lands', status: scheduled ? 'appt_set_for_jordan' : 'new',
+        source: 'go-west-lands', status: 'new',
         form_data: {
           origin: 'go_west_lands', investor: true, has_50k: has50k, why,
           appointment_at: apptAt, appointment_label: apptLabel, appointment_tz: apptTz, source_label: sourceLabel, tracking,
@@ -118,19 +121,10 @@ export async function POST(request) {
       return NextResponse.json({ ok: true, leadId: lead2.id, scheduled }, { headers: cors });
     }
 
-    // Book the appointment as a meeting task so it appears on the Shared Calendar.
-    if (scheduled) {
-      await sb.from('scheduled_tasks').insert([{
-        lead_id: lead.id,
-        assigned_to: adminId,
-        task_type: 'meeting',
-        title: `Investor appointment: ${name}`,
-        description: `Go West Lands investor. ${has50k === 'Yes' ? '$50k+ ready.' : 'Under $50k.'}${why ? ' Why: ' + why : ''}`,
-        due_at: apptAt,
-        priority: 'high',
-        status: 'pending',
-      }]).then(() => {}, () => { /* task is best-effort; appointment also lives on the lead */ });
-    }
+    // No scheduled_tasks meeting is created: investor calls must NOT land on
+    // Jordan's calendar or the seller Mapped & Appointment Set tab. The booked
+    // time lives on the investor lead (form_data.appointment_*) and will drive
+    // Trevor's notification/calendar invite in a later phase.
 
     return NextResponse.json({ ok: true, leadId: lead.id, scheduled }, { headers: cors });
   } catch (err) {

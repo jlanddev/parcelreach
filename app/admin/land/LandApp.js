@@ -252,6 +252,7 @@ export default function LandLeadsAdminPage() {
   const [organizations, setOrganizations] = useState([]);
   const [rawLeads, setRawLeads] = useState([]);
   const [dispoBuyers, setDispoBuyers] = useState([]); // Dispo Center: buyer leads (source='dispo-buyer'), walled off from the seller board
+  const [investorLeadsData, setInvestorLeadsData] = useState([]); // Go West investor applications (source='go-west-lands'), walled off from the seller board
   const [selectedOrg, setSelectedOrg] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('ppc-inflow');
@@ -422,6 +423,13 @@ export default function LandLeadsAdminPage() {
         // Dispo buyers are walled off from the seller board.
         if (row.source === 'dispo-buyer') {
           setDispoBuyers((cur) => cur.some((l) => l.id === row.id)
+            ? cur.map((l) => (l.id === row.id ? { ...l, ...row } : l))
+            : [{ ...row }, ...cur]);
+          return;
+        }
+        // Go West investor applications are walled off too (own tab, own stages).
+        if (row.source === 'go-west-lands') {
+          setInvestorLeadsData((cur) => cur.some((l) => l.id === row.id)
             ? cur.map((l) => (l.id === row.id ? { ...l, ...row } : l))
             : [{ ...row }, ...cur]);
           return;
@@ -2459,7 +2467,9 @@ export default function LandLeadsAdminPage() {
         const { data: chunk, error: pageErr } = await supabase
           .from('leads')
           .select('*')
-          .neq('source', 'dispo-buyer') // buyers live in the Dispo Center, never the seller board
+          // buyers (Dispo Center) and investors (Go West mastermind) never appear
+          // on the seller board, in seller counts, or on Jordan's calendar.
+          .not('source', 'in', '("dispo-buyer","go-west-lands")')
           .order('created_at', { ascending: false })
           .range(from, from + PAGE - 1);
         if (pageErr) { console.error('leads page error', pageErr.message); break; }
@@ -2485,6 +2495,25 @@ export default function LandLeadsAdminPage() {
         if (bErr) { console.error('buyers page error', bErr.message); break; }
         if (!chunk || chunk.length === 0) break;
         buyersData = buyersData.concat(chunk);
+        if (chunk.length < PAGE) break;
+      }
+    }
+
+    // Go West mastermind investor applications: own array, own stages, never the
+    // seller pipeline/calendar/counts. The Investors tab reads this.
+    let investorsData = [];
+    {
+      const PAGE = 1000;
+      for (let from = 0; ; from += PAGE) {
+        const { data: chunk, error: iErr } = await supabase
+          .from('leads')
+          .select('*')
+          .eq('source', 'go-west-lands')
+          .order('created_at', { ascending: false })
+          .range(from, from + PAGE - 1);
+        if (iErr) { console.error('investors page error', iErr.message); break; }
+        if (!chunk || chunk.length === 0) break;
+        investorsData = investorsData.concat(chunk);
         if (chunk.length < PAGE) break;
       }
     }
@@ -2561,6 +2590,7 @@ export default function LandLeadsAdminPage() {
     setOrganizations(orgsData || []);
     setRawLeads(leadsWithPushes);
     setDispoBuyers(buyersData || []);
+    setInvestorLeadsData(investorsData || []);
     setLeadAssignments(assignmentsByLead);
     setScheduledTasks(tasksData || []);
     setLoading(false);
@@ -5483,7 +5513,7 @@ export default function LandLeadsAdminPage() {
               if (tab === 'lost') return ` (${allLeads.filter(l => up(l) === 'LOST').length})`;
               if (tab === 'subdivision-inflow') return ` (${allLeads.filter(l => l.source === 'subdivision' && l.status !== 'archived').length})`;
               if (tab === 'archive') return ` (${allLeads.filter(l => l.status === 'archived').length})`;
-              if (tab === 'investors') return ` (${allLeads.filter(l => l.source === 'go-west-lands').length})`;
+              if (tab === 'investors') return ` (${investorLeadsData.length})`;
               return '';
             };
             // New-activity count per tab (shares the same event engine as the panel).
@@ -8897,8 +8927,8 @@ export default function LandLeadsAdminPage() {
 
         {/* INVESTORS TAB (Go West Lands investor applications) */}
         {activeTab === 'investors' && (() => {
-          const investorLeads = allLeads
-            .filter(l => l.source === 'go-west-lands')
+          const investorLeads = (investorLeadsData || [])
+            .slice()
             .sort((a, b) => {
               const at = a.form_data?.appointment_at ? new Date(a.form_data.appointment_at).getTime() : Infinity;
               const bt = b.form_data?.appointment_at ? new Date(b.form_data.appointment_at).getTime() : Infinity;
