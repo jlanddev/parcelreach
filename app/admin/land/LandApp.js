@@ -8970,10 +8970,10 @@ export default function LandLeadsAdminPage() {
                     const capitalAns = (l.form_data?.application?.capital || '').trim();
                     const has50k = (l.form_data?.has_50k || '').toLowerCase() === 'yes';
                     return (
-                      <button
+                      <div
                         key={l.id}
                         onClick={() => openLeadDetails(l)}
-                        className="text-left bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 hover:border-blue-500/50 rounded-xl p-5 transition"
+                        className="text-left bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 hover:border-blue-500/50 rounded-xl p-5 transition cursor-pointer"
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
@@ -8987,6 +8987,27 @@ export default function LandLeadsAdminPage() {
                             </span>
                           )}
                         </div>
+
+                        {l.phone && (
+                          <div className="flex items-center gap-2 mt-3">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setCallLead(l); }}
+                              title="Call"
+                              className="px-3 py-1.5 rounded-lg bg-green-600/20 hover:bg-green-600/40 text-green-300 text-xs font-semibold flex items-center gap-1.5"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" /></svg>
+                              Call
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); openConversation(l); }}
+                              title="Text"
+                              className="px-3 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 text-xs font-semibold flex items-center gap-1.5"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" /></svg>
+                              Text
+                            </button>
+                          </div>
+                        )}
 
                         {appt && (
                           <div className={`mt-3 flex items-center gap-2 text-sm font-medium rounded-lg px-3 py-2 ${isPast ? 'bg-slate-700/40 text-slate-400' : 'bg-blue-500/15 text-blue-300'}`}>
@@ -9002,11 +9023,15 @@ export default function LandLeadsAdminPage() {
                           </div>
                         )}
 
+                        <div className="mt-3" onClick={(e) => e.stopPropagation()}>
+                          {renderNotesPreview(l)}
+                        </div>
+
                         <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
                           <span>{l.form_data?.source_label || 'Go West Lands'}</span>
                           <span>{l.created_at ? new Date(l.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}</span>
                         </div>
-                      </button>
+                      </div>
                     );
                   })}
                 </div>
