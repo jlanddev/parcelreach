@@ -8967,6 +8967,7 @@ export default function LandLeadsAdminPage() {
                     const appt = fmtAppt(l);
                     const apptTs = l.form_data?.appointment_at ? new Date(l.form_data.appointment_at).getTime() : null;
                     const isPast = apptTs != null && apptTs < now;
+                    const capitalAns = (l.form_data?.application?.capital || '').trim();
                     const has50k = (l.form_data?.has_50k || '').toLowerCase() === 'yes';
                     return (
                       <button
@@ -8980,9 +8981,11 @@ export default function LandLeadsAdminPage() {
                             <div className="text-sm text-slate-400 truncate">{l.email || 'no email'}</div>
                             <div className="text-sm text-slate-400">{l.phone || 'no phone'}</div>
                           </div>
-                          <span className={`flex-shrink-0 text-xs font-semibold px-2 py-1 rounded-full ${has50k ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-300'}`}>
-                            {has50k ? '$50k+ ready' : 'Under $50k'}
-                          </span>
+                          {capitalAns && (
+                            <span className={`flex-shrink-0 text-xs font-semibold px-2 py-1 rounded-full ${has50k ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-300'}`}>
+                              {capitalAns}
+                            </span>
+                          )}
                         </div>
 
                         {appt && (
@@ -9228,8 +9231,72 @@ export default function LandLeadsAdminPage() {
                 {mapUploading && <p className="text-xs text-slate-500 mt-2">Uploading...</p>}
               </div>
 
-              {/* Questionnaire Answers */}
-              {selectedLead.form_data && (
+              {/* Investor application (Go West) — all answers + call time */}
+              {(() => {
+                const fd = selectedLead.form_data || {};
+                const isInvestor = fd.investor === true || selectedLead.source === 'go-west-lands';
+                if (!isInvestor) return null;
+                const app = fd.application || {};
+                const rows = [
+                  ['Current work / business', app.work_role],
+                  ['Stage in land development', app.land_status],
+                  ['Available capital', app.capital || (fd.has_50k ? ('Has $50k: ' + fd.has_50k) : '')],
+                  ['Membership goals', app.goals],
+                  ['Why consider them', app.why_you || fd.why],
+                ];
+                const hasAny = rows.some(([, v]) => v && String(v).trim());
+                return (
+                  <div className="bg-slate-900/50 border border-slate-700 rounded-lg p-4 mt-4">
+                    <h4 className="text-sm font-semibold text-slate-400 mb-3 uppercase tracking-wide">Application</h4>
+                    {fd.appointment_label && (
+                      <div className="text-sm mb-3 pb-3 border-b border-slate-700/50">
+                        <span className="text-slate-500">Call time:</span>{' '}
+                        <span className="text-green-400 font-semibold">{fd.appointment_label}</span>
+                      </div>
+                    )}
+                    <div className="space-y-3 text-sm">
+                      {rows.map(([label, val]) => (
+                        <div key={label}>
+                          <div className="text-slate-500 text-xs uppercase tracking-wide">{label}</div>
+                          {val && String(val).trim()
+                            ? <div className="text-white whitespace-pre-wrap">{val}</div>
+                            : <div className="text-amber-400/80 italic text-xs">Not captured</div>}
+                        </div>
+                      ))}
+                    </div>
+                    {!hasAny && (
+                      <div className="mt-3 pt-3 border-t border-slate-700/50 text-xs text-amber-400">
+                        Written answers were not saved for this applicant (submitted before the save fix). Ask them on the call.
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Facebook Ads (investor) — source, campaign, ad, click ids */}
+              {(() => {
+                const fd = selectedLead.form_data || {};
+                const isInvestor = fd.investor === true || selectedLead.source === 'go-west-lands';
+                if (!isInvestor) return null;
+                const t = fd.tracking || {};
+                const src = t.utm_source || fd.utm_source || '—';
+                return (
+                  <div className="bg-slate-900/50 border border-slate-700 rounded-lg p-4 mt-4">
+                    <h4 className="text-sm font-semibold text-slate-400 mb-3 uppercase tracking-wide">Facebook Ads</h4>
+                    <div className="space-y-2 text-sm">
+                      <div><span className="text-slate-500">Source:</span>{' '}<span className="text-blue-400 font-semibold">{src}{t.utm_medium ? ' / ' + t.utm_medium : ''}</span></div>
+                      <div><span className="text-slate-500">Campaign:</span>{' '}<span className="text-white font-mono text-xs break-all">{t.utm_campaign || fd.utm_campaign || '—'}</span></div>
+                      <div><span className="text-slate-500">Ad:</span>{' '}<span className="text-white font-mono text-xs break-all">{t.utm_content || fd.utm_content || '—'}</span></div>
+                      <div><span className="text-slate-500">Ad set:</span>{' '}<span className="text-white font-mono text-xs break-all">{t.utm_term || fd.utm_term || '—'}</span></div>
+                      <div className="pt-2 border-t border-slate-700/50"><span className="text-slate-500">fbclid:</span>{' '}{(t.fbclid || fd.fbclid) ? <span className="text-white font-mono text-xs break-all">{t.fbclid || fd.fbclid}</span> : <span className="text-slate-500">—</span>}</div>
+                      <div><span className="text-slate-500">_fbc:</span>{' '}{(t.fbc || fd._fbc) ? <span className="text-white font-mono text-xs break-all">{t.fbc || fd._fbc}</span> : <span className="text-slate-500">—</span>}</div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Questionnaire Answers (seller leads only) */}
+              {selectedLead.form_data && !(selectedLead.form_data.investor === true || selectedLead.source === 'go-west-lands') && (
                 <div className="bg-slate-900/50 border border-slate-700 rounded-lg p-4 mt-4">
                   <h4 className="text-sm font-semibold text-slate-400 mb-3 uppercase tracking-wide">Questionnaire Answers</h4>
                   <div className="grid grid-cols-2 gap-3 text-sm">
@@ -9290,6 +9357,7 @@ export default function LandLeadsAdminPage() {
               {/* Google Ads — click ID, landing page, what we sent to Google */}
               {(() => {
                 const fd = selectedLead.form_data || {};
+                if (fd.investor === true || selectedLead.source === 'go-west-lands') return null; // investors use the Facebook Ads box above
                 const gclid = selectedLead.gclid || fd.gclid;
                 const gbraid = selectedLead.gbraid || fd.gbraid;
                 const wbraid = selectedLead.wbraid || fd.wbraid;
