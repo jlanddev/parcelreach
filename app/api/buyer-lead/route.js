@@ -155,7 +155,7 @@ export async function POST(request) {
           email: dup.email || email || null,
           full_name: dup.full_name || fullName || null,
           last_activity_at: now,
-          form_data: { ...fd, buyer: true, property: property || fd.property || null, properties: props },
+          form_data: { ...fd, buyer: true, phone_verified: (body.verified === true || body.phone_verified === true) || fd.phone_verified || false, property: property || fd.property || null, properties: props },
         }).eq('id', dup.id);
         if (message && noteAuthor) {
           const { data: exists } = await sb.from('lead_notes').select('id').eq('lead_id', dup.id).eq('content', message).limit(1);
@@ -186,6 +186,7 @@ export async function POST(request) {
         source_label: sourceLabel,
         consent,
         tracking,
+        phone_verified: body.verified === true || body.phone_verified === true,
         phone_last10: last10 || null,
       },
     };
