@@ -84,8 +84,20 @@ export async function POST(request) {
       return NextResponse.json({ ok: false, error: 'Name and a contact method are required' }, { status: 400, headers: cors });
     }
 
-    const has50k = /^y/i.test(body.has_50k || '') ? 'Yes' : 'No';
-    const why = (body.message || '').trim();
+    // The Go West form posts these field names. Earlier this route read
+    // body.message / body.has_50k, which the form never sends, so every written
+    // answer was silently dropped. Read the real fields now.
+    const application = {
+      work_role: (body.work_role || '').trim(),            // What do you do for work?
+      land_status: (body.land_status || '').trim(),        // Where are you with land development?
+      capital: (body.capital || '').trim(),                // Capital set aside / access to
+      goals: (body.goals || '').trim(),                    // What they want from membership
+      why_you: (body.why_you || body.message || '').trim(),// Why we should consider them
+    };
+    const why = application.why_you;
+    const has50k = (/^y/i.test(body.has_50k || '')
+      || /\b(50|75|100|150|200|250|500)\s*k\b|\$?\s*(50|75|100|150|200|250|500),?000|\bmillion\b|\b1m\b|or more|500k\+/i.test(application.capital))
+      ? 'Yes' : 'No';
     const apptAt = body.appointment_at || null;          // ISO UTC instant
     const apptLabel = body.appointment_label || null;    // friendly Central label
     const apptTz = body.appointment_tz || 'America/Chicago';
@@ -150,6 +162,7 @@ export async function POST(request) {
       form_data: {
         origin: 'go_west_lands',
         investor: true,
+        application,
         has_50k: has50k,
         why,
         appointment_at: apptAt,
@@ -167,7 +180,7 @@ export async function POST(request) {
         address: 'Investor inquiry (no property)', city: 'N/A',
         source: 'go-west-lands', status: 'new',
         form_data: {
-          origin: 'go_west_lands', investor: true, has_50k: has50k, why,
+          origin: 'go_west_lands', investor: true, application, has_50k: has50k, why,
           appointment_at: apptAt, appointment_label: apptLabel, appointment_tz: apptTz, source_label: sourceLabel, tracking,
         },
       }]).select().single();
