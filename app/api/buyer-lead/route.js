@@ -63,6 +63,9 @@ const ALLOWED_ORIGINS = [
   'https://oakhillreserve.land',
   'https://www.oakhillreserve.land',
   'https://storied-daifuku-d264c3.netlify.app',
+  'https://gilbertranchtx.com',
+  'https://www.gilbertranchtx.com',
+  'https://gilbert-ranch-tx.netlify.app',
 ];
 
 function corsHeaders(origin) {
