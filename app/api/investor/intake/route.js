@@ -112,11 +112,15 @@ export async function POST(request) {
       utm_source: body.utm_source || null,
       utm_medium: body.utm_medium || null,
       utm_campaign: body.utm_campaign || null,
-      utm_content: body.utm_content || null,
-      utm_term: body.utm_term || null,
+      utm_content: body.utm_content || null,   // ad name ({{ad.name}})
+      utm_term: body.utm_term || null,         // ad set name ({{adset.name}})
+      ad_id: body.ad_id || null,               // numeric Meta ad id ({{ad.id}})
       fbclid: body.fbclid || null,
       fbc: body._fbc || body.fbc || null,
       fbp: body._fbp || body.fbp || null,
+      landing_url: body.landing_url || body.event_source_url || null,
+      referrer: body.referrer || null,
+      first_touch_at: body.first_touch_at || null,
     };
 
     const sb = supabaseAdmin();

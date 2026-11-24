@@ -9298,30 +9298,46 @@ export default function LandLeadsAdminPage() {
                 );
               })()}
 
-              {/* Facebook Ads (investor) — source, campaign, ad, click ids */}
+              {/* Facebook Ad — source, campaign, ad set, ad, ad id, click ids, landing, events sent.
+                  Shown for Go West investors AND Dispo buyers (Oak Hill / Gilbert Ranch). */}
               {(() => {
                 const fd = selectedLead.form_data || {};
                 const isInvestor = fd.investor === true || selectedLead.source === 'go-west-lands';
-                if (!isInvestor) return null;
+                const isBuyer = fd.buyer === true || selectedLead.source === 'dispo-buyer';
+                if (!isInvestor && !isBuyer) return null;
                 const t = fd.tracking || {};
                 const src = t.utm_source || fd.utm_source || '—';
+                const landing = t.landing_url || fd.landing_url || null;
+                const fbEvents = Array.isArray(fd.fb_events) ? fd.fb_events : [];
+                const fmtDT = (d) => { try { return new Date(d).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch { return d; } };
+                const isFb = /facebook|instagram|meta|fb/i.test(src);
                 return (
                   <div className="bg-slate-900/50 border border-slate-700 rounded-lg p-4 mt-4">
-                    <h4 className="text-sm font-semibold text-slate-400 mb-3 uppercase tracking-wide">Facebook Ads</h4>
+                    <h4 className="text-sm font-semibold text-slate-400 mb-3 uppercase tracking-wide">Facebook Ad</h4>
                     <div className="space-y-2 text-sm">
-                      <div><span className="text-slate-500">Source:</span>{' '}<span className="text-blue-400 font-semibold">{src}{t.utm_medium ? ' / ' + t.utm_medium : ''}</span></div>
+                      <div><span className="text-slate-500">Source:</span>{' '}<span className={`${isFb ? 'text-blue-400' : 'text-slate-300'} font-semibold`}>{src}{t.utm_medium ? ' / ' + t.utm_medium : ''}</span></div>
                       <div><span className="text-slate-500">Campaign:</span>{' '}<span className="text-white font-mono text-xs break-all">{t.utm_campaign || fd.utm_campaign || '—'}</span></div>
-                      <div><span className="text-slate-500">Ad:</span>{' '}<span className="text-white font-mono text-xs break-all">{t.utm_content || fd.utm_content || '—'}</span></div>
                       <div><span className="text-slate-500">Ad set:</span>{' '}<span className="text-white font-mono text-xs break-all">{t.utm_term || fd.utm_term || '—'}</span></div>
-                      <div className="pt-2 border-t border-slate-700/50"><span className="text-slate-500">fbclid:</span>{' '}{(t.fbclid || fd.fbclid) ? <span className="text-white font-mono text-xs break-all">{t.fbclid || fd.fbclid}</span> : <span className="text-slate-500">—</span>}</div>
+                      <div><span className="text-slate-500">Ad:</span>{' '}<span className="text-white font-mono text-xs break-all">{t.utm_content || fd.utm_content || '—'}</span></div>
+                      <div><span className="text-slate-500">Ad ID:</span>{' '}<span className="text-white font-mono text-xs break-all">{t.ad_id || fd.ad_id || '—'}</span></div>
+                      <div className="pt-2 border-t border-slate-700/50"><span className="text-slate-500">Click ID (fbclid):</span>{' '}{(t.fbclid || fd.fbclid) ? <span className="text-white font-mono text-xs break-all">{t.fbclid || fd.fbclid}</span> : <span className="text-red-400 font-semibold">⚠️ none</span>}</div>
                       <div><span className="text-slate-500">_fbc:</span>{' '}{(t.fbc || fd._fbc) ? <span className="text-white font-mono text-xs break-all">{t.fbc || fd._fbc}</span> : <span className="text-slate-500">—</span>}</div>
+                      <div><span className="text-slate-500">Landing page:</span>{' '}{landing ? <a href={landing} target="_blank" rel="noreferrer" className="text-cyan-400 break-all underline">{landing}</a> : <span className="text-slate-500">—</span>}</div>
+                      <div className="pt-2 border-t border-slate-700/50">
+                        <span className="text-slate-500">Sent to Facebook:</span>
+                        <div className="mt-1 space-y-1">
+                          {fbEvents.length
+                            ? fbEvents.map((e, i) => <div key={i} className="text-green-400">{e.name} · sent {fmtDT(e.at)}</div>)
+                            : <div className="text-slate-500">Nothing sent yet</div>}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 );
               })()}
 
               {/* Questionnaire Answers (seller leads only) */}
-              {selectedLead.form_data && !(selectedLead.form_data.investor === true || selectedLead.source === 'go-west-lands') && (
+              {selectedLead.form_data && !(selectedLead.form_data.investor === true || selectedLead.source === 'go-west-lands' || selectedLead.form_data.buyer === true || selectedLead.source === 'dispo-buyer') && (
                 <div className="bg-slate-900/50 border border-slate-700 rounded-lg p-4 mt-4">
                   <h4 className="text-sm font-semibold text-slate-400 mb-3 uppercase tracking-wide">Questionnaire Answers</h4>
                   <div className="grid grid-cols-2 gap-3 text-sm">
@@ -9382,7 +9398,7 @@ export default function LandLeadsAdminPage() {
               {/* Google Ads — click ID, landing page, what we sent to Google */}
               {(() => {
                 const fd = selectedLead.form_data || {};
-                if (fd.investor === true || selectedLead.source === 'go-west-lands') return null; // investors use the Facebook Ads box above
+                if (fd.investor === true || selectedLead.source === 'go-west-lands' || fd.buyer === true || selectedLead.source === 'dispo-buyer') return null; // investors + buyers use the Facebook Ad box above
                 const gclid = selectedLead.gclid || fd.gclid;
                 const gbraid = selectedLead.gbraid || fd.gbraid;
                 const wbraid = selectedLead.wbraid || fd.wbraid;

@@ -11,7 +11,7 @@ import crypto from 'crypto';
 const PROPERTIES_PIXEL = '1828560981600056';
 async function sendPropertiesCapi(opts) {
   const token = process.env.HAVEN_PROPERTIES_CAPI_TOKEN;
-  if (!token || !opts.scheduleEventId) return; // not configured, or no browser event to match
+  if (!token || !opts.scheduleEventId) return null; // not configured, or no browser event to match
   const sha = (v) => crypto.createHash('sha256').update(String(v)).digest('hex');
   const email = (opts.email || '').trim().toLowerCase();
   let digits = (opts.phone || '').replace(/\D/g, '');
@@ -38,7 +38,9 @@ async function sendPropertiesCapi(opts) {
     await fetch(`https://graph.facebook.com/v21.0/${PROPERTIES_PIXEL}/events?access_token=${token}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
     });
-  } catch { /* best-effort; a failed CAPI send must never break the intake */ }
+    // Record what was sent so the lead card can show "Sent to Facebook".
+    return { name: 'Schedule', at: new Date().toISOString(), event_id: opts.scheduleEventId };
+  } catch { return null; /* best-effort; a failed CAPI send must never break the intake */ }
 }
 
 // POST /api/buyer-lead
@@ -119,8 +121,13 @@ export async function POST(request) {
       gclid: t.gclid || body.gclid || null, gbraid: t.gbraid || null, wbraid: t.wbraid || null,
       utm_source: t.utm_source || body.utm_source || null, utm_medium: t.utm_medium || body.utm_medium || null,
       utm_campaign: t.utm_campaign || body.utm_campaign || null,
+      utm_term: t.utm_term || body.utm_term || null,       // ad set name ({{adset.name}})
+      utm_content: t.utm_content || body.utm_content || null, // ad name ({{ad.name}})
+      ad_id: t.ad_id || body.ad_id || null,                // numeric Meta ad id ({{ad.id}})
       fbclid: body.fbclid || t.fbclid || null, fbc, fbp,
-      landing_url: t.landing_url || body.event_source_url || null, referrer: t.referrer || null,
+      landing_url: t.landing_url || body.landing_url || body.event_source_url || null,
+      referrer: t.referrer || body.referrer || null,
+      first_touch_at: t.first_touch_at || body.first_touch_at || null,
       ip: clientIp,
     };
     // Args for the server-side Schedule CAPI send (same event_id as the browser pixel).
@@ -132,6 +139,9 @@ export async function POST(request) {
       propertyId: (body.property && body.property.slug) || null,
       testEventCode: body.test_event_code || null,
     };
+    // Fire the server-side Schedule once and capture what was sent, so it can be
+    // recorded on the lead and shown in the card's "Sent to Facebook" list.
+    const fbSent = await sendPropertiesCapi(capiArgs);
 
     const sb = supabaseAdmin();
 
@@ -158,7 +168,7 @@ export async function POST(request) {
           email: dup.email || email || null,
           full_name: dup.full_name || fullName || null,
           last_activity_at: now,
-          form_data: { ...fd, buyer: true, phone_verified: (body.verified === true || body.phone_verified === true) || fd.phone_verified || false, property: property || fd.property || null, properties: props },
+          form_data: { ...fd, buyer: true, phone_verified: (body.verified === true || body.phone_verified === true) || fd.phone_verified || false, property: property || fd.property || null, properties: props, fb_events: [...(Array.isArray(fd.fb_events) ? fd.fb_events : []), ...(fbSent ? [fbSent] : [])] },
         }).eq('id', dup.id);
         if (message && noteAuthor) {
           const { data: exists } = await sb.from('lead_notes').select('id').eq('lead_id', dup.id).eq('content', message).limit(1);
@@ -166,7 +176,6 @@ export async function POST(request) {
             await sb.from('lead_notes').insert([{ lead_id: dup.id, user_id: noteAuthor, content: message }]).then(() => {}, () => {});
           }
         }
-        await sendPropertiesCapi(capiArgs);
         return NextResponse.json({ ok: true, leadId: dup.id, merged: true }, { headers: cors });
       }
     }
@@ -189,6 +198,7 @@ export async function POST(request) {
         source_label: sourceLabel,
         consent,
         tracking,
+        fb_events: fbSent ? [fbSent] : [],
         phone_verified: body.verified === true || body.phone_verified === true,
         phone_last10: last10 || null,
       },
@@ -199,7 +209,6 @@ export async function POST(request) {
 
     if (message && noteAuthor) await sb.from('lead_notes').insert([{ lead_id: lead.id, user_id: noteAuthor, content: message }]).then(() => {}, () => {});
 
-    await sendPropertiesCapi(capiArgs);
     return NextResponse.json({ ok: true, leadId: lead.id }, { headers: cors });
   } catch (err) {
     console.error('[buyer-lead intake]', err);
